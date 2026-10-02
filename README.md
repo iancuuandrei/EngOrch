@@ -22,8 +22,8 @@ Follow the [Windows first-task guide](docs/getting-started/real-task.md) to buil
 Fabric, configure a stock Codex model, and run a coding task through planning,
 delegated inspection, implementation, verification and a separate review.
 The guide shows plan/file approvals and durable result inspection. This path has
-passed a real-model acceptance run from a fresh GitHub feature-branch checkout;
-see the [acceptance evidence](docs/evaluation/v1-product-gate.md).
+passed a real-model acceptance run from a fresh GitHub checkout at the exact
+source recorded in the [acceptance evidence](docs/evaluation/v1-product-gate.md).
 
 ## Checkpoint
 
@@ -67,9 +67,9 @@ not yet been qualified.
 
 ## Architecture and development
 
-- [Fabric v1 product gate](docs/development/v1-product-gate.md): the active
-  development target is one usable fresh-user coding journey. Full acceptance
-  remains unverified; Fabric self-hosting is optional dogfooding.
+- [Fabric v1 product gate](docs/development/v1-product-gate.md): the Windows
+  first-task journey is accepted; broader v1 work remains open. Fabric
+  self-hosting is optional dogfooding.
 
 - [Architecture](docs/architecture/system.md) and [ADRs](docs/adr/0001-language-split.md)
 - [Journal contract](docs/specifications/run-journal.md)
@@ -81,4 +81,5 @@ not yet been qualified.
 - [Contributing](CONTRIBUTING.md) and [documentation standard](docs/contributing/documentation-standard.md)
 - [Research provenance](docs/research/oss-mechanisms.md)
 - [Current evidence](docs/evaluation/status.md)
+- [WP05/WP06 program history and completion status](docs/evaluation/wp05-wp06-history.md)
 - [v0.0.1 trusted bootstrap checkpoint](docs/evaluation/v0.0.1.md)
