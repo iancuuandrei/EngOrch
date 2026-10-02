@@ -132,6 +132,9 @@ func currentModelInvocation(s Snapshot, id string) (runtime.Invocation, error) {
 	if s.ExplorerHost != nil {
 		candidates = append(candidates, s.ExplorerHost.Intent.Invocation)
 	}
+	for _, run := range s.ExplorerRuns {
+		candidates = append(candidates, run.Intent.Invocation)
+	}
 	if s.WriterHost != nil {
 		candidates = append(candidates, s.WriterHost.Intent.Invocation)
 	}

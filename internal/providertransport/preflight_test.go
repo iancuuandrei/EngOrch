@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,8 +21,12 @@ import (
 
 func TestExecuteValidationRejectionStoresBoundedEvidenceWithoutGatewayEffect(t *testing.T) {
 	calls := 0
-	server := newTLSServer(t, func(w http.ResponseWriter, _ *http.Request) {
+	server := newTLSServer(t, func(w http.ResponseWriter, r *http.Request) {
 		calls++
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			t.Errorf("read request body: %v", err)
+			return
+		}
 		w.Header().Set("content-type", "text/event-stream")
 		_, _ = w.Write(validResponsesToolSSE("provider-wire-model"))
 	})

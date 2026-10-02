@@ -48,8 +48,12 @@ func deriveModelAccessIntent(s Snapshot, invocation runtime.Invocation, attempt 
 	if err != nil {
 		return access.Intent{}, err
 	}
-	if configured != invocation.Profile {
+	if configured != invocation.Profile && !s.Creation.Config.AllowsProfile(invocation.Profile) {
 		return access.Intent{}, errors.New("runtime invocation differs from configured role")
+	}
+	modelChoice, err := modelChoiceForProfile(s.Creation.Config, invocation.Profile.Role, invocation.Profile)
+	if err != nil {
+		return access.Intent{}, err
 	}
 
 	policy, err := s.Creation.Config.AccessPolicy(s.RunID)
@@ -69,7 +73,7 @@ func deriveModelAccessIntent(s Snapshot, invocation runtime.Invocation, attempt 
 			routeCount++
 		}
 	}
-	if routeCount != 1 || selected.Runtime != invocation.Profile.Runtime || selected.Provider != invocation.Profile.Provider || selected.Model != invocation.Profile.Model || selected.Effort != invocation.Profile.Effort {
+	if routeCount != 1 || selected.Runtime != invocation.Profile.Runtime || selected.Provider != invocation.Profile.Provider || !selected.AllowsModelChoice(modelChoice) {
 		return access.Intent{}, errors.New("access policy route differs from runtime invocation")
 	}
 
@@ -103,10 +107,11 @@ func deriveModelAccessIntent(s Snapshot, invocation runtime.Invocation, attempt 
 		return access.Intent{}, err
 	}
 	intent := access.Intent{
-		Attempt:   attempt,
-		PolicyID:  policyID,
-		InputHash: inputID,
-		Route:     selected,
+		Attempt:     attempt,
+		PolicyID:    policyID,
+		InputHash:   inputID,
+		Route:       selected,
+		ModelChoice: modelChoice,
 		Reservation: access.Reservation{
 			Tokens:          limit.Tokens,
 			UnlimitedTokens: limit.UnlimitedTokens,

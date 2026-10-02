@@ -399,6 +399,7 @@ func TestPinnedOpenCodeScheduledRecursiveExplorer(t *testing.T) {
 		t.Skip("explicit pinned OpenCode Execute probe opt-in required")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 	provider := &scheduledRecursiveProvider{childAdmitted: make(chan struct{}), childRelease: make(chan struct{}), childQuestion: "Inspect the committed file and return the exact observed source path."}
 	upstream := httptest.NewUnstartedServer(provider)
 	upstream.EnableHTTP2 = false

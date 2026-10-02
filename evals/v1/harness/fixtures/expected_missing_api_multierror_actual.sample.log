@@ -1,0 +1,4 @@
+# github.com/hashicorp/go-multierror [github.com/hashicorp/go-multierror.test]
+.\fabric_v1_heldout_test.go:11:16: e.ErrorsSnapshot undefined (type *Error has no field or method ErrorsSnapshot)
+.\fabric_v1_heldout_test.go:21:21: nilError.ErrorsSnapshot undefined (type *Error has no field or method ErrorsSnapshot)
+FAIL	github.com/hashicorp/go-multierror [build failed]

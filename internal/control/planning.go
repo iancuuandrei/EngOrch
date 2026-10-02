@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/codexhost"
@@ -273,7 +274,9 @@ func ResumePlanning(ctx context.Context, path string) (snapshot Snapshot, err er
 		return s, readErr
 	}
 	if readErr == nil && s.Creation.Config.Version == 2 && state.Result == nil && (state.TurnStatus == "failed" || state.TurnStatus == "interrupted") {
-		_, _, terminalErr := completeModelAccess(context.Background(), path, runtimePath, i, "harness.planner-result.v1")
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		_, _, terminalErr := completeModelAccess(cleanupCtx, path, runtimePath, i, "harness.planner-result.v1")
+		cancel()
 		return s, errors.Join(errors.New("planner runtime is terminal without a result"), terminalErr)
 	}
 	if readErr != nil || state.Result == nil {
@@ -313,7 +316,9 @@ func ResumePlanning(ctx context.Context, path string) (snapshot Snapshot, err er
 		}
 		if err != nil {
 			if s.Creation.Config.Version == 2 {
-				_, _, terminalErr := completeModelAccess(context.Background(), path, runtimePath, i, "harness.planner-result.v1")
+				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+				_, _, terminalErr := completeModelAccess(cleanupCtx, path, runtimePath, i, "harness.planner-result.v1")
+				cancel()
 				return s, errors.Join(err, terminalErr)
 			}
 			return s, err

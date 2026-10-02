@@ -10,14 +10,22 @@ import (
 // Route is an operator-selected inference route with an exact access-policy
 // identity. Permission is a capability ceiling, not direct filesystem authority.
 type Route struct {
-	Version    int    `json:"version"`
-	Role       string `json:"role"`
-	Runtime    string `json:"runtime"`
-	Provider   string `json:"provider"`
-	Model      string `json:"model"`
-	Effort     string `json:"effort"`
-	AccessID   string `json:"access_id"`
-	Permission string `json:"permission"`
+	Version      int           `json:"version"`
+	Role         string        `json:"role"`
+	Runtime      string        `json:"runtime"`
+	Provider     string        `json:"provider"`
+	Model        string        `json:"model"`
+	Effort       string        `json:"effort"`
+	AccessID     string        `json:"access_id"`
+	Permission   string        `json:"permission"`
+	ModelChoices []ModelChoice `json:"model_choices,omitempty"`
+}
+
+// ModelChoice is a single controller-configured alternative under one fixed
+// runtime/provider/access route. It carries no credential or billing authority.
+type ModelChoice struct {
+	Model  string `json:"model"`
+	Effort string `json:"effort"`
 }
 
 // Validate rejects malformed routing and write capabilities on read-only roles.
@@ -34,6 +42,16 @@ func (r Route) Validate() error {
 	if err := safepath.RequireDigest(r.AccessID); err != nil {
 		return errors.New("invalid route access identity")
 	}
+	if len(r.ModelChoices) > 32 {
+		return errors.New("too many adaptive model choices")
+	}
+	choices := map[ModelChoice]bool{}
+	for _, choice := range r.ModelChoices {
+		if !validModelName(choice.Model) || !identifier(choice.Effort) || choice.Model == r.Model && choice.Effort == r.Effort || choices[choice] {
+			return errors.New("invalid adaptive model choice")
+		}
+		choices[choice] = true
+	}
 	switch r.Role {
 	case "planner", "explorer", "reviewer":
 		if r.Permission != "read-only" {
@@ -47,6 +65,32 @@ func (r Route) Validate() error {
 		return errors.New("unknown route role")
 	}
 	return nil
+}
+
+// AllowsModelChoice admits the default route when choice is nil, or one exact
+// alternative listed by this route.
+func (r Route) AllowsModelChoice(choice *ModelChoice) bool {
+	if choice == nil {
+		return true
+	}
+	for _, allowed := range r.ModelChoices {
+		if allowed == *choice {
+			return true
+		}
+	}
+	return false
+}
+
+func validModelName(value string) bool {
+	if len(value) == 0 || len(value) > 256 {
+		return false
+	}
+	for _, c := range value {
+		if c < 33 || c > 126 {
+			return false
+		}
+	}
+	return true
 }
 
 // ID binds all route fields, including access policy and requested capability.
@@ -68,7 +112,9 @@ func AdmitRoute(policy, requested Route, profile Profile, class Class) error {
 	if err := requested.Validate(); err != nil {
 		return err
 	}
-	if policy != requested {
+	policyID, policyErr := policy.ID()
+	requestedID, requestedErr := requested.ID()
+	if policyErr != nil || requestedErr != nil || policyID != requestedID {
 		return errors.New("requested route differs from operator policy")
 	}
 	id, err := profile.ID()

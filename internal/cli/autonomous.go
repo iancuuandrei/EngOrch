@@ -20,6 +20,8 @@ import (
 
 const defaultAutonomousMaxRepairs = 2
 
+const defaultAutonomousMaxParallel = 3
+
 // runCommand retains the original `run RUN` operation and adds the explicit
 // autonomous objective form. The latter creates the immutable execution policy
 // before any provider dispatch is considered by the controller.
@@ -56,12 +58,17 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	fs := flag.NewFlagSet("run --autonomous", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	maxRepairs := fs.Int("max-repairs", defaultAutonomousMaxRepairs, "maximum bounded repair attempts")
+	maxParallel := fs.Int("max-parallel", defaultAutonomousMaxParallel, "maximum bounded parallel explorers (1 sequential, 2..8 parallel)")
+	prepareOnly := fs.Bool("prepare-only", false, "accept the graph and confirm its workspace, then return before explorer or writer dispatch")
 	goalFile := fs.String("file", "", "read objective from file")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *maxRepairs < 0 || *maxRepairs > 8 {
 		return errors.New("max-repairs must be between 0 and 8")
+	}
+	if *maxParallel < 1 || *maxParallel > 8 {
+		return errors.New("max-parallel must be between 1 and 8")
 	}
 	if *goalFile != "" {
 		if fs.NArg() != 0 {
@@ -74,7 +81,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 		if err := validateAutonomousObjective(objective); err != nil {
 			return err
 		}
-		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, out)
+		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *prepareOnly, out)
 	}
 	if fs.NArg() != 1 || fs.Arg(0) == "" {
 		return errors.New("run --autonomous requires one objective or --file PATH")
@@ -82,7 +89,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	if err := validateAutonomousObjective(fs.Arg(0)); err != nil {
 		return err
 	}
-	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, out)
+	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *prepareOnly, out)
 }
 
 // validateAutonomousObjective rejects whitespace-only, invalid UTF-8 and
@@ -101,7 +108,7 @@ func validateAutonomousObjective(objective string) error {
 	return nil
 }
 
-func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs int, out io.Writer) error {
+func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, prepareOnly bool, out io.Writer) error {
 	if err := validateAutonomousObjective(objective); err != nil {
 		return err
 	}
@@ -120,13 +127,22 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 	if _, err = rand.Read(nonce); err != nil {
 		return err
 	}
+	// New autonomous runs use hierarchical task graph execution with bounded
+	// task context by default. GraphVersion 1 enables graph parsing, digest
+	// binding and bounded parallel explorers; MaxParallel defaults to 3 with a
+	// 1 sequential override. Nil/old policies (GraphVersion 0, empty context)
+	// remain compatible and replay sequentially.
+	cfg.PlannerContract = "plan-graph-v2"
+	if cfg.Reviewer != nil {
+		cfg.ReviewerContract = "json-v1"
+	}
 	creation := control.Creation{
 		Version:    1,
 		Nonce:      hex.EncodeToString(nonce),
 		Repository: identity,
 		Objective:  objective,
 		Config:     cfg,
-		Execution:  &control.ExecutionPolicy{Mode: "autonomous-v1", MaxRepairs: maxRepairs},
+		Execution:  &control.ExecutionPolicy{Mode: "autonomous-v1", MaxRepairs: maxRepairs, Context: "bounded-v1", GraphVersion: 1, MaxParallel: maxParallel},
 	}
 	creation, err = bindCurrentHost(ctx, creation)
 	if err != nil {
@@ -146,11 +162,46 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 	if err = control.Append(p, "run.created", creation); err != nil {
 		return err
 	}
+	if prepareOnly {
+		s, err := control.PrepareAutonomous(ctx, p)
+		if err != nil {
+			return reportAutonomousFailure(out, p, id, err)
+		}
+		prepared, err := autonomousPreparedResult(s)
+		if err != nil {
+			return reportAutonomousFailure(out, p, id, err)
+		}
+		return output(out, prepared)
+	}
 	s, err := control.RunAutonomous(ctx, p)
 	if err != nil {
 		return reportAutonomousFailure(out, p, id, err)
 	}
 	return output(out, s)
+}
+
+type autonomousPrepared struct {
+	Status        string `json:"status"`
+	RunID         string `json:"run_id"`
+	State         string `json:"state"`
+	PlanID        string `json:"plan_id"`
+	CandidateID   string `json:"candidate_id"`
+	GraphDigest   string `json:"graph_digest"`
+	GraphRevision int    `json:"graph_revision"`
+}
+
+func autonomousPreparedResult(s control.Snapshot) (autonomousPrepared, error) {
+	if s.State != "IMPLEMENTING" || s.Workspace == nil || s.Candidate == nil || s.WorkspaceOutcome != "CONFIRMED" || s.Graph == nil || s.Graph.PlanID != s.PlanID || s.Graph.Revision != 1 {
+		return autonomousPrepared{}, errors.New("autonomous preparation receipt is incomplete")
+	}
+	candidateID, err := s.Candidate.ID()
+	if err != nil {
+		return autonomousPrepared{}, err
+	}
+	return autonomousPrepared{
+		Status: "PREPARED", RunID: s.RunID, State: s.State, PlanID: s.PlanID,
+		CandidateID: candidateID, GraphDigest: s.Graph.Digest, GraphRevision: s.Graph.Revision,
+	}, nil
 }
 
 func autonomousResumeCommand(ctx context.Context, root string, args []string, out io.Writer) error {

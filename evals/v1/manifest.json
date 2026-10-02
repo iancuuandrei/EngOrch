@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "suite_id": "fabric-v1-real-repository-2026-10-02",
+  "policy": {
+    "provider_calls_during_prepare": false,
+    "heldout_checks_in_task_checkout_before_completion": false,
+    "publish_raw_transcripts": false,
+    "git_commit_or_push": false,
+    "required_candidate_binding": ["repository_sha", "fabric_sha", "runner_sha", "config_sha", "runtime_sha"]
+  },
+  "native_verification": {
+    "windows_scope_note": "Windows verification is scoped, not the full upstream suite.",
+    "exclusions": [
+      {"id": "go-atomic", "test": "^TestNocmpIntegration$", "platforms": ["windows"], "mechanism": "go test -skip ^TestNocmpIntegration$", "rationale": "Upstream go-atomic nocmp_test.go sets cmd.Env to HOME only, so TEMP/TMP are unset and Go temp defaults to C:\\Windows, causing access denied on Windows. Narrow Windows-only exclusion of precisely ^TestNocmpIntegration$; held-out task tests are never excluded and Linux runs the full native suite."}
+    ],
+    "legacy_repos": [
+      {"id": "go-difflib", "rationale": "Pinned go-difflib repo has no go.mod and contains exactly difflib/difflib.go and difflib/difflib_test.go (stdlib only). Native and held-out checks use explicit Go source-file arguments and -vet=off: its unchanged upstream tests have pre-existing nonconstant fmt.Printf and example-name vet errors on Go 1.27.1. All upstream behavioral tests and held-out assertions still run. Static vet is not part of this legacy task's acceptance, for either comparison arm; no module or upstream source is modified."}
+    ]
+  },
+  "repositories": [
+    {"id":"go-humanize","url":"https://github.com/dustin/go-humanize.git","sha":"a1b4e66b9a6d890e9e15e7091cf16c8032367d6e","license":"MIT","task":"Add correctly validated underscore separators to ParseBytes integer inputs without weakening overflow detection.","package":".","check":"humanize","native_argv":["go","test","-count=1","."]},
+    {"id":"afero","url":"https://github.com/spf13/afero.git","sha":"eb6a92826ea568e3f40ab91fcbda8d2b38b61d3e","license":"Apache-2.0","task":"Fix CopyOnWriteFs.RemoveAll so base-only targets return EPERM and remain intact, while overlay-only and shadowed targets retain correct RemoveAll behavior.","package":".","check":"afero","native_argv":["go","test","-count=1","."]},
+    {"id":"go-multierror","url":"https://github.com/hashicorp/go-multierror.git","sha":"6d4d48630db25c3c83fa83ecd41dd8438b82963c","license":"MPL-2.0","task":"Add a documented ErrorsSnapshot API that returns a stable shallow copy of the accumulated error slice, including safe nil-receiver behavior.","package":".","check":"multierror","native_argv":["go","test","-count=1","."]},
+    {"id":"go-atomic","url":"https://github.com/uber-go/atomic.git","sha":"2d2bdbd262f95d0a890c696fb6f91d4776cb142c","license":"MIT","task":"Implement encoding.TextMarshaler and encoding.TextUnmarshaler for Bool using canonical strconv boolean text, preserving the previous value on invalid input.","package":".","check":"atomic","native_argv":["go","test","-count=1","."]},
+    {"id":"go-difflib","url":"https://github.com/pmezard/go-difflib.git","sha":"5d4384ee4fb2527b0a1256a821ebfc92f91efefc","license":"BSD-3-Clause","task":"Correct SplitLines empty and trailing-newline semantics: empty input has no lines, and splitting preserves existing line terminators without inventing an extra line.","package":"./difflib","check":"difflib","native_argv":["go","test","-vet=off","-count=1","difflib/difflib.go","difflib/difflib_test.go"],"legacy_file_mode":true},
+    {"id":"logr","url":"https://github.com/go-logr/logr.git","sha":"e99cde667024c0da5e20141f88fb7952e5f4e582","license":"Apache-2.0","task":"Avoid delegating WithValues to the sink when no values are supplied; return the equivalent logger without cloning while preserving non-empty behavior.","package":".","check":"logr","native_argv":["go","test","-count=1","."]}
+  ]
+}

@@ -209,13 +209,13 @@ foreach ($id in $allIds) {
     if (-not $packageMap.ContainsKey($id)) { throw "resolved package metadata missing: $id" }
     $package = $packageMap[$id]
     if ([string]$package.source -eq '') { continue }
-    $matches = @($lockRecords | Where-Object {
+    $lockMatches = @($lockRecords | Where-Object {
         $_.name -eq [string]$package.name -and
         $_.version -eq [string]$package.version -and
         $_.source -eq [string]$package.source
     })
-    if ($matches.Count -ne 1) { throw "Cargo.lock identity is ambiguous or missing: $($package.name) $($package.version)" }
-    $lock = $matches[0]
+    if ($lockMatches.Count -ne 1) { throw "Cargo.lock identity is ambiguous or missing: $($package.name) $($package.version)" }
+    $lock = $lockMatches[0]
     if ([string]$package.source -match '^registry\+' -and [string]::IsNullOrWhiteSpace([string]$lock.checksum)) {
         throw "registry dependency has no Cargo.lock checksum: $($package.name) $($package.version)"
     }

@@ -9,7 +9,7 @@ import shutil
 import struct
 import sys
 
-from benchmark_startup import sample_command, source_identity
+from benchmark_startup import fresh_output_path, sample_command, source_identity
 
 
 def canonical(value):
@@ -39,8 +39,8 @@ def main():
     if not rg:
         raise RuntimeError("rg required for executed comparison")
     rg_hash = hashlib.sha256(Path(rg).read_bytes()).hexdigest()
-    root = args.output.resolve()
-    root.mkdir(parents=False, exist_ok=False)
+    root = fresh_output_path(args.output)
+    root.mkdir(exist_ok=False)
     sources = root / "sources"
     sources.mkdir()
     source = dict(repository_id="a" * 64, object_format="sha1", commit="b" * 40, tree="c" * 40)
@@ -55,7 +55,8 @@ def main():
             data = text.encode()
             digest = hashlib.sha256(data).hexdigest()
             path = f"src/{n:06d}.txt"
-            blob = hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
+            blob = hashlib.sha1(f"blob {len(data)}\0".encode() + data,
+                                usedforsecurity=False).hexdigest()
             record = dict(path=path, blob=blob, sha256=digest, bytes=len(data))
             manifest_hash.update(canonical(record) + b"\n")
             manifest.write(canonical(dict(kind="file", value=record)) + b"\n")

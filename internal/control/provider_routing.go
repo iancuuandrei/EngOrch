@@ -26,10 +26,19 @@ type ProviderRouting struct {
 // ResolveProviderRouting binds one configured role and input identity to its
 // exact access reservation, provider contracts and finite adapter. It never
 // searches for or substitutes another role, provider, model or protocol.
-func ResolveProviderRouting(c config.Config, runID, role, inputHash string, attempt int) (ProviderRouting, error) {
+func ResolveProviderRouting(c config.Config, runID, role, inputHash string, attempt int, selectedProfiles ...runtime.Profile) (ProviderRouting, error) {
 	profile, err := c.Route(role)
 	if err != nil {
 		return ProviderRouting{}, err
+	}
+	if len(selectedProfiles) > 1 {
+		return ProviderRouting{}, errors.New("one exact selected model profile expected")
+	}
+	if len(selectedProfiles) == 1 {
+		profile = selectedProfiles[0]
+		if profile.Role != role || !c.AllowsProfile(profile) {
+			return ProviderRouting{}, errors.New("selected model profile is not admitted")
+		}
 	}
 	if profile.Runtime != "provider-api" && profile.Runtime != "opencode-http" {
 		return ProviderRouting{}, errors.New("role is not configured for a provider-backed runtime")
@@ -72,13 +81,20 @@ func ResolveProviderRouting(c config.Config, runID, role, inputHash string, atte
 	if err != nil {
 		return ProviderRouting{}, err
 	}
-	intent := access.Intent{Attempt: attempt, PolicyID: policyID, InputHash: inputHash, Route: route, Reservation: reservation}
+	modelChoice, err := modelChoiceForProfile(c, role, profile)
+	if err != nil {
+		return ProviderRouting{}, err
+	}
+	if !route.AllowsModelChoice(modelChoice) {
+		return ProviderRouting{}, errors.New("selected model choice is not in the access route")
+	}
+	intent := access.Intent{Attempt: attempt, PolicyID: policyID, InputHash: inputHash, Route: route, ModelChoice: modelChoice, Reservation: reservation}
 	invocationID, err := intent.ID()
 	if err != nil {
 		return ProviderRouting{}, err
 	}
 	intent.Reservation.InvocationID = invocationID
-	resolved, expectation, err := ConfiguredProviderExpectation(c, role)
+	resolved, expectation, err := ConfiguredProviderExpectation(c, role, profile)
 	if err != nil {
 		return ProviderRouting{}, err
 	}
@@ -100,15 +116,24 @@ func ResolveProviderRouting(c config.Config, runID, role, inputHash string, atte
 // ConfiguredProviderExpectation returns the exact role controls and capability
 // requirement needed to derive a direct invocation input identity before access
 // and gateway identities can be constructed.
-func ConfiguredProviderExpectation(c config.Config, role string) (config.ResolvedProviderRole, providergateway.AdapterRequestExpectation, error) {
+func ConfiguredProviderExpectation(c config.Config, role string, selectedProfiles ...runtime.Profile) (config.ResolvedProviderRole, providergateway.AdapterRequestExpectation, error) {
 	profile, err := c.Route(role)
 	if err != nil {
 		return config.ResolvedProviderRole{}, providergateway.AdapterRequestExpectation{}, err
 	}
+	if len(selectedProfiles) > 1 {
+		return config.ResolvedProviderRole{}, providergateway.AdapterRequestExpectation{}, errors.New("one exact selected model profile expected")
+	}
+	if len(selectedProfiles) == 1 {
+		profile = selectedProfiles[0]
+		if profile.Role != role || !c.AllowsProfile(profile) {
+			return config.ResolvedProviderRole{}, providergateway.AdapterRequestExpectation{}, errors.New("selected model profile is not admitted")
+		}
+	}
 	if profile.Runtime != "provider-api" && profile.Runtime != "opencode-http" || c.Provider == nil {
 		return config.ResolvedProviderRole{}, providergateway.AdapterRequestExpectation{}, errors.New("role is not configured for a provider-backed runtime")
 	}
-	resolved, err := c.ResolveProviderRole(role)
+	resolved, err := c.ResolveProviderRoleProfile(role, profile)
 	if err != nil {
 		return config.ResolvedProviderRole{}, providergateway.AdapterRequestExpectation{}, err
 	}

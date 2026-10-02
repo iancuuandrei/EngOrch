@@ -1,8 +1,25 @@
 # Autonomous task run (native guide)
 
 Scope: run one bounded autonomous coding task with the native `fabric` CLI.
-Graph, parallel and adaptive routing are not integrated yet. This guide does
-not claim full v1 completion, and no test run is claimed here.
+Task graphs, bounded parallel exploration and configured adaptive routing are
+available. This guide does not claim full v1 completion or release qualification.
+
+New real-model initialization selects the `anchored-edits-v1` writer contract:
+proposals replace exact, unique text fragments in existing files. Fabric checks
+the original file hash and preserves bytes outside the selected fragments.
+Overlapping, absent or ambiguous anchors are rejected. New files require
+explicit content; this contract does not implicitly delete files. Graph writers also
+receive the currently ready implementation task and its declared write paths;
+repair instructions cannot grant additional file ownership. The output schema
+binds the exact candidate ID. Existing `utf8-v2`, `utf8-replace-v3` and
+`utf8-scoped-v4` runs keep their frozen instructions. Existing file and proposal
+size limits still apply. Native checks and review remain required; valid edits
+alone do not prove that the task was solved.
+
+New initialization also selects the `json-v2` explorer contract. Its schema
+restricts `candidate_id` to the exact invocation-bound ID, and replay checks the
+same identity independently. Existing `json-v1` runs keep their original schema;
+a rejected or uncertain old result is never normalized into a successful one.
 
 ## 0. Prerequisites
 
@@ -12,11 +29,11 @@ not claim full v1 completion, and no test run is claimed here.
 - A Go toolchain, and a committed Git repository for the task (real-model
   `init` requires one).
 
-`fabric diff` resolves Git from conventional system installation paths instead
+Fabric Git operations resolve Git from conventional system installation paths instead
 of searching `PATH`. For a nonstandard installation, set
 `FABRIC_GIT_EXECUTABLE` to the absolute path of the Git executable you trust.
-An invalid override fails explicitly. Other Git operations retain their existing
-executable lookup behavior; this setting currently applies to diff observations.
+An invalid override fails explicitly. The shared resolver applies to diff,
+repository, worktree, local-store and push operations.
 
 ## Windows PowerShell happy path
 

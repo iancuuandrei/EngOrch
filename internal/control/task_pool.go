@@ -30,7 +30,11 @@ func taskPoolRequest(c config.Config, runID string, intent access.Intent) (taskp
 	if err != nil {
 		return taskpool.Request{}, false, err
 	}
-	return taskpool.Request{ID: id, RunID: runID, AccessProfileID: intent.Route.AccessID, Provider: intent.Route.Provider, Model: intent.Route.Model}, true, nil
+	model := intent.Route.Model
+	if intent.ModelChoice != nil {
+		model = intent.ModelChoice.Model
+	}
+	return taskpool.Request{ID: id, RunID: runID, AccessProfileID: intent.Route.AccessID, Provider: intent.Route.Provider, Model: model}, true, nil
 }
 
 func ensureTaskPool(c config.Config, runID string, intent access.Intent) (taskpool.Request, error) {
@@ -87,6 +91,9 @@ func settleProviderTaskPool(controllerPath string, c config.Config, runID string
 		return err
 	}
 	model, provider := intent.Route.Model, intent.Route.Provider
+	if intent.ModelChoice != nil {
+		model = intent.ModelChoice.Model
+	}
 	terminal := access.Receipt{InvocationID: intent.Reservation.InvocationID, RouteID: routeID, Status: "completed", OutputHash: receipt.ResultHash, ObservedModel: &model, ObservedProvider: &provider, InputTokens: receipt.Result.Usage.InputTokens, OutputTokens: receipt.Result.Usage.OutputTokens}
 	policy, err := c.AccessPolicy(runID)
 	if err != nil {
@@ -123,7 +130,7 @@ func settleProviderDispatchTaskPool(controllerPath string, c config.Config, runI
 	var inputHash string
 	var err error
 	if invocation.Profile.Runtime == "provider-api" {
-		_, expectation, resolveErr := ConfiguredProviderExpectation(c, invocation.Profile.Role)
+		_, expectation, resolveErr := ConfiguredProviderExpectation(c, invocation.Profile.Role, invocation.Profile)
 		if resolveErr != nil {
 			return resolveErr
 		}
@@ -135,7 +142,7 @@ func settleProviderDispatchTaskPool(controllerPath string, c config.Config, runI
 	if err != nil {
 		return err
 	}
-	selected, err := ResolveProviderRouting(c, runID, invocation.Profile.Role, inputHash, 1)
+	selected, err := ResolveProviderRouting(c, runID, invocation.Profile.Role, inputHash, 1, invocation.Profile)
 	if err != nil || selected.Intent.Reservation.InvocationID != receipt.AccessInvocationID {
 		return errors.Join(errors.New("task pool settlement route changed"), err)
 	}
