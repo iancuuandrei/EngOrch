@@ -33,6 +33,7 @@ type Config struct {
 	CandidateIdentity   string                  `toml:"candidate_identity" json:"candidate_identity,omitempty"`
 	WriterContract      string                  `toml:"writer_contract" json:"writer_contract,omitempty"`
 	PlannerContract     string                  `toml:"planner_contract" json:"planner_contract,omitempty"`
+	ExplorerContract    string                  `toml:"explorer_contract" json:"explorer_contract,omitempty"`
 	ControllerStateRoot string                  `toml:"controller_state_root" json:"controller_state_root,omitempty"`
 	Version             int                     `toml:"version" json:"version"`
 	Repository          string                  `toml:"repository" json:"repository"`
@@ -130,6 +131,9 @@ func (c Config) Validate() error {
 	}
 	if c.PlannerContract != "" && c.PlannerContract != "plan-v1" {
 		return errors.New("unsupported planner contract")
+	}
+	if c.ExplorerContract != "" && c.ExplorerContract != "json-v1" {
+		return errors.New("unsupported explorer contract")
 	}
 	if (c.Version != 1 && c.Version != 2) || strings.TrimSpace(c.Repository) == "" || len(c.Repository) > 256 {
 		return errors.New("invalid configuration identity")

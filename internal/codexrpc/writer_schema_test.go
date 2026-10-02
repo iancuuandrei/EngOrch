@@ -10,7 +10,7 @@ import (
 )
 
 func TestWriterSchemaBoundToWireAndReadOnlyRolesUnaffected(t *testing.T) {
-	for _, role := range []string{"writer", "fixer", "reviewer", "explorer"} {
+	for _, role := range []string{"writer", "fixer", "reviewer"} {
 		t.Run(role, func(t *testing.T) {
 			p := runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "exact", Effort: "medium", Role: role}
 			raw, _ := json.Marshal(map[string]any{"output_schema": writercontract.Schema()})
@@ -61,7 +61,7 @@ func TestWriterSchemaSubstitutionFailsBeforeRPC(t *testing.T) {
 }
 
 func TestUTF8WriterSchemaBoundToWireAndReadOnlyRolesUnaffected(t *testing.T) {
-	for _, role := range []string{"writer", "fixer", "reviewer", "explorer"} {
+	for _, role := range []string{"writer", "fixer", "reviewer"} {
 		t.Run(role, func(t *testing.T) {
 			p := runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "exact", Effort: "medium", Role: role}
 			raw, _ := json.Marshal(map[string]any{"output_schema": writercontract.UTF8Schema()})
