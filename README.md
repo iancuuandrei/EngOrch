@@ -1,4 +1,4 @@
-# Engineering harness
+# Fabric
 
 A standalone engineering harness around coding agents: models supply judgment;
 deterministic code binds repository context, routing, approvals and outcomes.
@@ -15,6 +15,15 @@ commit) is qualified end to end at the v0.0.1 trusted bootstrap checkpoint
 (see below); the full product v1.0.0 program remains future work. Local
 fixtures and bounded authenticated planning tests do not establish model
 quality or OS sandboxing.
+
+## Run your first real coding task
+
+Follow the [Windows first-task guide](docs/getting-started/real-task.md) to build
+Fabric, configure a stock Codex model, and run a coding task through planning,
+delegated inspection, implementation, verification and a separate review.
+The guide shows plan/file approvals and durable result inspection. This path has
+passed a real-model acceptance run from a fresh GitHub feature-branch checkout;
+see the [acceptance evidence](docs/evaluation/v1-product-gate.md).
 
 ## Checkpoint
 
