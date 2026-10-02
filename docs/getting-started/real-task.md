@@ -55,6 +55,9 @@ never overwrites an existing configuration and does not send a model request.
 `doctor` validates local configuration/repository identity; it does not prove
 model availability or authenticate a model turn.
 
+The generated explorer configuration declares a typed JSON result, including a
+string summary. Older configurations retain their original invocation contract.
+
 The generated verification check is `go test ./...`; edit it to match your own
 project before planning. Build commands should explicitly put their outputs
 outside source paths if those outputs would otherwise change the candidate.

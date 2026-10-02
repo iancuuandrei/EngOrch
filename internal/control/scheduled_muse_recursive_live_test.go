@@ -382,6 +382,9 @@ func musePreserveJournals(t *testing.T, root string) {
 }
 
 func TestMuseRecursiveFixturePreflight(t *testing.T) {
+	if os.Getenv("ENGORCH_MUSE_RECURSIVE_PREFLIGHT") != "1" {
+		t.Skip("opt-in historical Muse qualification: requires the pinned OpenCode binary and S0 checkout; zero live model calls")
+	}
 	// Fully offline: builds the live-test scaffolding (contract, reservation,
 	// S0 clone, canned planner, full prepare with zero live model calls) and
 	// stops before dispatch. Catches constructor and config errors before
