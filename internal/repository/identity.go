@@ -6,12 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"harness.local/engorch/internal/canonical"
+	"harness.local/engorch/internal/gitexec"
 )
 
 // Identity binds a named checkout and Git object identity. Paths are local
@@ -75,7 +75,7 @@ func git(ctx context.Context, root string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	argv := append([]string{"--no-optional-locks", "--no-replace-objects", "-C", root}, args...)
-	cmd := exec.CommandContext(ctx, "git", argv...)
+	cmd := gitexec.CommandContext(ctx, argv...)
 	cmd.WaitDelay = time.Second
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")

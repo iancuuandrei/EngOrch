@@ -53,6 +53,7 @@ func RequestAgentInterrupt(ctx context.Context, controllerPath, schedulerPath, t
 type scheduledInterruptWatcher struct {
 	stop        context.CancelFunc
 	cancel      context.CancelFunc
+	cleanupCtx  context.Context
 	done        <-chan error
 	service     *agentcontrol.Service
 	controlPath string
@@ -73,9 +74,10 @@ func watchScheduledAgentInterrupt(ctx context.Context, claim taskscheduler.Claim
 		return nil, nil, err
 	}
 	executionCtx, cancelExecution := context.WithCancel(ctx)
-	watchCtx, stop := context.WithCancel(context.Background())
+	cleanupCtx := context.WithoutCancel(ctx)
+	watchCtx, stop := context.WithCancel(cleanupCtx)
 	done := make(chan error, 1)
-	watcher := &scheduledInterruptWatcher{stop: stop, cancel: cancelExecution, done: done, service: service, controlPath: controlPath, claim: claim}
+	watcher := &scheduledInterruptWatcher{stop: stop, cancel: cancelExecution, cleanupCtx: cleanupCtx, done: done, service: service, controlPath: controlPath, claim: claim}
 	executionCtx = context.WithValue(executionCtx, scheduledInterruptShutdownKey{}, opencoderuntime.InterruptShutdownLookup(watcher.lookup))
 	go func() {
 		ticker := time.NewTicker(scheduledInterruptPollInterval)
@@ -152,7 +154,7 @@ func (w *scheduledInterruptWatcher) finish() error {
 	if !ok || interrupt.Observation == nil || interrupt.Observation.Outcome != agentcontrol.InterruptSignalDelivered {
 		return nil
 	}
-	probeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	probeCtx, cancel := context.WithTimeout(w.cleanupCtx, 2*time.Second)
 	defer cancel()
 	evidence, err := (ScheduledDispatchAdapter{}).Probe(probeCtx, taskscheduler.ProbeRequest{Task: w.claim.Task, AgentTurn: w.claim.AgentTurn})
 	if err != nil {
@@ -199,7 +201,7 @@ func (w *scheduledInterruptWatcher) observe(interrupt agentcontrol.InterruptStat
 	if err != nil {
 		return err
 	}
-	observeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	observeCtx, cancel := context.WithTimeout(w.cleanupCtx, 2*time.Second)
 	defer cancel()
 	_, err = w.service.ObserveInterrupt(observeCtx, interrupt.RequestID, agentcontrol.InterruptObservation{Version: 1, Outcome: outcome, Evidence: evidence, ControllerHead: head})
 	return err

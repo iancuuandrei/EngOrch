@@ -55,11 +55,12 @@ func (p Policy) ID() (string, error) {
 
 // Intent stores hashes and resource ceilings, not raw prompts or credentials.
 type Intent struct {
-	Attempt     int         `json:"attempt"`
-	PolicyID    string      `json:"policy_id"`
-	InputHash   string      `json:"input_hash"`
-	Route       Route       `json:"route"`
-	Reservation Reservation `json:"reservation"`
+	Attempt     int          `json:"attempt"`
+	PolicyID    string       `json:"policy_id"`
+	InputHash   string       `json:"input_hash"`
+	Route       Route        `json:"route"`
+	ModelChoice *ModelChoice `json:"model_choice,omitempty"`
+	Reservation Reservation  `json:"reservation"`
 }
 
 // ID derives invocation identity from all intent fields except the derived
@@ -71,6 +72,9 @@ func (i Intent) ID() (string, error) {
 	}
 	if err := i.Route.Validate(); err != nil {
 		return "", err
+	}
+	if !i.Route.AllowsModelChoice(i.ModelChoice) {
+		return "", errors.New("adaptive model choice is not admitted by route")
 	}
 	i.Reservation.InvocationID = ""
 	return canonical.Hash("harness.access-invocation.v1", i)
@@ -123,9 +127,11 @@ func replayAdmissions(events []journal.Event, policy Policy) error {
 			return errors.New("invocation reservation identity mismatch")
 		}
 		allowed := false
+		intentRouteID, routeErr := intent.Route.ID()
 		for _, route := range policy.Routes {
-			if route == intent.Route {
-				allowed = true
+			routeID, err := route.ID()
+			if err == nil && routeErr == nil && routeID == intentRouteID {
+				allowed = route.AllowsModelChoice(intent.ModelChoice)
 			}
 		}
 		if !allowed {

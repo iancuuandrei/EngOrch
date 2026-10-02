@@ -152,6 +152,98 @@ func TestConfigurationBindingAndStrictness(t *testing.T) {
 	}
 }
 
+func TestUTF8ReplaceV3IsAnExplicitFrozenWriterContract(t *testing.T) {
+	c, err := Parse([]byte(Example))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyID, err := c.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.WriterContract = writercontract.ContractUTF8ReplaceV3
+	if err := c.Validate(); err != nil {
+		t.Fatal("v3 writer contract rejected", err)
+	}
+	v3ID, err := c.ID()
+	if err != nil || legacyID == v3ID {
+		t.Fatal("v3 contract was not bound into config identity", err)
+	}
+	c.WriterContract = "unknown-v3"
+	if err := c.Validate(); err == nil {
+		t.Fatal("unknown writer contract admitted")
+	}
+}
+
+func TestUTF8ScopedV4IsAnExplicitWriterContract(t *testing.T) {
+	c, err := Parse([]byte(Example))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyID, err := c.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.WriterContract = writercontract.ContractUTF8ScopedV4
+	if err := c.Validate(); err != nil {
+		t.Fatal("v4 writer contract rejected", err)
+	}
+	v4ID, err := c.ID()
+	if err != nil || v4ID == legacyID {
+		t.Fatal("v4 contract was not configuration-identity-bound", err)
+	}
+	c.WriterContract = "utf8-scoped-v5"
+	if err := c.Validate(); err == nil {
+		t.Fatal("unknown writer contract admitted")
+	}
+}
+
+func TestAnchoredEditsV1IsAnExplicitWriterContract(t *testing.T) {
+	c, err := Parse([]byte(Example))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyID, err := c.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.WriterContract = writercontract.ContractAnchoredEditsV1
+	if err := c.Validate(); err != nil {
+		t.Fatal("anchored-edits-v1 rejected", err)
+	}
+	newID, err := c.ID()
+	if err != nil || newID == legacyID {
+		t.Fatal("anchored contract was not configuration-identity-bound", err)
+	}
+	c.WriterContract = "unknown-anchor-v1"
+	if err := c.Validate(); err == nil {
+		t.Fatal("unknown writer contract admitted")
+	}
+}
+
+func TestExplorerJSONV2ContractIsExplicitAndIdentityBound(t *testing.T) {
+	c, err := Parse([]byte(Example))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyID, err := c.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.ExplorerContract = "json-v2"
+	if err := c.Validate(); err != nil {
+		t.Fatal("json-v2 explorer contract rejected", err)
+	}
+	v2ID, err := c.ID()
+	if err != nil || v2ID == legacyID {
+		t.Fatal("json-v2 was not configuration-identity-bound", err)
+	}
+	c.ExplorerContract = "json-v3"
+	if err := c.Validate(); err == nil {
+		t.Fatal("unknown explorer contract admitted")
+	}
+}
+
 func TestTopLevelProviderAndOpenCodeSelection(t *testing.T) {
 	direct := providerBackedConfig("provider-api", "openai")
 	if err := direct.Validate(); err != nil {
@@ -227,6 +319,140 @@ func TestNativeWriterOutputIsExplicitAndSchemaBound(t *testing.T) {
 	c.Provider.Roles["writer"] = role
 	if err := c.validateNativeWriterOutput(); err == nil {
 		t.Fatal("native writer configuration with a forbidden terminal choice was admitted")
+	}
+}
+
+func TestNativeWriterOutputAcceptsUTF8ReplaceV3Schema(t *testing.T) {
+	c := nativeWriterOutputConfig(t)
+	c.WriterContract = writercontract.ContractUTF8ReplaceV3
+	if err := c.validateNativeWriterOutput(); err != nil {
+		t.Fatal("native writer v3 configuration rejected", err)
+	}
+	in := `{"output_schema":` + string(writercontract.UTF8Schema()) + `,"instruction":"replace complete files"}`
+	invocation, err := runtime.NewInvocation(*c.Writer, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expectation, err := c.OpenCodeWriterOutputExpectation(invocation); err != nil || expectation == nil {
+		t.Fatal("v3 schema was not admitted for native writer output", err)
+	}
+}
+
+func TestNativeWriterOutputAcceptsCandidateBoundV4Schema(t *testing.T) {
+	c := nativeWriterOutputConfig(t)
+	c.WriterContract = writercontract.ContractUTF8ScopedV4
+	if err := c.validateNativeWriterOutput(); err != nil {
+		t.Fatal("native writer v4 configuration rejected", err)
+	}
+	candidate := strings.Repeat("a", 64)
+	schema, err := writercontract.UTF8SchemaForCandidate(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := canonical.Bytes(map[string]any{"candidate_id": candidate, "output_schema": schema, "instruction": "implement"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation, err := runtime.NewInvocation(*c.Writer, string(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expectation, err := c.OpenCodeWriterOutputExpectation(invocation); err != nil || expectation == nil {
+		t.Fatal("candidate-bound v4 schema rejected", err)
+	}
+	other, _ := writercontract.UTF8SchemaForCandidate(strings.Repeat("b", 64))
+	input, _ = canonical.Bytes(map[string]any{"candidate_id": candidate, "output_schema": other, "instruction": "implement"})
+	invocation, err = runtime.NewInvocation(*c.Writer, string(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.OpenCodeWriterOutputExpectation(invocation); err == nil {
+		t.Fatal("native schema candidate substitution admitted")
+	}
+	for _, wrongSchema := range [][]byte{writercontract.UTF8Schema(), writercontract.ChangesJSONSchema()} {
+		input, _ := canonical.Bytes(map[string]any{"candidate_id": candidate, "output_schema": wrongSchema, "instruction": "implement"})
+		wrongShape, err := runtime.NewInvocation(*c.Writer, string(input))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.OpenCodeWriterOutputExpectation(wrongShape); err == nil {
+			t.Fatal("native v4 writer accepted a different contract schema")
+		}
+	}
+}
+
+func TestNativeWriterOutputAcceptsCandidateBoundAnchoredSchema(t *testing.T) {
+	c := nativeWriterOutputConfig(t)
+	c.WriterContract = writercontract.ContractAnchoredEditsV1
+	if err := c.validateNativeWriterOutput(); err != nil {
+		t.Fatal("native anchored writer configuration rejected", err)
+	}
+	candidate := strings.Repeat("a", 64)
+	schema, err := writercontract.AnchoredEditsSchemaForCandidate(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := canonical.Bytes(map[string]any{"candidate_id": candidate, "output_schema": schema, "instruction": "edit anchors"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation, err := runtime.NewInvocation(*c.Writer, string(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expectation, err := c.OpenCodeWriterOutputExpectation(invocation); err != nil || expectation == nil {
+		t.Fatal("candidate-bound anchored schema rejected", err)
+	}
+	other, _ := writercontract.AnchoredEditsSchemaForCandidate(strings.Repeat("b", 64))
+	wrongInput, _ := canonical.Bytes(map[string]any{"candidate_id": candidate, "output_schema": other, "instruction": "edit anchors"})
+	wrong, err := runtime.NewInvocation(*c.Writer, string(wrongInput))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.OpenCodeWriterOutputExpectation(wrong); err == nil {
+		t.Fatal("anchored schema candidate substitution admitted")
+	}
+	for _, wrongSchema := range [][]byte{writercontract.UTF8Schema(), writercontract.ChangesJSONSchema()} {
+		wrongInput, _ := canonical.Bytes(map[string]any{"candidate_id": candidate, "output_schema": wrongSchema, "instruction": "edit anchors"})
+		wrongShape, err := runtime.NewInvocation(*c.Writer, string(wrongInput))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.OpenCodeWriterOutputExpectation(wrongShape); err == nil {
+			t.Fatal("native anchored writer accepted a different contract schema")
+		}
+	}
+}
+
+func TestNativeWriterOutputUsesOnlyChangesJSONContractSchema(t *testing.T) {
+	c := nativeWriterOutputConfig(t)
+	c.WriterContract = writercontract.ContractChangesJSONV1
+	if err := c.validateNativeWriterOutput(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		schema json.RawMessage
+		valid  bool
+	}{
+		{name: "changes-json", schema: writercontract.ChangesJSONSchema(), valid: true},
+		{name: "utf8", schema: writercontract.UTF8Schema()},
+		{name: "anchored", schema: writercontract.AnchoredEditsSchema()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input, err := canonical.Bytes(map[string]any{"candidate_id": strings.Repeat("a", 64), "output_schema": tc.schema, "instruction": "write"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			invocation, err := runtime.NewInvocation(*c.Writer, string(input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = c.OpenCodeWriterOutputExpectation(invocation)
+			if (err == nil) != tc.valid {
+				t.Fatalf("contract schema admission mismatch: %v", err)
+			}
+		})
 	}
 }
 

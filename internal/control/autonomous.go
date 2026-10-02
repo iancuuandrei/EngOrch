@@ -92,6 +92,11 @@ func autonomousDispatchBlocked(s Snapshot) error {
 	if s.ExplorerHost != nil && s.ExplorerHost.RuntimeReceipt == nil {
 		return errors.New("explorer runtime remains unresolved and cannot be resent automatically")
 	}
+	for id, r := range s.ExplorerRuns {
+		if r.RuntimeReceipt == nil {
+			return fmt.Errorf("parallel explorer %s remains unresolved and cannot be resent automatically", id)
+		}
+	}
 	if s.WriterHost != nil && s.WriterHost.RuntimeReceipt == nil {
 		return errors.New("writer runtime remains unresolved and cannot be resent automatically")
 	}
@@ -100,6 +105,12 @@ func autonomousDispatchBlocked(s Snapshot) error {
 	}
 	if s.PlannerHost != nil && s.PlannerReceipt == nil {
 		return errors.New("planner runtime remains unresolved and cannot be resent automatically")
+	}
+	if s.FileOutcome == "UNKNOWN" {
+		return errors.New("file effect remains UNKNOWN and requires reconciliation")
+	}
+	if graphHasUnknown(s) {
+		return errors.New("graph task is UNKNOWN and requires reconciliation")
 	}
 	return nil
 }
@@ -127,6 +138,33 @@ func autonomousWriterEffect(ctx context.Context, path string, s Snapshot) (Snaps
 	if err := autonomousDispatchBlocked(s); err != nil {
 		return s, false, err
 	}
+	// Graph runs: native writer proposal paths must be within the declared
+	// implementation WritePaths before file authorization/application.
+	if s.Graph != nil {
+		impl, ok := graphImplementationTask(s)
+		if !ok {
+			return s, false, errors.New("graph implementation task unavailable for writer scope")
+		}
+		// For repair extensions the active implementation is the newest
+		// incomplete one; fall back to union check across implementations so
+		// scoped repair writes remain admissible while out-of-scope writes
+		// are rejected before any authorization.
+		if err := requireWriterPathsInScope(impl, s); err != nil {
+			unionOK := false
+			for _, t := range s.Graph.Graph.Tasks {
+				if t.Kind == "implementation" {
+					// Reuse scope check helper via temporary task.
+					if requireWriterPathsInScope(t, s) == nil {
+						unionOK = true
+						break
+					}
+				}
+			}
+			if !unionOK {
+				return s, false, err
+			}
+		}
+	}
 	a, err := autonomousFileAuthorization(s, s.WriterProposal.Prepared.Intent)
 	if err != nil {
 		return s, false, err
@@ -144,9 +182,15 @@ func autonomousWriterEffect(ctx context.Context, path string, s Snapshot) (Snaps
 // or file effect, never repeats a pending verification, and never publishes,
 // commits, or pushes.
 //
-// It is safe to call after process restart. A completed stage is inspected and
-// skipped; an incomplete runtime is handed to that role's existing resume path.
+// Graph-enabled runs (ExecutionPolicy.GraphVersion==1) use hierarchical task
+// graph execution with bounded parallel read-only explorers by default;
+// legacy nil/old policies remain sequential. It is safe to call after process
+// restart. A completed stage is inspected and skipped; an incomplete runtime
+// is handed to that role's existing resume path.
 func RunAutonomous(ctx context.Context, path string) (Snapshot, error) {
+	if s, err := Inspect(path); err == nil && graphEnabled(s) {
+		return runAutonomousGraph(ctx, path, false)
+	}
 	for steps := 0; steps < 64; steps++ {
 		if err := ctx.Err(); err != nil {
 			s, inspectErr := Inspect(path)
@@ -303,6 +347,32 @@ func RunAutonomous(ctx context.Context, path string) (Snapshot, error) {
 		return s, err
 	}
 	return s, errors.New("autonomous execution step limit reached")
+}
+
+// PrepareAutonomous advances a graph-enabled run through planner acceptance,
+// machine authorization, graph recording and pristine workspace confirmation,
+// then returns before any explorer or writer dispatch. The run remains in
+// IMPLEMENTING and can be continued with RunAutonomous after optional lexical
+// artifacts have been staged.
+func PrepareAutonomous(ctx context.Context, path string) (Snapshot, error) {
+	s, err := Inspect(path)
+	if err != nil {
+		return s, err
+	}
+	if !graphEnabled(s) {
+		return s, errors.New("prepare-only requires graph-enabled autonomous execution")
+	}
+	switch s.State {
+	case "OBJECTIVE", "PLANNING", "AWAITING_APPROVAL", "IMPLEMENTING":
+	default:
+		return s, errors.New("prepare-only requires a run before verification or review")
+	}
+	if s.State == "IMPLEMENTING" {
+		if err := requireFreshGraphPreparationState(s); err != nil {
+			return s, err
+		}
+	}
+	return runAutonomousGraph(ctx, path, true)
 }
 
 // InspectOr keeps the durable snapshot available to callers when a normal

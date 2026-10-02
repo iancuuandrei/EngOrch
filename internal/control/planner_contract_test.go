@@ -58,6 +58,36 @@ func TestPlannerInvocationRejectsUnknownContract(t *testing.T) {
 	}
 }
 
+func TestReviewerContractFreezesConfiguredVerificationInPlannerInput(t *testing.T) {
+	c := creation(t)
+	c.Config.Reviewer = &runtime.Profile{Runtime: "fake", Provider: "deterministic", Model: "explicit-reviewer", Effort: "high", Role: "reviewer"}
+	c.Config.ReviewerContract = "json-v1"
+	i, err := plannerInvocation(c.Config, c.Objective)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Instruction        string         `json:"instruction"`
+		VerificationChecks []config.Check `json:"verification_checks"`
+	}
+	if err := json.Unmarshal([]byte(i.Input), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.VerificationChecks) != len(c.Config.Verification) || payload.VerificationChecks[0].Name != c.Config.Verification[0].Name || !strings.Contains(payload.Instruction, "configured verification checks") || !strings.Contains(payload.Instruction, "recorded observations") || !strings.Contains(payload.Instruction, "Prefer direct mode for localized changes") || !strings.Contains(payload.Instruction, "independent read-only tasks may run concurrently") {
+		t.Fatalf("planner did not receive frozen verification scope: %+v", payload)
+	}
+	legacy := c.Config
+	legacy.ReviewerContract = ""
+	legacyInvocation, err := plannerInvocation(legacy, c.Objective)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := runtime.NewInvocation(legacy.Planner, c.Objective)
+	if err != nil || legacyInvocation != want {
+		t.Fatalf("empty reviewer contract changed legacy planner identity: %v", err)
+	}
+}
+
 func TestPlannerContractIsEnforcedByJournalReplay(t *testing.T) {
 	c := creation(t)
 	c.Config.PlannerContract = plannerContractV1

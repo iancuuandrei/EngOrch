@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"harness.local/engorch/internal/effects"
+	"harness.local/engorch/internal/gitexec"
 	"harness.local/engorch/internal/worktree"
 )
 
@@ -18,7 +18,7 @@ func gitObjectCommand(ctx context.Context, root string, input []byte, limit int,
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	argv := []string{"--no-optional-locks", "--no-replace-objects", "-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-C", root}
-	cmd := exec.CommandContext(ctx, "git", append(argv, args...)...)
+	cmd := gitexec.CommandContext(ctx, append(argv, args...)...)
 	cmd.WaitDelay = time.Second
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")

@@ -41,7 +41,7 @@ func TestCodexInitCreatesCompleteRolesAndPreservesExistingConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Planner.Model != "fixture-model" || cfg.Writer == nil || cfg.Explorer == nil || cfg.Reviewer == nil || cfg.Codex.ExecutableHash == "" || cfg.BaseBranch != "HEAD" || cfg.ExplorerContract != "json-v1" {
+	if cfg.Planner.Model != "fixture-model" || cfg.Writer == nil || cfg.Explorer == nil || cfg.Reviewer == nil || cfg.Codex.ExecutableHash == "" || cfg.BaseBranch != "HEAD" || cfg.ExplorerContract != "json-v2" || cfg.WriterContract != "anchored-edits-v1" {
 		t.Fatal("incomplete real-role configuration")
 	}
 	if err := Execute(context.Background(), args, root, &out); err == nil {

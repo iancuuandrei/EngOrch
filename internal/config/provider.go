@@ -228,22 +228,71 @@ func (p Provider) ResolveRole(role string) (ResolvedProviderRole, error) {
 	return p.resolveRole(role)
 }
 
+// ResolveRoleProfile binds an explicitly allowed runtime profile to the exact
+// configured provider model and its adapter controls. Model identity and
+// effort come from the invocation profile; all other role controls remain
+// copied from the configured role contract.
+func (p Provider) ResolveRoleProfile(role string, profile runtime.Profile) (ResolvedProviderRole, error) {
+	if err := p.Validate(); err != nil {
+		return ResolvedProviderRole{}, err
+	}
+	configured, ok := p.Roles[role]
+	if !ok || profile.Role != role {
+		return ResolvedProviderRole{}, errors.New("provider role profile unavailable")
+	}
+	endpoint, err := p.endpoint(configured.Endpoint)
+	if err != nil {
+		return ResolvedProviderRole{}, err
+	}
+	baseModel, err := p.model(configured.Model)
+	if err != nil {
+		return ResolvedProviderRole{}, err
+	}
+	var selectedModel providergateway.ModelContract
+	selectedName := ""
+	for _, candidate := range p.Models {
+		contract, err := candidate.Contract()
+		if err != nil || contract.Model != profile.Model || contract.Provider != profile.Provider || contract.AdapterID != baseModel.AdapterID {
+			continue
+		}
+		if selectedName != "" {
+			return ResolvedProviderRole{}, errors.New("adaptive provider model identity is ambiguous")
+		}
+		selectedName, selectedModel = candidate.Name, contract
+	}
+	if selectedName == "" || endpoint.Provider != profile.Provider || endpoint.AdapterID != selectedModel.AdapterID {
+		return ResolvedProviderRole{}, errors.New("adaptive provider model is not configured for this role")
+	}
+	selected := configured
+	selected.Model = selectedName
+	controls, variant, err := providerControlsForEffort(selectedModel.AdapterID, configured, profile.Effort)
+	if err != nil {
+		return ResolvedProviderRole{}, err
+	}
+	selected.AdapterControlsJSON = string(controls)
+	selected.Variant = variant
+	if err := validateProviderRoleControls(endpoint, selectedModel, selected, nil); err != nil {
+		return ResolvedProviderRole{}, errors.Join(errors.New("adaptive provider controls are not admitted"), err)
+	}
+	return p.resolvedRole(configured.Endpoint, selected, selectedModel)
+}
+
 func (p Provider) resolveRole(role string) (ResolvedProviderRole, error) {
 	selected, ok := p.Roles[role]
 	if !ok {
 		return ResolvedProviderRole{}, errors.New("provider role is not configured")
 	}
-	var endpoint providergateway.EndpointContract
-	for _, value := range p.Endpoints {
-		if value.Name == selected.Endpoint {
-			endpoint, _ = value.Contract()
-		}
+	model, err := p.model(selected.Model)
+	if err != nil {
+		return ResolvedProviderRole{}, err
 	}
-	var model providergateway.ModelContract
-	for _, value := range p.Models {
-		if value.Name == selected.Model {
-			model, _ = value.Contract()
-		}
+	return p.resolvedRole(selected.Endpoint, selected, model)
+}
+
+func (p Provider) resolvedRole(endpointName string, selected ProviderRole, model providergateway.ModelContract) (ResolvedProviderRole, error) {
+	endpoint, err := p.endpoint(endpointName)
+	if err != nil {
+		return ResolvedProviderRole{}, err
 	}
 	environment := ""
 	for _, value := range p.Credentials {
@@ -259,6 +308,87 @@ func (p Provider) resolveRole(role string) (ResolvedProviderRole, error) {
 		CredentialEnvironment: environment,
 		ResponseFraming:       selected.ResponseFraming,
 	}, nil
+}
+
+func (p Provider) endpoint(name string) (providergateway.EndpointContract, error) {
+	for _, value := range p.Endpoints {
+		if value.Name == name {
+			return value.Contract()
+		}
+	}
+	return providergateway.EndpointContract{}, errors.New("provider endpoint unavailable")
+}
+
+func (p Provider) model(name string) (providergateway.ModelContract, error) {
+	for _, value := range p.Models {
+		if value.Name == name {
+			return value.Contract()
+		}
+	}
+	return providergateway.ModelContract{}, errors.New("provider model unavailable")
+}
+
+func providerControlsForEffort(adapter string, configured ProviderRole, effort string) ([]byte, ProviderVariant, error) {
+	if !providerIdentifier(effort) {
+		return nil, ProviderVariant{}, errors.New("invalid adaptive provider effort")
+	}
+	variant := configured.Variant
+	variant.Effort = effort
+	switch adapter {
+	case providergateway.OpenAIChatCompletionsAdapter:
+		if effort != "none" || configured.Variant != (ProviderVariant{Effort: "none"}) {
+			return nil, ProviderVariant{}, errors.New("chat adapter does not support adaptive effort")
+		}
+		return []byte(configured.AdapterControlsJSON), variant, nil
+	case providergateway.OpenAIResponsesAdapter:
+		var controls providergateway.ResponsesRequestExpectation
+		decoder := json.NewDecoder(strings.NewReader(configured.AdapterControlsJSON))
+		decoder.DisallowUnknownFields()
+		decoder.UseNumber()
+		if decoder.Decode(&controls) != nil {
+			return nil, ProviderVariant{}, errors.New("invalid configured Responses controls")
+		}
+		if effort == "none" {
+			controls.ReasoningEffort = ""
+		} else {
+			controls.ReasoningEffort = effort
+		}
+		variant.SystemRole = controls.SystemRole
+		variant.ReasoningSummary = controls.ReasoningSummary
+		variant.TextFormat = controls.TextFormat
+		variant.TextVerbosity = controls.TextVerbosity
+		raw, err := json.Marshal(controls)
+		return raw, variant, err
+	case providergateway.AnthropicMessagesAdapter:
+		var controls providergateway.AnthropicMessagesRequestExpectation
+		decoder := json.NewDecoder(strings.NewReader(configured.AdapterControlsJSON))
+		decoder.DisallowUnknownFields()
+		decoder.UseNumber()
+		if decoder.Decode(&controls) != nil {
+			return nil, ProviderVariant{}, errors.New("invalid configured Anthropic controls")
+		}
+		if effort == "none" {
+			controls.Effort = ""
+		} else {
+			controls.Effort = effort
+		}
+		variant.SystemRole = ""
+		if controls.RequireSystem {
+			variant.SystemRole = "system"
+		}
+		variant.ThinkingMode = controls.ThinkingMode
+		if controls.ThinkingBudgetTokens != nil {
+			value := *controls.ThinkingBudgetTokens
+			variant.ThinkingBudgetTokens = &value
+		} else {
+			variant.ThinkingBudgetTokens = nil
+		}
+		variant.ReasoningSummary, variant.TextFormat, variant.TextVerbosity = "", "", ""
+		raw, err := json.Marshal(controls)
+		return raw, variant, err
+	default:
+		return nil, ProviderVariant{}, errors.New("provider adapter does not support adaptive profiles")
+	}
 }
 
 // RoleReservation exposes the exact conservative ceilings used by access

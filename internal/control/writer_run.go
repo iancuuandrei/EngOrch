@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"time"
 
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/codexhost"
@@ -25,6 +26,21 @@ func RunWriter(ctx context.Context, path string) (WriterRecord, error) {
 	}
 	if err := requireCurrentHostAdmission(ctx, s); err != nil {
 		return WriterRecord{}, err
+	}
+	if taskContextEnabled(s) {
+		if err := autonomousDispatchBlocked(s); err != nil {
+			return WriterRecord{}, err
+		}
+		if err := maybeAdmitTaskContext(ctx, path, writerTaskRole(s), s.Creation.Objective); err != nil {
+			return WriterRecord{}, err
+		}
+		s, err = Inspect(path)
+		if err != nil {
+			return WriterRecord{}, err
+		}
+		if err := requireCurrentHostAdmission(ctx, s); err != nil {
+			return WriterRecord{}, err
+		}
 	}
 	invocation, err := writerInvocation(s)
 	if err != nil {
@@ -173,7 +189,9 @@ func executeWriter(ctx context.Context, path string, s Snapshot, expected Writer
 		return result, readErr
 	}
 	if readErr == nil && s.Creation.Config.Version == 2 && state.Result == nil && (state.TurnStatus == "failed" || state.TurnStatus == "interrupted") {
-		_, _, terminalErr := completeModelAccess(context.Background(), path, runtimePath, expected.Invocation, "harness.writer-result.v1")
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		_, _, terminalErr := completeModelAccess(cleanupCtx, path, runtimePath, expected.Invocation, "harness.writer-result.v1")
+		cancel()
 		return result, errors.Join(errors.New("writer runtime is terminal without a result"), terminalErr)
 	}
 	if readErr != nil || state.Result == nil {
@@ -213,7 +231,9 @@ func executeWriter(ctx context.Context, path string, s Snapshot, expected Writer
 		}
 		if err != nil {
 			if s.Creation.Config.Version == 2 {
-				_, _, terminalErr := completeModelAccess(context.Background(), path, runtimePath, expected.Invocation, "harness.writer-result.v1")
+				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+				_, _, terminalErr := completeModelAccess(cleanupCtx, path, runtimePath, expected.Invocation, "harness.writer-result.v1")
+				cancel()
 				return result, errors.Join(err, terminalErr)
 			}
 			return result, err

@@ -9,14 +9,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
-	"sync"
 	"unicode/utf8"
 
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/control"
+	"harness.local/engorch/internal/gitexec"
 	"harness.local/engorch/internal/worktree"
 )
 
@@ -231,127 +230,21 @@ func (c *boundedCapture) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// gitExecutableEnv names the explicit operator override for a nonstandard Git
-// installation. The override is operator trust: it must be an absolute path
-// to an existing regular file. It is honored exactly as given (after symlink
-// resolution) because the operator selected it.
-const gitExecutableEnv = "FABRIC_GIT_EXECUTABLE"
+// These thin aliases keep the existing CLI resolver tests stable while the
+// implementation and production command path live in the shared package.
+const gitExecutableEnv = gitexec.ExecutableEnv
 
-// defaultGitCandidates reports the fixed conventional system installation
-// absolute paths for the given GOOS. PATH is never consulted.
-func defaultGitCandidates(goos string) []string {
-	switch goos {
-	case "windows":
-		return []string{
-			"C:/Program Files/Git/cmd/git.exe",
-			"C:/Program Files/Git/bin/git.exe",
-		}
-	case "darwin":
-		return []string{
-			"/usr/bin/git",
-			"/opt/homebrew/bin/git",
-			"/usr/local/bin/git",
-		}
-	case "linux":
-		return []string{
-			"/usr/bin/git",
-			"/bin/git",
-		}
-	default:
-		return nil
-	}
-}
+func defaultGitCandidates(goos string) []string { return gitexec.DefaultCandidates(goos) }
 
-// resolveGitExecutable resolves the Git executable without searching PATH.
-//
-// An explicit FABRIC_GIT_EXECUTABLE override is validated before any
-// fallback and an invalid override fails instead of silently falling back to
-// the conventional paths. Both the override and each fallback candidate must
-// be absolute paths to existing regular files; symlinks are resolved and the
-// resolved path must remain absolute.
-//
-// This hardens only the diff.go Git observations. Other Git subsystem calls
-// retain existing behavior (notably worktree.Capture, which still resolves
-// Git via the prior PATH-based lookup), so this resolver must not be
-// described as a repository-wide Git hardening.
 func resolveGitExecutable(getenv func(string) string, stat func(string) (os.FileInfo, error), evalSymlinks func(string) (string, error), candidates []string) (string, error) {
-	if getenv != nil {
-		if override := getenv(gitExecutableEnv); override != "" {
-			if !filepath.IsAbs(override) {
-				return "", fmt.Errorf("%s must be an absolute path: %q", gitExecutableEnv, override)
-			}
-			info, err := stat(override)
-			if err != nil {
-				return "", fmt.Errorf("%s not accessible %q: %w", gitExecutableEnv, override, err)
-			}
-			if !info.Mode().IsRegular() {
-				return "", fmt.Errorf("%s is not a regular file: %q", gitExecutableEnv, override)
-			}
-			resolved, err := evalSymlinks(override)
-			if err != nil {
-				return "", fmt.Errorf("%s could not be resolved %q: %w", gitExecutableEnv, override, err)
-			}
-			if !filepath.IsAbs(resolved) {
-				return "", fmt.Errorf("%s resolved path is not absolute: %q", gitExecutableEnv, resolved)
-			}
-			if resolved != override {
-				resolvedInfo, err := stat(resolved)
-				if err != nil {
-					return "", fmt.Errorf("%s target not accessible %q: %w", gitExecutableEnv, resolved, err)
-				}
-				if !resolvedInfo.Mode().IsRegular() {
-					return "", fmt.Errorf("%s target is not a regular file: %q", gitExecutableEnv, resolved)
-				}
-			}
-			return resolved, nil
-		}
-	}
-	for _, candidate := range candidates {
-		if !filepath.IsAbs(candidate) {
-			continue
-		}
-		info, err := stat(candidate)
-		if err != nil {
-			continue
-		}
-		if !info.Mode().IsRegular() {
-			continue
-		}
-		resolved, err := evalSymlinks(candidate)
-		if err != nil {
-			continue
-		}
-		if !filepath.IsAbs(resolved) {
-			continue
-		}
-		if resolved != candidate {
-			resolvedInfo, err := stat(resolved)
-			if err != nil || !resolvedInfo.Mode().IsRegular() {
-				continue
-			}
-		}
-		return resolved, nil
-	}
-	return "", errors.New("git executable not found at conventional system paths and no valid FABRIC_GIT_EXECUTABLE override is set")
+	return gitexec.ResolveExecutable(getenv, stat, evalSymlinks, candidates)
 }
-
-// gitPathOnce caches only the production resolver. Tests exercise
-// resolveGitExecutable and defaultGitCandidates directly with injected
-// getenv/stat/candidates so they never depend on the real environment or on
-// this global cache, and the resolver never consults PATH.
-var gitPathOnce = sync.OnceValues(func() (string, error) {
-	return resolveGitExecutable(os.Getenv, os.Stat, filepath.EvalSymlinks, defaultGitCandidates(runtime.GOOS))
-})
 
 // gitOutput runs one Git command with bounded stdout/stderr. Exit code 1 is
 // accepted only when allowExitOne is set for `diff --no-index`, which uses it
 // to report a real difference; every other command treats any failure as an
 // error. Context cancellation is preserved even when stderr is empty.
 func gitOutput(ctx context.Context, dir string, allowExitOne bool, args ...string) (string, error) {
-	gitPath, err := gitPathOnce()
-	if err != nil {
-		return "", err
-	}
 	// Read-only observations must never refresh the index stat cache: the v1
 	// candidate identity hashes the raw index bytes, so any refresh would
 	// false-trigger drift recapture on an otherwise quiescent workspace.
@@ -363,12 +256,12 @@ func gitOutput(ctx context.Context, dir string, allowExitOne bool, args ...strin
 		argv = append([]string{"-c", "diff.autoRefreshIndex=false"}, argv...)
 	}
 	argv = append(argv, args...)
-	command := exec.CommandContext(ctx, gitPath, argv...)
+	command := gitexec.CommandContext(ctx, argv...)
 	command.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
 	var stdout, stderr boundedCapture
 	command.Stdout = &stdout
 	command.Stderr = &stderr
-	err = command.Run()
+	err := command.Run()
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}

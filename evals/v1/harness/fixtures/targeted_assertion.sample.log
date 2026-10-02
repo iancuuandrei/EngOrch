@@ -1,0 +1,5 @@
+=== RUN   TestFabricV1Heldout
+--- FAIL: TestFabricV1Heldout (0.00s)
+    fabric_v1_heldout_test.go:12: base-only RemoveAll error = <nil>, want EPERM
+FAIL	github.com/spf13/afero	0.123s
+FAIL
