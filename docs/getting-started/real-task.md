@@ -9,7 +9,7 @@ the project or its journals. A model task consumes your account's usage.
 ## Build Fabric and create a project
 
 ```powershell
-git clone --branch feat/v1-product-gate https://github.com/iancuuandrei/Fabric.git
+git clone https://github.com/iancuuandrei/Fabric.git
 Set-Location Fabric
 go build -o bin/engorch.exe ./cmd/harness
 if ($LASTEXITCODE -ne 0) { throw 'Fabric build failed' }
@@ -27,8 +27,6 @@ git -C $project commit -m 'Initial greeting project'
 ```
 
 Git needs your normal author name/email configured for that initial commit.
-The feature branch contains this first-task workflow while its pull request is
-under review. After it is merged, the same guide can be used from `main`.
 The sample starts with a greeting function and one test. Its ignore file excludes
 Fabric configuration and runtime state. In your own project, commit existing work
 first and ignore `.harness/` and `harness.toml` before creating a task.
