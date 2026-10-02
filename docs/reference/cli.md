@@ -46,6 +46,7 @@ Use `harness [--root PATH] COMMAND`. Output is canonical JSON except help and `i
 | `explore` | `RUN QUESTION` | Execute or resume the configured explorer and record advisory context. |
 | `review` | `RUN` | Execute or resume the configured read-only reviewer and admit its bound verdict. |
 | `prepare-writer` | `RUN` | Inspect the exact configured writer invocation for the current admitted candidate. |
+| `writer-files` | `RUN` | Export the already recorded writer proposal as an exact file approval preview without preparing a new intent. |
 | `write` | `RUN` | Execute or resume the configured writer and record a file proposal without applying changes. |
 | `ri close-producer` | `RUN INTENT_ID ACTOR EVIDENCE workloads-stopped` | Close interrupted producer uncertainty with explicit quiescence evidence; retain UNKNOWN outcome. |
 | `ri prepare-producer` | `RUN CHECK_JSON OUTPUT` | Freeze a semantic indexer invocation in the admitted isolated workspace. |
@@ -65,7 +66,7 @@ Use `harness [--root PATH] COMMAND`. Output is canonical JSON except help and `i
 | `ri definition|references` | `EXE EXE_SHA256 SNAPSHOT SNAPSHOT_ID SYMBOL PRODUCER LIMIT [CURSOR]` | Page direct semantic occurrences; relationship expansion and absence inference are not performed. |
 | `ri path` | `EXE EXE_SHA256 SNAPSHOT SNAPSHOT_ID FROM TO RELATION DIRECTION PRODUCER MAX_DEPTH MAX_EDGES` | Find a bounded observed graph path; exhaustion does not prove absence. |
 | `ri` | `status|coverage|deps|rdeps EXE EXE_SHA256 SNAPSHOT SNAPSHOT_ID ...` | Query a committed-source snapshot. Coverage adds NODE RELATION DIRECTION; deps/rdeps add NODE PRODUCER LIMIT [CURSOR] for direct dependency edges. |
-| `init` | `` | Write a new fake-runtime configuration without overwriting an existing file. |
+| `init` | `[--codex EXE --model MODEL [--effort EFFORT] [--auth-source PATH] [--state-root PATH]]` | Create a fake configuration or a complete Codex role configuration without overwriting an existing file. |
 | `doctor` | `` | Validate configuration and committed Git identity; dispatch no runtime. |
 | `plan` | `OBJECTIVE or --file PATH` | Create a plan from exact objective text or a bounded UTF-8 file using the explicitly configured runtime and access profile. |
 | `status` | `` | List validated local run IDs, workflow/lifecycle states and plan IDs without input or evidence bodies. |

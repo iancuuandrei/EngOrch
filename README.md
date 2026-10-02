@@ -1,4 +1,4 @@
-# Engineering harness
+# Fabric
 
 A standalone engineering harness around coding agents: models supply judgment;
 deterministic code binds repository context, routing, approvals and outcomes.
@@ -15,6 +15,15 @@ commit) is qualified end to end at the v0.0.1 trusted bootstrap checkpoint
 (see below); the full product v1.0.0 program remains future work. Local
 fixtures and bounded authenticated planning tests do not establish model
 quality or OS sandboxing.
+
+## Run your first real coding task
+
+Follow the [Windows first-task guide](docs/getting-started/real-task.md) to build
+Fabric, configure a stock Codex model, and run a coding task through planning,
+delegated inspection, implementation, verification and a separate review.
+The guide shows plan/file approvals and durable result inspection. This path has
+passed a real-model acceptance run from a fresh GitHub checkout at the exact
+source recorded in the [acceptance evidence](docs/evaluation/v1-product-gate.md).
 
 ## Checkpoint
 
@@ -58,13 +67,19 @@ not yet been qualified.
 
 ## Architecture and development
 
+- [Fabric v1 product gate](docs/development/v1-product-gate.md): the Windows
+  first-task journey is accepted; broader v1 work remains open. Fabric
+  self-hosting is optional dogfooding.
+
 - [Architecture](docs/architecture/system.md) and [ADRs](docs/adr/0001-language-split.md)
 - [Journal contract](docs/specifications/run-journal.md)
 - [CLI reference](docs/reference/cli.md)
 - [Local task schedules](docs/guides/task-schedules.md)
 - [Apply file changes](docs/guides/file-changes.md)
+- [Build and verify a local package](docs/guides/local-packaging.md): local directory only; never a signed, tagged, or published release.
 - [Optional engineering procedures](docs/guides/procedures.md)
 - [Contributing](CONTRIBUTING.md) and [documentation standard](docs/contributing/documentation-standard.md)
 - [Research provenance](docs/research/oss-mechanisms.md)
 - [Current evidence](docs/evaluation/status.md)
+- [WP05/WP06 program history and completion status](docs/evaluation/wp05-wp06-history.md)
 - [v0.0.1 trusted bootstrap checkpoint](docs/evaluation/v0.0.1.md)

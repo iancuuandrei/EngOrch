@@ -68,6 +68,7 @@ var commands = []Command{
 	{"explore", "RUN QUESTION", "Execute or resume the configured explorer and record advisory context."},
 	{"review", "RUN", "Execute or resume the configured read-only reviewer and admit its bound verdict."},
 	{"prepare-writer", "RUN", "Inspect the exact configured writer invocation for the current admitted candidate."},
+	{"writer-files", "RUN", "Export the already recorded writer proposal as an exact file approval preview without preparing a new intent."},
 	{"write", "RUN", "Execute or resume the configured writer and record a file proposal without applying changes."},
 	{"ri close-producer", "RUN INTENT_ID ACTOR EVIDENCE workloads-stopped", "Close interrupted producer uncertainty with explicit quiescence evidence; retain UNKNOWN outcome."},
 	{"ri prepare-producer", "RUN CHECK_JSON OUTPUT", "Freeze a semantic indexer invocation in the admitted isolated workspace."},
@@ -87,7 +88,7 @@ var commands = []Command{
 	{"ri definition|references", "EXE EXE_SHA256 SNAPSHOT SNAPSHOT_ID SYMBOL PRODUCER LIMIT [CURSOR]", "Page direct semantic occurrences; relationship expansion and absence inference are not performed."},
 	{"ri path", "EXE EXE_SHA256 SNAPSHOT SNAPSHOT_ID FROM TO RELATION DIRECTION PRODUCER MAX_DEPTH MAX_EDGES", "Find a bounded observed graph path; exhaustion does not prove absence."},
 	{"ri", "status|coverage|deps|rdeps EXE EXE_SHA256 SNAPSHOT SNAPSHOT_ID ...", "Query a committed-source snapshot. Coverage adds NODE RELATION DIRECTION; deps/rdeps add NODE PRODUCER LIMIT [CURSOR] for direct dependency edges."},
-	{"init", "", "Write a new fake-runtime configuration without overwriting an existing file."},
+	{"init", "[--codex EXE --model MODEL [--effort EFFORT] [--auth-source PATH] [--state-root PATH]]", "Create a fake configuration or a complete Codex role configuration without overwriting an existing file."},
 	{"doctor", "", "Validate configuration and committed Git identity; dispatch no runtime."},
 	{"plan", "OBJECTIVE or --file PATH", "Create a plan from exact objective text or a bounded UTF-8 file using the explicitly configured runtime and access profile."},
 	{"status", "", "List validated local run IDs, workflow/lifecycle states and plan IDs without input or evidence bodies."},
@@ -268,22 +269,10 @@ func Execute(ctx context.Context, args []string, cwd string, out io.Writer) (res
 		return recoveryCommand(ctx, *root, command, args, out)
 	case "prepare-files", "apply-files":
 		return fileCommand(ctx, *root, command, args, out)
+	case "writer-files":
+		return writerFilesCommand(*root, args, out)
 	case "init":
-		if len(args) != 0 {
-			return errors.New("init takes no arguments")
-		}
-		f, err := os.OpenFile(filepath.Join(*root, "harness.toml"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-		if err != nil {
-			return err
-		}
-		_, writeErr := f.WriteString(config.Example)
-		if writeErr == nil {
-			writeErr = f.Sync()
-		}
-		if err = errors.Join(writeErr, f.Close()); err != nil {
-			return err
-		}
-		return output(out, map[string]string{"status": "CREATED", "configuration": "harness.toml", "runtime": "fake"})
+		return initCommand(ctx, *root, args, out)
 	case "doctor":
 		if len(args) != 0 {
 			return errors.New("doctor takes no arguments")
