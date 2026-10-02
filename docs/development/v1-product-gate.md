@@ -1,7 +1,8 @@
 # Fabric v1 product gate
 
-Status: Windows happy path accepted on 2026-10-02 from a fresh GitHub feature-branch
-checkout. See the [executed acceptance evidence](../evaluation/v1-product-gate.md).
+Status: Windows happy path accepted on 2026-10-02 from a fresh GitHub checkout
+at the exact source recorded in the
+[executed acceptance evidence](../evaluation/v1-product-gate.md).
 
 Fabric exists to build useful agent infrastructure. Product source may be edited
 directly by contributors; using Fabric to author its own changes is optional
@@ -68,8 +69,8 @@ multiple providers and additional platforms are subsequent milestones.
 
 These rows are supported by the real-model run identified in the acceptance
 evidence. Fixture tests support local behavior separately. Failed or uncertain
-invocations retain their actual outcomes. Main-branch merge and release publication
-are separate from this accepted feature-branch journey.
+invocations retain their actual outcomes. Release publication remains separate
+from this accepted journey.
 
 An initial baseline build passed before implementation. The real-model acceptance
 record above supersedes that earlier build-only smoke result.
