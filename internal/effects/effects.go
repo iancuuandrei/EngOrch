@@ -39,6 +39,10 @@ func (i Intent) ID() (string, error) {
 type Authorization struct {
 	IntentID string `json:"intent_id"`
 	Actor    string `json:"actor"`
+	// Authority and PolicyID are empty for an operator approval. They are set
+	// only by a controller policy that has its own replay validation.
+	Authority string `json:"authority,omitempty"`
+	PolicyID  string `json:"policy_id,omitempty"`
 }
 
 // Validate ensures approval applies to these exact inputs, not another effect.
@@ -49,6 +53,12 @@ func (a Authorization) Validate(i Intent) error {
 	}
 	if a.IntentID != id || strings.TrimSpace(a.Actor) == "" || len(a.Actor) > 256 {
 		return errors.New("effect approval mismatch")
+	}
+	if a.Authority != "" || a.PolicyID != "" {
+		if a.Authority != "autonomous-v1" || a.PolicyID == "" || !hash(a.PolicyID) ||
+			a.Actor != "fabric:autonomous" || i.Kind != "filesystem" {
+			return errors.New("invalid autonomous effect approval")
+		}
 	}
 	return nil
 }

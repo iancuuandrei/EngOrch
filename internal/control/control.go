@@ -24,6 +24,36 @@ type Creation struct {
 	Objective     string              `json:"objective"`
 	Config        config.Config       `json:"config"`
 	HostAdmission *HostAdmission      `json:"host_admission,omitempty"`
+	// Execution is absent for the interactive v1 workflow. When present it is
+	// immutable run input which allows the controller to make the narrowly
+	// defined machine approvals below.
+	Execution *ExecutionPolicy `json:"execution,omitempty"`
+}
+
+// ExecutionPolicy is an explicit, immutable opt-in to the bounded autonomous
+// workflow. It never grants authority for network publication or other
+// externally visible effects; its only machine authorization is an exact plan
+// and candidate-bound regular-file proposal.
+type ExecutionPolicy struct {
+	Mode       string `json:"mode"`
+	MaxRepairs int    `json:"max_repairs"`
+}
+
+// Validate admits only the bounded autonomous workflow with a repair budget
+// between 0 and 8 inclusive.
+func (p ExecutionPolicy) Validate() error {
+	if p.Mode != "autonomous-v1" || p.MaxRepairs < 0 || p.MaxRepairs > 8 {
+		return errors.New("invalid execution policy")
+	}
+	return nil
+}
+
+// MachineApproval records that the immutable execution policy, rather than a
+// human, admitted the exact planner result.
+type MachineApproval struct {
+	PlanID   string `json:"plan_id"`
+	PolicyID string `json:"policy_id"`
+	Actor    string `json:"actor"`
 }
 
 // Snapshot is reconstructed state, never independent authority to append effects.
@@ -51,6 +81,9 @@ type Snapshot struct {
 	PlanID             string                             `json:"plan_id"`
 	Plan               *runtime.Result                    `json:"plan"`
 	ApprovedBy         string                             `json:"approved_by"`
+	MachineApproval    *MachineApproval                   `json:"machine_approval,omitempty"`
+	RepairAttempts     int                                `json:"repair_attempts,omitempty"`
+	RepairCandidateID  string                             `json:"repair_candidate_id,omitempty"`
 	WorkspaceIntent    *worktree.Request                  `json:"workspace_intent"`
 	Workspace          *worktree.Binding                  `json:"workspace"`
 	Candidate          *worktree.Candidate                `json:"candidate"`
@@ -240,6 +273,11 @@ func Replay(events []journal.Event) (Snapshot, error) {
 			if c.Version != 1 || strings.TrimSpace(c.Nonce) == "" || len(c.Nonce) > 128 || c.Config.Planner.Role != "planner" {
 				return s, errors.New("invalid creation")
 			}
+			if c.Execution != nil {
+				if err := c.Execution.Validate(); err != nil {
+					return s, err
+				}
+			}
 			if err := c.Repository.Validate(); err != nil {
 				return s, err
 			}
@@ -331,6 +369,41 @@ func Replay(events []journal.Event) (Snapshot, error) {
 			}
 			s.ApprovedBy = a.Actor
 			s.State = "IMPLEMENTING"
+		case "plan.autonomous-authorized":
+			if s.State != "AWAITING_APPROVAL" || s.Creation.Execution == nil {
+				return s, errors.New("autonomous approval transition rejected")
+			}
+			var a MachineApproval
+			if err := canonical.Decode(e.Payload, &a); err != nil {
+				return s, err
+			}
+			policyID, err := canonical.Hash("harness.execution-policy.v1", *s.Creation.Execution)
+			if err != nil {
+				return s, err
+			}
+			if a.PlanID != s.PlanID || a.PolicyID != policyID || a.Actor != "fabric:autonomous" {
+				return s, errors.New("machine approval binding mismatch")
+			}
+			s.MachineApproval = &a
+			s.ApprovedBy = a.Actor
+			s.State = "IMPLEMENTING"
+		case "autonomous.repair-started":
+			if s.State != "REPAIRING" || s.Creation.Execution == nil {
+				return s, errors.New("autonomous repair transition rejected")
+			}
+			var repair AutonomousRepair
+			if err := canonical.Decode(e.Payload, &repair); err != nil {
+				return s, err
+			}
+			if s.Candidate == nil {
+				return s, errors.New("autonomous repair requires a candidate")
+			}
+			candidateID, err := s.Candidate.ID()
+			if err != nil || repair.CandidateID != candidateID || repair.Attempt != s.RepairAttempts+1 || repair.Attempt > s.Creation.Execution.MaxRepairs || repair.CandidateID == s.RepairCandidateID {
+				return s, errors.New("autonomous repair bound rejected")
+			}
+			s.RepairAttempts = repair.Attempt
+			s.RepairCandidateID = repair.CandidateID
 		case "candidate.index-observed":
 			if err := replayCandidateIndex(&s, e.Payload); err != nil {
 				return s, err
@@ -398,7 +471,7 @@ func Replay(events []journal.Event) (Snapshot, error) {
 			if expected.Intent != intent.Prepared.Intent {
 				return s, errors.New("file effect intent binding mismatch")
 			}
-			if err = intent.Authorization.Validate(expected.Intent); err != nil {
+			if err = validateFileAuthorization(s, intent.Authorization, expected.Intent); err != nil {
 				return s, err
 			}
 			id, err := expected.Intent.ID()
