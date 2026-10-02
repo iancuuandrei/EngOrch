@@ -2,8 +2,9 @@
 
 Status: PASS for the documented Windows PowerShell path on 2026-10-02.
 This is acceptance of one real coding journey, not a release or general sandbox
-qualification. The implementation is available on `feat/v1-product-gate` through
-[PR #5](https://github.com/iancuuandrei/Fabric/pull/5).
+qualification. The implementation was developed and accepted in
+[PR #5](https://github.com/iancuuandrei/Fabric/pull/5); the exact tested source
+identity is recorded below.
 
 ## Executed journey
 
