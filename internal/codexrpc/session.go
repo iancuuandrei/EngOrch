@@ -298,6 +298,19 @@ func (c *Client) StartTurn(ctx context.Context, thread ThreadSettings, i runtime
 			params["outputSchema"] = envelope.OutputSchema
 		}
 	}
+	if i.Profile.Role == "explorer" {
+		var envelope struct {
+			OutputSchema json.RawMessage `json:"output_schema"`
+		}
+		if json.Unmarshal([]byte(i.Input), &envelope) == nil && len(envelope.OutputSchema) > 0 {
+			got, err := canonical.Hash("explorer-output-schema", envelope.OutputSchema)
+			want, _ := canonical.Hash("explorer-output-schema", runtime.ExplorerOutputSchema())
+			if err != nil || got != want {
+				return wire.Turn, nil, errors.New("explorer output schema substitution")
+			}
+			params["outputSchema"] = envelope.OutputSchema
+		}
+	}
 	r, events, err := c.callConstrained(ctx, "turn/start", params)
 	if err != nil {
 		return wire.Turn, events, err
