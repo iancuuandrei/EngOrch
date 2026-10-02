@@ -18,6 +18,14 @@ quality or OS sandboxing.
 
 ## Run your first real coding task
 
+The [native autonomous task guide](docs/guides/autonomous-task.md) introduces
+`fabric run --autonomous`: plan, explore, implement, verify and review with a
+bounded repair budget and durable result inspection. A
+[real repository pilot](docs/evaluation/native-autonomous-pilot.md) reached
+`READY` and passed independent hidden checks. This is the first autonomous
+increment; hierarchical execution, parallel agents and adaptive allocation
+remain under development.
+
 Follow the [Windows first-task guide](docs/getting-started/real-task.md) to build
 Fabric, configure a stock Codex model, and run a coding task through planning,
 delegated inspection, implementation, verification and a separate review.

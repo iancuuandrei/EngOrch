@@ -6,6 +6,7 @@ Use `harness [--root PATH] COMMAND`. Output is canonical JSON except help and `i
 
 | Command | Arguments | Behavior |
 | --- | --- | --- |
+| `version` | `` | Report the build version, commit and build date. |
 | `agent-interrupt` | `RUN SCHEDULE_ID TURN_ID ACTOR NONCE` | Request interruption of one exact scheduled turn; delivery does not prove runtime teardown or resolve UNKNOWN effects. |
 | `agent-spawn` | `RUN SCHEDULE_ID REQUEST_JSON` | Queue a read-only explorer child using controller-derived invocation and authority. |
 | `agent-followup` | `RUN SCHEDULE_ID MESSAGE_JSON` | Queue an exact explorer follow-up through the existing per-agent FIFO scheduler. |
@@ -68,12 +69,13 @@ Use `harness [--root PATH] COMMAND`. Output is canonical JSON except help and `i
 | `ri` | `status|coverage|deps|rdeps EXE EXE_SHA256 SNAPSHOT SNAPSHOT_ID ...` | Query a committed-source snapshot. Coverage adds NODE RELATION DIRECTION; deps/rdeps add NODE PRODUCER LIMIT [CURSOR] for direct dependency edges. |
 | `init` | `[--codex EXE --model MODEL [--effort EFFORT] [--auth-source PATH] [--state-root PATH]]` | Create a fake configuration or a complete Codex role configuration without overwriting an existing file. |
 | `doctor` | `` | Validate configuration and committed Git identity; dispatch no runtime. |
+| `diff` | `[RUN]` | Show the current isolated candidate diff, including non-ignored untracked files with coverage metadata, without applying or dispatching work. |
 | `plan` | `OBJECTIVE or --file PATH` | Create a plan from exact objective text or a bounded UTF-8 file using the explicitly configured runtime and access profile. |
 | `status` | `` | List validated local run IDs, workflow/lifecycle states and plan IDs without input or evidence bodies. |
-| `inspect` | `RUN [--export-jsonl]` | Replay one run and show its bound inputs and state, or export its validated canonical event history. |
-| `resume` | `RUN [ACTOR NONCE]` | Resume planning, or explicitly reopen a settled pause with ACTOR and NONCE; never resend uncertain work. |
+| `inspect` | `[RUN] [--export-jsonl]` | Replay one run and show its bound inputs and state, or export its validated canonical event history. |
+| `resume` | `[RUN] [ACTOR NONCE] or --autonomous [RUN]` | Resume planning, explicitly reopen a settled pause with ACTOR and NONCE, or continue one bounded autonomous run without resending uncertain work. |
 | `approve` | `RUN PLAN ACTOR` | Approve one exact plan with an explicit human actor. |
-| `run` | `RUN` | Create or validate the approved run's isolated writer worktree. |
+| `run` | `RUN or --autonomous [--max-repairs N] OBJECTIVE or --file PATH` | Create or validate an approved run's isolated writer worktree, or create and advance a bounded autonomous coding run. |
 | `reconcile` | `RUN` | Observe unknown local commit, RI import/publication, workspace or file effects without retrying writes. |
 | `ri prepare-import` | `RUN PLAN_JSON` | Validate an import plan and return its exact effect approval target. |
 | `ri import` | `RUN PLAN_JSON INTENT_ID ACTOR` | Execute an exactly authorized, journaled local SCIP import. |
