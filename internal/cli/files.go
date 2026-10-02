@@ -23,6 +23,31 @@ type recoveryPreview struct {
 	IntentID string                   `json:"intent_id"`
 }
 
+func writerFilesCommand(root string, args []string, out io.Writer) error {
+	if len(args) != 1 {
+		return errors.New("writer-files requires RUN")
+	}
+	p, err := runPath(root, args[0])
+	if err != nil {
+		return err
+	}
+	s, err := control.Inspect(p)
+	if err != nil {
+		return err
+	}
+	if s.RunID != args[0] || filepath.Clean(s.Creation.Repository.Root) != filepath.Clean(root) {
+		return errors.New("journal/run repository binding mismatch")
+	}
+	if s.WriterProposal == nil || s.Candidate == nil || s.WriterProposal.Prepared.Proposal.Before != *s.Candidate {
+		return errors.New("no recorded writer proposal for the current candidate")
+	}
+	id, err := s.WriterProposal.Prepared.Intent.ID()
+	if err != nil {
+		return err
+	}
+	return output(out, filePreview{s.WriterProposal.Prepared, id})
+}
+
 func recoveryCommand(ctx context.Context, root, command string, args []string, out io.Writer) error {
 	want := 1
 	if command == "recover-files" {

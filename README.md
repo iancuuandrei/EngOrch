@@ -58,6 +58,10 @@ not yet been qualified.
 
 ## Architecture and development
 
+- [Fabric v1 product gate](docs/development/v1-product-gate.md): the active
+  development target is one usable fresh-user coding journey. Full acceptance
+  remains unverified; Fabric self-hosting is optional dogfooding.
+
 - [Architecture](docs/architecture/system.md) and [ADRs](docs/adr/0001-language-split.md)
 - [Journal contract](docs/specifications/run-journal.md)
 - [CLI reference](docs/reference/cli.md)
