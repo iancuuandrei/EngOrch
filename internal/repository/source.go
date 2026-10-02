@@ -8,12 +8,12 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"harness.local/engorch/internal/gitexec"
 	"harness.local/engorch/internal/safepath"
 )
 
@@ -117,7 +117,7 @@ func readSource(ctx context.Context, i Identity, path string, offset int64, limi
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "--no-optional-locks", "--no-replace-objects", "-C", i.Root, "cat-file", "blob", blob)
+	cmd := gitexec.CommandContext(ctx, "--no-optional-locks", "--no-replace-objects", "-C", i.Root, "cat-file", "blob", blob)
 	cmd.WaitDelay = time.Second
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")

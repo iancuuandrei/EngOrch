@@ -9,10 +9,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	"harness.local/engorch/internal/gitexec"
 )
 
 // VisitSourceDigests enumerates the exact committed tree and hashes regular
@@ -44,7 +45,7 @@ func visitSourceBatch(ctx context.Context, identity Identity, open func(SourceEn
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "--no-optional-locks", "--no-replace-objects", "-C", identity.Root, "cat-file", "--batch")
+	cmd := gitexec.CommandContext(ctx, "--no-optional-locks", "--no-replace-objects", "-C", identity.Root, "cat-file", "--batch")
 	cmd.WaitDelay = time.Second
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")

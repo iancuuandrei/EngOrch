@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"time"
 
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/codexhost"
@@ -25,6 +26,21 @@ func RunReview(ctx context.Context, path string) (ReviewRecord, error) {
 	}
 	if err := requireCurrentHostAdmission(ctx, s); err != nil {
 		return ReviewRecord{}, err
+	}
+	if taskContextEnabled(s) {
+		if err := autonomousDispatchBlocked(s); err != nil {
+			return ReviewRecord{}, err
+		}
+		if err := maybeAdmitTaskContext(ctx, path, "reviewer", s.Creation.Objective); err != nil {
+			return ReviewRecord{}, err
+		}
+		s, err = Inspect(path)
+		if err != nil {
+			return ReviewRecord{}, err
+		}
+		if err := requireCurrentHostAdmission(ctx, s); err != nil {
+			return ReviewRecord{}, err
+		}
 	}
 	invocation, err := reviewInvocation(s)
 	if err != nil {
@@ -156,7 +172,9 @@ func executeReview(ctx context.Context, path string, s Snapshot, expected Review
 		return result, readErr
 	}
 	if readErr == nil && s.Creation.Config.Version == 2 && state.Result == nil && (state.TurnStatus == "failed" || state.TurnStatus == "interrupted") {
-		_, _, terminalErr := completeModelAccess(context.Background(), path, runtimePath, expected.Invocation, "harness.review-result.v1")
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		_, _, terminalErr := completeModelAccess(cleanupCtx, path, runtimePath, expected.Invocation, "harness.review-result.v1")
+		cancel()
 		return result, errors.Join(errors.New("review runtime is terminal without a result"), terminalErr)
 	}
 	if readErr != nil || state.Result == nil {
@@ -196,7 +214,9 @@ func executeReview(ctx context.Context, path string, s Snapshot, expected Review
 		}
 		if err != nil {
 			if s.Creation.Config.Version == 2 {
-				_, _, terminalErr := completeModelAccess(context.Background(), path, runtimePath, expected.Invocation, "harness.review-result.v1")
+				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+				_, _, terminalErr := completeModelAccess(cleanupCtx, path, runtimePath, expected.Invocation, "harness.review-result.v1")
+				cancel()
 				return result, errors.Join(err, terminalErr)
 			}
 			return result, err

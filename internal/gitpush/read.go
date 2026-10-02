@@ -5,10 +5,11 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"harness.local/engorch/internal/gitexec"
 )
 
 type capture struct {
@@ -83,7 +84,7 @@ func observeRemote(ctx context.Context, plan Plan, credential *Credential) (obse
 	}()
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, "git", "--no-optional-locks",
+	command := gitexec.CommandContext(ctx, "--no-optional-locks",
 		"-c", "protocol.allow=never", "-c", "protocol.file.allow=always",
 		"-c", "protocol.https.allow=always", "-c", "http.followRedirects=false",
 		"-c", "credential.helper=", "-c", "core.askPass=",

@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"harness.local/engorch/internal/gitexec"
 )
 
 type capture struct {
@@ -31,7 +33,7 @@ func (b *capture) Write(p []byte) (int, error) {
 func command(ctx context.Context, root string, args ...string) *exec.Cmd {
 	argv := []string{"--no-optional-locks", "-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "core.splitIndex=false", "-C", root}
 	argv = append(argv, args...)
-	c := exec.CommandContext(ctx, "git", argv...)
+	c := gitexec.CommandContext(ctx, argv...)
 	c.WaitDelay = time.Second
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")

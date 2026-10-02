@@ -162,7 +162,12 @@ func ExecuteScheduledClaim(ctx context.Context, controllerPath string, claim tas
 		return taskscheduler.Evidence{}, currentErr
 	}
 	if claim.ControllerHead != currentHead && scheduledAdmissionID(current, claim.Task.InvocationID) == "" {
-		return taskscheduler.Evidence{}, errors.Join(&taskscheduler.ParkError{Reason: taskscheduler.ParkNoEffect}, errors.New("scheduled controller head changed before admission"))
+		// Narrow exception: only static graph-bound explorers in the same
+		// frozen batch may tolerate sibling read-only appends. All other
+		// operations retain the legacy exclusive head gate.
+		if !(isStaticGraphExplorerCohort(current, claim) && verifyGraphCohortDelta(controllerPath, claim) == nil) {
+			return taskscheduler.Evidence{}, errors.Join(&taskscheduler.ParkError{Reason: taskscheduler.ParkNoEffect}, errors.New("scheduled controller head changed before admission"))
+		}
 	}
 	s, head, invocation, err := scheduledInvocation(claim.Task, claim.AgentTurn)
 	if err != nil {
@@ -188,7 +193,9 @@ func ExecuteScheduledClaim(ctx context.Context, controllerPath string, claim tas
 		}
 	}
 	if claim.ControllerHead != head && before.AdmissionID == "" {
-		return taskscheduler.Evidence{}, errors.New("scheduled controller head changed")
+		if !(isStaticGraphExplorerCohort(s, claim) && verifyGraphCohortDelta(controllerPath, claim) == nil) {
+			return taskscheduler.Evidence{}, errors.New("scheduled controller head changed")
+		}
 	}
 	if before.Status == taskscheduler.StatusSucceeded || before.Status == taskscheduler.StatusFailed || before.Status == taskscheduler.StatusCancelled {
 		return before, nil
@@ -389,6 +396,9 @@ func scheduledRuntimeJournal(s Snapshot, invocation runtime.Invocation, task tas
 			if s.ExplorerHost != nil && s.ExplorerHost.Intent.Invocation.ID == invocation.ID {
 				return filepath.Join(s.ExplorerHost.Intent.Launch.Root, "explorer.jsonl"), nil
 			}
+			if run, ok := explorerRunForInvocation(s, invocation.ID); ok {
+				return filepath.Join(run.Intent.Launch.Root, "explorer.jsonl"), nil
+			}
 		case taskscheduler.OperationWriter:
 			if s.WriterHost != nil && s.WriterHost.Intent.Invocation.ID == invocation.ID {
 				return filepath.Join(s.WriterHost.Intent.Launch.Root, "writer.jsonl"), nil
@@ -428,7 +438,16 @@ func scheduledInvocation(task taskscheduler.TaskSpec, turn *taskscheduler.AgentT
 		return s, "", runtime.Invocation{}, err
 	}
 	if s.Creation.Config.Version != 2 {
-		return s, "", runtime.Invocation{}, errors.New("scheduled dispatch requires configuration v2")
+		// Narrow exception: only static graph-bound V1 explorer in the current
+		// frozen batch, IMPLEMENTING with resolved candidate/workspace. Never
+		// broaden V1 writer/reviewer/planner or dynamic agent_turn. V1 TaskPool
+		// remains forbidden; PumpOptions.Workers bounds concurrency instead.
+		if !(s.Creation.Config.Version == 1 && task.Operation == taskscheduler.OperationExplorer && turn == nil &&
+			s.Creation.Execution.GraphEnabled() && s.State == "IMPLEMENTING" &&
+			s.Workspace != nil && s.Candidate != nil && s.Plan != nil && s.Graph != nil &&
+			s.Creation.Config.TaskPool == nil && isStaticGraphExplorerCohort(s, taskscheduler.Claim{Task: task})) {
+			return s, "", runtime.Invocation{}, errors.New("scheduled dispatch requires configuration v2")
+		}
 	}
 	var invocation runtime.Invocation
 	recordedTurnInvocation := false
@@ -570,6 +589,15 @@ func scheduledEvidence(s Snapshot, head string, invocation runtime.Invocation, t
 	}
 	complete = complete || task.Operation == taskscheduler.OperationWriter && s.WriterProposal != nil && s.WriterProposal.Invocation.ID == invocation.ID
 	complete = complete || task.Operation == taskscheduler.OperationReviewer && s.Review != nil && s.Review.Invocation.ID == invocation.ID
+	// V1 static graph-bound explorers have no separate ModelAccess/AgentDispatch
+	// admission; the exact recorded ExplorerRecord plus frozen task_context is
+	// the terminal receipt. Bind AdmissionID to the exact invocation so the
+	// scheduler can observe success without broadening V1 writer/reviewer/planner
+	// or dynamic turns. Every lookup still binds the exact invocation.
+	if complete && evidence.AdmissionID == "" && task.Operation == taskscheduler.OperationExplorer &&
+		s.Creation.Config.Version == 1 && s.Creation.Execution.GraphEnabled() {
+		evidence.AdmissionID = invocation.ID
+	}
 	if complete && evidence.AdmissionID != "" {
 		evidence.Status = taskscheduler.StatusSucceeded
 	}

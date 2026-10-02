@@ -22,9 +22,10 @@ The [native autonomous task guide](docs/guides/autonomous-task.md) introduces
 `fabric run --autonomous`: plan, explore, implement, verify and review with a
 bounded repair budget and durable result inspection. A
 [real repository pilot](docs/evaluation/native-autonomous-pilot.md) reached
-`READY` and passed independent hidden checks. This is the first autonomous
-increment; hierarchical execution, parallel agents and adaptive allocation
-remain under development.
+`READY` and passed independent hidden checks. The
+[task graph guide](docs/guides/graph-autonomous-task.md) covers dependency-based
+decomposition, bounded parallel read-only agents, scoped implementation and
+configured adaptive model allocation. Full v1 release acceptance remains open.
 
 Follow the [Windows first-task guide](docs/getting-started/real-task.md) to build
 Fabric, configure a stock Codex model, and run a coding task through planning,
@@ -83,11 +84,21 @@ not yet been qualified.
 - [Journal contract](docs/specifications/run-journal.md)
 - [CLI reference](docs/reference/cli.md)
 - [Local task schedules](docs/guides/task-schedules.md)
+- [Autonomous task graphs](docs/guides/graph-autonomous-task.md): dependency
+  waves, bounded context and parallel read tasks; development qualification
+  remains in progress.
 - [Apply file changes](docs/guides/file-changes.md)
 - [Build and verify a local package](docs/guides/local-packaging.md): local directory only; never a signed, tagged, or published release.
+- [Reproducible release bundles and installation](docs/guides/release.md):
+  Windows build, integrity verification and installation tooling; a generated
+  bundle does not by itself establish release qualification.
+- [Real-repository evaluation suite](evals/v1/README.md): pinned tasks and
+  candidate-bound hidden acceptance checks, including the PR #5 comparison.
 - [Optional engineering procedures](docs/guides/procedures.md)
 - [Contributing](CONTRIBUTING.md) and [documentation standard](docs/contributing/documentation-standard.md)
 - [Research provenance](docs/research/oss-mechanisms.md)
 - [Current evidence](docs/evaluation/status.md)
+- [Real repository comparison](docs/evaluation/v1-real-repository-comparison.md):
+  measured Native/PR #5 outcomes, real concurrency and observed repair limitations.
 - [WP05/WP06 program history and completion status](docs/evaluation/wp05-wp06-history.md)
 - [v0.0.1 trusted bootstrap checkpoint](docs/evaluation/v0.0.1.md)

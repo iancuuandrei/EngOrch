@@ -34,18 +34,72 @@ type Creation struct {
 // workflow. It never grants authority for network publication or other
 // externally visible effects; its only machine authorization is an exact plan
 // and candidate-bound regular-file proposal.
+//
+// Context is an optional immutable task-context mode. Empty preserves the
+// legacy autonomous workflow byte-for-byte; "bounded-v1" enables bounded
+// observable task context admission for native role execution. No other value
+// is admitted.
+//
+// GraphVersion selects hierarchical task graph execution. Zero preserves the
+// legacy sequential workflow byte-for-byte; 1 enables autonomous graph
+// execution with bounded parallel read-only explorers. MaxParallel bounds
+// explorer concurrency between 1 and 8 inclusive; zero preserves legacy
+// identity and means sequential (1) for old runs.
 type ExecutionPolicy struct {
-	Mode       string `json:"mode"`
-	MaxRepairs int    `json:"max_repairs"`
+	Mode         string `json:"mode"`
+	MaxRepairs   int    `json:"max_repairs"`
+	Context      string `json:"context,omitempty"`
+	GraphVersion int    `json:"graph_version,omitempty"`
+	MaxParallel  int    `json:"max_parallel,omitempty"`
 }
 
 // Validate admits only the bounded autonomous workflow with a repair budget
-// between 0 and 8 inclusive.
+// between 0 and 8 inclusive. Context, when present, must be "bounded-v1".
+// GraphVersion must be 0 (legacy) or 1 (graph); MaxParallel must be 0
+// (legacy/unspecified) or 1..8. Graph version 1 requires an explicit 1..8
+// bound; legacy runs keep MaxParallel 0 for identical canonical identity.
 func (p ExecutionPolicy) Validate() error {
 	if p.Mode != "autonomous-v1" || p.MaxRepairs < 0 || p.MaxRepairs > 8 {
 		return errors.New("invalid execution policy")
 	}
+	if p.Context != "" && p.Context != taskContextBoundedV1 {
+		return errors.New("invalid execution task context")
+	}
+	if p.GraphVersion != 0 && p.GraphVersion != 1 {
+		return errors.New("invalid execution graph version")
+	}
+	if p.MaxParallel < 0 || p.MaxParallel > 8 {
+		return errors.New("invalid execution parallelism")
+	}
+	if p.GraphVersion == 1 && (p.MaxParallel < 1 || p.MaxParallel > 8) {
+		return errors.New("graph execution requires max parallel 1..8")
+	}
+	if p.GraphVersion == 0 && p.MaxParallel > 1 {
+		return errors.New("sequential execution cannot request parallelism")
+	}
 	return nil
+}
+
+// EffectiveMaxParallel returns the bounded explorer concurrency for graph
+// runs. Legacy (GraphVersion 0) is always sequential. Graph runs default to
+// the validated MaxParallel bound.
+func (p ExecutionPolicy) EffectiveMaxParallel() int {
+	if p.GraphVersion != 1 {
+		return 1
+	}
+	if p.MaxParallel < 1 {
+		return 1
+	}
+	if p.MaxParallel > 8 {
+		return 8
+	}
+	return p.MaxParallel
+}
+
+// GraphEnabled reports whether hierarchical task graph execution applies.
+// Nil or legacy policies remain sequential.
+func (p *ExecutionPolicy) GraphEnabled() bool {
+	return p != nil && p.GraphVersion == 1
 }
 
 // MachineApproval records that the immutable execution policy, rather than a
@@ -65,6 +119,7 @@ type Snapshot struct {
 	Push               *PushState                         `json:"push,omitempty"`
 	Explorations       []ExplorerRecord                   `json:"explorations,omitempty"`
 	ExplorerHost       *ExplorerHostState                 `json:"explorer_host,omitempty"`
+	ExplorerRuns       map[string]ExplorerHostState       `json:"explorer_runs,omitempty"`
 	Commit             *CommitState                       `json:"commit,omitempty"`
 	ReviewHost         *ReviewHostState                   `json:"review_host,omitempty"`
 	Review             *ReviewRecord                      `json:"review,omitempty"`
@@ -100,6 +155,8 @@ type Snapshot struct {
 	PlannerProvider    *providerDispatchReceipt           `json:"planner_provider,omitempty"`
 	ProviderRuntime    map[string]providerDispatchReceipt `json:"provider_runtime,omitempty"`
 	AgentDispatch      map[string]AgentDispatchState      `json:"agent_dispatch,omitempty"`
+	TaskContexts       []TaskContextRecord                `json:"task_contexts,omitempty"`
+	Graph              *GraphState                        `json:"graph,omitempty"`
 	Lifecycle          LifecycleState                     `json:"lifecycle"`
 }
 
@@ -193,8 +250,16 @@ func Replay(events []journal.Event) (Snapshot, error) {
 				return s, err
 			}
 			if e.Kind == "explorer.runtime-observed" {
-				r := s.ExplorerHost.RuntimeReceipt
-				if err := requireCompletedModelAccess(s, s.ExplorerHost.Intent.Invocation, r.JournalHead, r.ResultHash); err != nil {
+				var receipt ExplorerRuntimeReceipt
+				if err := canonical.Decode(e.Payload, &receipt); err != nil {
+					return s, err
+				}
+				host, ok := explorerRunForInvocation(s, receipt.InvocationID)
+				if !ok || host.RuntimeReceipt == nil {
+					return s, errors.New("exact explorer runtime receipt required")
+				}
+				r := host.RuntimeReceipt
+				if err := requireCompletedModelAccess(s, host.Intent.Invocation, r.JournalHead, r.ResultHash); err != nil {
 					return s, err
 				}
 			}
@@ -564,6 +629,14 @@ func Replay(events []journal.Event) (Snapshot, error) {
 			}
 		case "verification.planned", "verification.started", "verification.observed", "verification.closed":
 			if err := replayVerification(&s, e, seenEffects); err != nil {
+				return s, err
+			}
+		case "task.context-admitted":
+			if err := replayTaskContext(&s, e); err != nil {
+				return s, err
+			}
+		case "graph.recorded", "graph.progress", "graph.revised":
+			if err := replayGraph(&s, e); err != nil {
 				return s, err
 			}
 		default:

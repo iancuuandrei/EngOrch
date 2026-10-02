@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import shutil
 import statistics
 import subprocess
 import sys
@@ -27,10 +28,12 @@ def hardware(root):
 
 def sample_command(argv, root, timeout=30, input_data=None):
     """Return output, process duration and Windows lifetime peak working set."""
+    argv = absolute_argv(argv)
     start = time.perf_counter_ns()
     with subprocess.Popen(argv, cwd=root,
                           stdin=subprocess.PIPE if input_data is not None else None,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          shell=False) as process:
         try:
             stdout, stderr = process.communicate(input=input_data, timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -61,7 +64,50 @@ def sample_command(argv, root, timeout=30, input_data=None):
 
 
 def run(args, root):
-    return subprocess.run(args, cwd=root, check=True, capture_output=True, timeout=30)
+    return subprocess.run(absolute_argv(args), cwd=root, check=True, capture_output=True,
+                          timeout=30, shell=False)
+
+
+def absolute_argv(argv):
+    """Resolve the executable while retaining argument-vector, no-shell launch."""
+    if not argv:
+        raise ValueError("command argument vector must not be empty")
+    executable = os.fspath(argv[0])
+    resolved = shutil.which(executable)
+    if resolved is None:
+        raise ValueError("command executable was not found")
+    path = Path(resolved).resolve(strict=True)
+    if not path.is_file():
+        raise ValueError("command executable must be a file")
+    return [str(path), *(os.fspath(argument) for argument in argv[1:])]
+
+
+def fresh_output_path(value):
+    """Resolve a new artifact path without traversal or symlinked parents."""
+    path = Path(value)
+    if ".." in path.parts:
+        raise ValueError("output path must not contain parent traversal")
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    path = Path(os.path.abspath(path))
+    if path.exists() or path.is_symlink():
+        raise ValueError("output path must be fresh")
+    if not path.parent.is_dir():
+        raise ValueError("output parent must be an existing directory")
+    current = path.parent
+    while current != current.parent:
+        is_junction = getattr(current, "is_junction", None)
+        if current.is_symlink() or (is_junction is not None and is_junction()):
+            raise ValueError("output path must not use symlinked or junction parents")
+        current = current.parent
+    return path
+
+
+def validate_corpus_file_count(value):
+    """Keep receipt-controlled work bounded to the benchmark's supported sizes."""
+    if type(value) is not int or value not in (10_000, 100_000, 500_000):
+        raise ValueError("corpus receipt has an unsupported file count")
+    return value
 
 
 def source_identity(root):
@@ -76,8 +122,8 @@ def source_identity(root):
         digest.update(raw)
         digest.update(hashlib.sha256(path.read_bytes()).digest())
         count += 1
-    head = subprocess.run(["git", "rev-parse", "--verify", "HEAD"], cwd=root,
-                          capture_output=True, timeout=30)
+    head = subprocess.run(absolute_argv(["git", "rev-parse", "--verify", "HEAD"]), cwd=root,
+                          capture_output=True, timeout=30, shell=False)
     return {"sha256": digest.hexdigest(), "file_count": count,
             "head": head.stdout.decode().strip() if head.returncode == 0 else None}
 

@@ -96,9 +96,19 @@ func scriptedResponse(t *testing.T, notification string, result any, call func(c
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	callErr := call(ctx, c)
-	request := <-requestCh
-	if serverErr := <-errCh; serverErr != nil {
-		t.Fatal(serverErr)
+	var request Message
+	select {
+	case request = <-requestCh:
+	case <-ctx.Done():
+		t.Fatalf("scripted call sent no request: %v", callErr)
+	}
+	select {
+	case serverErr := <-errCh:
+		if serverErr != nil {
+			t.Fatal(serverErr)
+		}
+	case <-ctx.Done():
+		t.Fatal("scripted server did not finish", ctx.Err())
 	}
 	if callErr != nil {
 		t.Log("scripted call returned", callErr)

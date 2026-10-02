@@ -148,6 +148,31 @@ func TestScheduledInterruptWatcherConsumesDurableRequest(t *testing.T) {
 	}
 }
 
+func TestScheduledInterruptObservationSurvivesParentCancellation(t *testing.T) {
+	fixture := newScheduledInterruptFixture(t)
+	parentCtx, cancelParent := context.WithCancel(context.Background())
+	_, watcher, err := watchScheduledAgentInterrupt(parentCtx, fixture.claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelParent()
+	if err := watcher.finish(); err != nil {
+		t.Fatal("watcher did not stop after parent cancellation", err)
+	}
+	requested, err := RequestAgentInterrupt(context.Background(), fixture.controllerPath, fixture.schedulerPath, fixture.turnID, "operator", "cleanup-after-cancel")
+	if err != nil || requested.Observation != nil {
+		t.Fatal("interrupt request failed", requested, err)
+	}
+	if err := watcher.observe(requested, agentcontrol.InterruptSignalDelivered); err != nil {
+		t.Fatal("bounded interrupt observation cleanup failed after parent cancellation", err)
+	}
+	state, err := agentcontrol.Inspect(fixture.controllerPath + ".agent-control")
+	interrupt := state.Interrupts[requested.RequestID]
+	if err != nil || interrupt.Observation == nil || interrupt.Observation.Outcome != agentcontrol.InterruptSignalDelivered {
+		t.Fatal("cancellation cleanup did not persist the delivered interrupt", interrupt, err)
+	}
+}
+
 func TestScheduledInterruptWatcherConsumesCrossProcessRequest(t *testing.T) {
 	fixture := newScheduledInterruptFixture(t)
 	parentCtx, cancelParent := context.WithCancel(context.Background())

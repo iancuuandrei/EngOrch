@@ -164,6 +164,7 @@ func TestPinnedOpenCodeWriterRepairReviewCommitWorkflow(t *testing.T) {
 		t.Skip("explicit pinned OpenCode Execute probe opt-in required")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
 	provider := &scheduledWorkflowProvider{}
 	upstream := httptest.NewUnstartedServer(provider)
 	upstream.EnableHTTP2 = false

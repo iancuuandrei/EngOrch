@@ -7,6 +7,7 @@ import (
 
 	"harness.local/engorch/internal/access"
 	"harness.local/engorch/internal/config"
+	"harness.local/engorch/internal/modelpolicy"
 	"harness.local/engorch/internal/providergateway"
 	"harness.local/engorch/internal/runtime"
 )
@@ -150,5 +151,37 @@ func TestResolveProviderRoutingPreservesUnlimitedAccounting(t *testing.T) {
 				t.Fatal("controller and gateway disagree")
 			}
 		})
+	}
+}
+
+func TestResolveProviderRoutingBindsOnlyConfiguredAdaptiveModel(t *testing.T) {
+	c := providerRoutingConfig("provider-api", "openai")
+	alternative := c.Provider.Models[0]
+	alternative.Name = "planner-alternative"
+	alternative.Model = "deployment/alternative-model"
+	c.Provider.Models = append(c.Provider.Models, alternative)
+	c.ModelPolicy = &modelpolicy.Policy{
+		Version: 1,
+		Profiles: []modelpolicy.Profile{
+			{Name: "standard", Runtime: c.Planner.Runtime, Provider: c.Planner.Provider, Model: c.Planner.Model, Effort: c.Planner.Effort},
+			{Name: "strong", Runtime: c.Planner.Runtime, Provider: c.Planner.Provider, Model: alternative.Model, Effort: c.Planner.Effort},
+		},
+		Rules: map[string]modelpolicy.Rule{
+			"planner": {DefaultProfile: "standard", EscalatedProfile: "strong", ContextEscalationTokens: modelpolicy.MaxContextTokens, ContextEscalationBytes: modelpolicy.MaxContextBytes, FailureEscalationCount: 1},
+		},
+	}
+	selected := c.Planner
+	selected.Model = alternative.Model
+	routing, err := ResolveProviderRouting(c, strings.Repeat("a", 64), "planner", strings.Repeat("b", 64), 1, selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if routing.Profile != selected || routing.ProviderRole.Model.Model != alternative.Model || routing.Gateway.Model.Model != alternative.Model || routing.Intent.ModelChoice == nil || *routing.Intent.ModelChoice != (access.ModelChoice{Model: alternative.Model, Effort: selected.Effort}) {
+		t.Fatal("adaptive model was not bound through provider and access identities", routing)
+	}
+	foreign := selected
+	foreign.Model = "deployment/unconfigured-model"
+	if _, err := ResolveProviderRouting(c, strings.Repeat("a", 64), "planner", strings.Repeat("b", 64), 1, foreign); err == nil {
+		t.Fatal("provider routing admitted an unconfigured adaptive model")
 	}
 }

@@ -1,7 +1,13 @@
 # Native OpenCode writer output
 
-The opt-in `opencode.native_writer_output = true` binds the existing `utf8-v2`
-writer proposal schema to OpenCode's native `format: json_schema` request. It is
+The opt-in `opencode.native_writer_output = true` binds the selected writer
+proposal schema to OpenCode's native `format: json_schema` request. `utf8-v2`
+and `utf8-replace-v3` share the strict UTF-8 changes-array schema;
+`utf8-scoped-v4` uses the same shape with an exact candidate-ID enum.
+`anchored-edits-v1` uses exact text edits and explicit new-file content, with
+the same candidate-ID binding. `changes-json-v1` has a separate wire shape.
+Historical live qualification below covers its original frozen contract and
+does not qualify the newer v3/v4 or anchored-edit contracts. The mode is
 restricted to the bounded writer/fixer path using Responses. Planner, reviewer,
 read-only and composite agent turns keep their existing output contracts.
 

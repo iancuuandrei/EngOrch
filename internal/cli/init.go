@@ -16,6 +16,7 @@ import (
 	"harness.local/engorch/internal/config"
 	"harness.local/engorch/internal/repository"
 	"harness.local/engorch/internal/runtime"
+	"harness.local/engorch/internal/writercontract"
 )
 
 func initCommand(ctx context.Context, root string, args []string, out io.Writer) error {
@@ -99,7 +100,7 @@ func initCommand(ctx context.Context, root string, args []string, out io.Writer)
 		}
 		cfg := config.Config{
 			Version: 1, Repository: filepath.Base(root), BaseBranch: "HEAD",
-			WriterContract: "utf8-v2", PlannerContract: "plan-v1", ExplorerContract: "json-v1",
+			WriterContract: writercontract.ContractAnchoredEditsV1, PlannerContract: "plan-v1", ExplorerContract: "json-v2",
 			Planner: *profile("planner"), Explorer: profile("explorer"), Writer: profile("writer"), Reviewer: profile("reviewer"),
 			Codex:        &config.Codex{Executable: *binary, ExecutableHash: hex.EncodeToString(h.Sum(nil)), StateRoot: *state, AuthSource: *auth},
 			Verification: []config.Check{{Name: "unit", Argv: []string{"go", "test", "./..."}, TimeoutSeconds: 120}},

@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"harness.local/engorch/internal/gitexec"
 )
 
 // SourceEntry identifies a committed tree leaf, including unsupported file kinds.
@@ -79,7 +80,7 @@ func streamTree(ctx context.Context, i Identity, sink *treeSink) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, duration)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "--no-optional-locks", "--no-replace-objects", "-C", i.Root, "ls-tree", "-rz", i.Tree)
+	cmd := gitexec.CommandContext(ctx, "--no-optional-locks", "--no-replace-objects", "-C", i.Root, "ls-tree", "-rz", i.Tree)
 	cmd.WaitDelay = time.Second
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")

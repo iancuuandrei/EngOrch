@@ -9,14 +9,16 @@ import (
 	"harness.local/engorch/internal/fileeffects"
 	"harness.local/engorch/internal/journal"
 	"harness.local/engorch/internal/runtime"
+	"harness.local/engorch/internal/writercontract"
 )
 
 // WriterRecord retains an untrusted reply and its validated approval target.
 // It is proposal provenance, not a provider execution or effect receipt.
 type WriterRecord struct {
-	Invocation runtime.Invocation `json:"invocation"`
-	Result     runtime.Result     `json:"result"`
-	Prepared   PreparedFiles      `json:"prepared"`
+	Invocation    runtime.Invocation   `json:"invocation"`
+	Result        runtime.Result       `json:"result"`
+	Prepared      PreparedFiles        `json:"prepared"`
+	EditPreimages []WriterEditPreimage `json:"edit_preimages,omitempty"`
 }
 
 func replayWriterProposal(s *Snapshot, e journal.Event, seen map[string]bool) error {
@@ -47,16 +49,35 @@ func replayWriterProposal(s *Snapshot, e journal.Event, seen map[string]bool) er
 			return errors.New("writer proposal differs from observed runtime result")
 		}
 	}
-	reply, err := decodeWriterProposal(s.Creation.Config.WriterContract, record.Result.Output)
-	if err != nil {
-		return err
-	}
 	id, err := s.Candidate.ID()
 	if err != nil {
 		return err
 	}
-	if reply.CandidateID != id {
-		return errors.New("writer proposal candidate mismatch")
+	var reply WriterProposal
+	if s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV1 {
+		anchored, decodeErr := decodeAnchoredProposal(record.Result.Output)
+		if decodeErr != nil {
+			return decodeErr
+		}
+		if anchored.CandidateID != id {
+			return errors.New("writer proposal candidate mismatch")
+		}
+		changes, composeErr := composeAnchoredProposal(anchored, record.Prepared.Proposal.BeforeFiles, record.EditPreimages)
+		if composeErr != nil {
+			return composeErr
+		}
+		reply = WriterProposal{CandidateID: anchored.CandidateID, Changes: changes}
+	} else {
+		if len(record.EditPreimages) != 0 {
+			return errors.New("unexpected writer edit preimages")
+		}
+		reply, err = decodeWriterProposal(s.Creation.Config.WriterContract, record.Result.Output)
+		if err != nil {
+			return err
+		}
+		if reply.CandidateID != id {
+			return errors.New("writer proposal candidate mismatch")
+		}
 	}
 	expected, err := preparedFiles(*s, record.Prepared.Proposal)
 	if err != nil {
@@ -107,11 +128,11 @@ func canonicalWriterChanges(changes []fileeffects.Change) ([]byte, error) {
 // Append revalidates current plan/candidate after leased preparation; stale state
 // cannot be relabeled as a proposal for a new candidate. No files are changed.
 func RecordWriterProposal(ctx context.Context, path string, invocation runtime.Invocation, result runtime.Result) (WriterRecord, error) {
-	p, err := PrepareWriterFiles(ctx, path, invocation, result)
+	p, preimages, err := prepareWriterFiles(ctx, path, invocation, result)
 	if err != nil {
 		return WriterRecord{}, err
 	}
-	record := WriterRecord{invocation, result, p}
+	record := WriterRecord{Invocation: invocation, Result: result, Prepared: p, EditPreimages: preimages}
 	if err := Append(path, "writer.proposed", record); err != nil {
 		return WriterRecord{}, err
 	}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -45,6 +46,115 @@ func TestStructuredOutputIntentBindsExactWriterSchemaAndRole(t *testing.T) {
 	intent.Version = 3
 	if err := validateStructuredOutputIntent(intent); err == nil {
 		t.Fatal("composite native writer output was admitted")
+	}
+}
+
+func TestStructuredOutputIntentBindsCandidateSpecificV4Schema(t *testing.T) {
+	candidate := strings.Repeat("a", 64)
+	schema, err := writercontract.UTF8SchemaForCandidate(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := runtime.Profile{Runtime: "opencode-http", Provider: "engorch-openai", Model: "writer-model", Effort: "none", Role: "writer"}
+	input, err := json.Marshal(map[string]any{"candidate_id": candidate, "output_schema": schema, "instruction": "write"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation, err := runtime.NewInvocation(profile, string(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectation, err := opencode.NewStructuredOutputExpectation(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := Intent{Version: 2, Invocation: invocation, StructuredOutput: &expectation}
+	if err := validateStructuredOutputIntent(intent); err != nil {
+		t.Fatal("exact candidate-bound schema rejected", err)
+	}
+
+	otherCandidate := strings.Repeat("b", 64)
+	otherSchema, err := writercontract.UTF8SchemaForCandidate(otherCandidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongInput, _ := json.Marshal(map[string]any{"candidate_id": otherCandidate, "output_schema": schema, "instruction": "write"})
+	wrongInvocation, err := runtime.NewInvocation(profile, string(wrongInput))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongIntent := intent
+	wrongIntent.Invocation = wrongInvocation
+	if err := validateStructuredOutputIntent(wrongIntent); err == nil {
+		t.Fatal("candidate-bound schema detached from invocation candidate was admitted")
+	}
+
+	shapeDrift := strings.Replace(string(otherSchema), `"minItems":1`, `"minItems":0`, 1)
+	driftExpectation, err := opencode.NewStructuredOutputExpectation([]byte(shapeDrift))
+	if err != nil {
+		t.Fatal(err)
+	}
+	driftInput := `{"candidate_id":"` + otherCandidate + `","output_schema":` + shapeDrift + `,"instruction":"write"}`
+	driftInvocation, err := runtime.NewInvocation(profile, driftInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	driftIntent := Intent{Version: 2, Invocation: driftInvocation, StructuredOutput: &driftExpectation}
+	if err := validateStructuredOutputIntent(driftIntent); err == nil {
+		t.Fatal("candidate-bound schema shape drift was admitted")
+	}
+}
+
+func TestStructuredOutputIntentBindsCandidateSpecificAnchoredSchema(t *testing.T) {
+	candidate := strings.Repeat("a", 64)
+	schema, err := writercontract.AnchoredEditsSchemaForCandidate(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := runtime.Profile{Runtime: "opencode-http", Provider: "engorch-openai", Model: "writer-model", Effort: "none", Role: "writer"}
+	input, err := json.Marshal(map[string]any{"candidate_id": candidate, "output_schema": schema, "instruction": "edit anchors"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation, err := runtime.NewInvocation(profile, string(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectation, err := opencode.NewStructuredOutputExpectation(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := Intent{Version: 2, Invocation: invocation, StructuredOutput: &expectation}
+	if err := validateStructuredOutputIntent(intent); err != nil {
+		t.Fatal("exact candidate-bound anchored schema rejected", err)
+	}
+
+	otherCandidate := strings.Repeat("b", 64)
+	otherSchema, _ := writercontract.AnchoredEditsSchemaForCandidate(otherCandidate)
+	wrongInput, _ := json.Marshal(map[string]any{"candidate_id": otherCandidate, "output_schema": schema, "instruction": "edit anchors"})
+	wrongInvocation, err := runtime.NewInvocation(profile, string(wrongInput))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongIntent := intent
+	wrongIntent.Invocation = wrongInvocation
+	if err := validateStructuredOutputIntent(wrongIntent); err == nil {
+		t.Fatal("anchored schema detached from envelope candidate was admitted")
+	}
+
+	drift := strings.Replace(string(otherSchema), `"maxItems":64`, `"maxItems":63`, 1)
+	driftExpectation, err := opencode.NewStructuredOutputExpectation([]byte(drift))
+	if err != nil {
+		t.Fatal(err)
+	}
+	driftInput := `{"candidate_id":"` + otherCandidate + `","output_schema":` + drift + `,"instruction":"edit anchors"}`
+	driftInvocation, err := runtime.NewInvocation(profile, driftInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	driftIntent := Intent{Version: 2, Invocation: driftInvocation, StructuredOutput: &driftExpectation}
+	if err := validateStructuredOutputIntent(driftIntent); err == nil {
+		t.Fatal("anchored schema shape drift was admitted")
 	}
 }
 

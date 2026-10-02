@@ -116,7 +116,8 @@ func bindingFor(policy access.Policy, intent access.Intent, endpoint providergat
 	}
 	routeMatched := false
 	for _, route := range policy.Routes {
-		if route == intent.Route {
+		candidateID, candidateErr := route.ID()
+		if candidateErr == nil && candidateID == routeID {
 			routeMatched = true
 			break
 		}
