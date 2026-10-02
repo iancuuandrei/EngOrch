@@ -68,4 +68,5 @@ not yet been qualified.
 - [Contributing](CONTRIBUTING.md) and [documentation standard](docs/contributing/documentation-standard.md)
 - [Research provenance](docs/research/oss-mechanisms.md)
 - [Current evidence](docs/evaluation/status.md)
+- [WP05/WP06 program history and completion status](docs/evaluation/wp05-wp06-history.md)
 - [v0.0.1 trusted bootstrap checkpoint](docs/evaluation/v0.0.1.md)
