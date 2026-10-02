@@ -92,14 +92,15 @@ their effects.
 
 ## Public repository boundary and current position
 
-The public PR history as of 2026-10-02 contains the v0.0.1 bootstrap checkpoint
-(PR #1), the WP03 local portable-package work (PR #2), and its handoff record
-(PR #3). PR #2 creates a local package and is explicitly not signing,
-publication, or release qualification. Neither WP05.1 nor WP06 is represented
-as a completed public product PR in that history.
+Immediately before this retrospective PR, the public PR history contained the
+v0.0.1 bootstrap checkpoint (PR #1), the WP03 local portable-package work
+(PR #2), and its handoff record (PR #3). PR #2 creates a local package and is
+explicitly not signing, publication, or release qualification. Neither WP05.1
+nor WP06 was represented as a completed public product PR in that history.
 
-The current program projection is later than WP05/WP06: it records G0.261 as
-blocked during the external-user journey. Its verification is incomplete: some
+At the time this retrospective was prepared on 2026-10-02, the program projection
+had advanced beyond WP05/WP06 and recorded G0.261 as blocked during the
+external-user journey. Its verification is incomplete: some
 checks passed, focused checks failed, and remaining checks were not run; a
 verification-generated binary also changed the candidate workspace, preventing
 a clean candidate readback. There is no commit or integration for that
