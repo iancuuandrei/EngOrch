@@ -229,6 +229,54 @@ result but cannot establish parallel implementation benefit. Compare elapsed
 time and token usage only within the accepted, equivalently scoped pair;
 unknown provider request counts or monetary costs remain unknown.
 
+## Planner-context treatment comparison
+
+Native evaluation can opt into the immutable `source-bounded-v1` planner
+context with `-PlannerContext source-bounded-v1`. Omitting the parameter keeps
+the legacy empty planner-context setting and emits no planner-context run
+argument. The evaluator records the requested treatment in each prepared and
+evaluation receipt, requires Evaluate to match its prepared run, and records
+the value observed in the inspected run creation. `PR5Matched` rejects this
+Native-only option.
+
+For a matched comparison, prepare fresh runs for both treatments from the same
+six manifest tasks: `go-humanize`, `afero`, `go-multierror`, `go-atomic`,
+`go-difflib`, and `logr`. Evaluate both with the same clean Fabric binary and
+build receipt, candidate-copy helper, runner checkout, Codex executable,
+`gpt-6-luna` at `high`, pinned Go 1.27.1 executable, verification policy, and
+scheduler/writer flags. Use separate new run IDs; do not resume or reuse an
+uncertain run. The only treatment difference is omitting `-PlannerContext` in
+the control arm and setting it to `source-bounded-v1` in the treatment arm.
+
+```powershell
+$runner = 'scripts/evaluate-v1.ps1'
+$tasks = @('go-humanize', 'afero', 'go-multierror', 'go-atomic', 'go-difflib', 'logr')
+$runRoot = 'D:\dev\Fabric-v1-eval-runs'
+$goExe = 'D:\dev\EngOrch-toolchains\go\1.27.1\go\bin\go.exe'
+$prepare = @{ RunRoot = $runRoot; GoExe = $goExe; TaskIds = $tasks }
+& $runner -Action Prepare -RunId planner-context-control @prepare
+& $runner -Action Prepare -RunId planner-context-source-bounded -PlannerContext source-bounded-v1 @prepare
+
+$evaluate = @{
+    RunRoot = $runRoot; GoExe = $goExe; TaskIds = $tasks
+    FabricExe = $fabricExe; NativeBuildReceiptPath = $buildReceipt
+    CandidateCopyExe = $candidateCopyExe; CodexExe = $codexExe
+    Model = 'gpt-6-luna'; Effort = 'high'
+}
+& $runner -Action Evaluate -RunId planner-context-control @evaluate
+& $runner -Action Evaluate -RunId planner-context-source-bounded -PlannerContext source-bounded-v1 @evaluate
+```
+
+Set `$fabricExe`, `$buildReceipt`, `$candidateCopyExe`, and `$codexExe` to the
+same explicitly approved artifacts for both arms. Keep `-ParallelWriters`,
+`-MaxParallel`, and `-ValidateWriterEdits` omitted in both, or supply the same
+values to both; do not interpret this comparison as a scheduler treatment.
+The treatment is an input change, not proof that selected source context was
+useful. Report context coverage and omission evidence alongside graph
+structure, exact candidate-bound native/review/held-out outcomes, repairs,
+elapsed time, runtime invocations and observed token usage. Unknown
+provider-call counts and costs stay unknown.
+
 When present, `graph_writer_results[TASK].dispatch.started_at` and `.ended_at`
 record the completed writer's controller wrapper interval, including runtime
 setup. They permit direct overlap measurement for new runs; they are not

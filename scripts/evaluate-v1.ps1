@@ -57,6 +57,7 @@ param(
     [string]$Model,
     [ValidateSet('Native', 'PR5Matched')][string]$EvalMode = 'Native',
     [string]$Effort = 'high',
+    [string]$PlannerContext = '',
     [switch]$ParallelWriters,
     [switch]$ValidateWriterEdits,
     [ValidateRange(0, 8)][int]$MaxParallel = 0,
@@ -72,6 +73,12 @@ param(
 $ErrorActionPreference = 'Stop'
 if ($Action -eq 'Evaluate' -and $EvalMode -eq 'PR5Matched' -and ($ParallelWriters -or $ValidateWriterEdits -or $MaxParallel -ne 0)) {
     throw 'Writer and scheduler overrides require Native mode; PR5Matched retains its original invocation.'
+}
+if ($PlannerContext -notin @('', 'source-bounded-v1')) {
+    throw 'PlannerContext must be empty or source-bounded-v1.'
+}
+if ($Action -eq 'Evaluate' -and $EvalMode -eq 'PR5Matched' -and $PlannerContext -ne '') {
+    throw 'PlannerContext requires Native mode; PR5Matched retains its original invocation.'
 }
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $manifestPath = Join-Path $repoRoot 'evals\v1\manifest.json'
@@ -96,9 +103,10 @@ function Get-NativeInitArgs([string]$TaskPath, [string]$RuntimePath, [string]$Wr
     return $nativeArgs
 }
 
-function Get-NativeRunArgs([string]$TaskPath, [string]$Objective, [bool]$EnableParallelWriters, [int]$ParallelLimit) {
+function Get-NativeRunArgs([string]$TaskPath, [string]$Objective, [bool]$EnableParallelWriters, [int]$ParallelLimit, [string]$PlannerContext) {
     if ($ParallelLimit -lt 0 -or $ParallelLimit -gt 8) { throw 'Scheduler override must be 0 (default) or 1..8.' }
     $nativeArgs = @('--root', $TaskPath, 'run', '--autonomous')
+    if ($PlannerContext -ne '') { $nativeArgs += @('--planner-context', $PlannerContext) }
     if ($EnableParallelWriters) { $nativeArgs += '--parallel-writers' }
     if ($ParallelLimit -ne 0) { $nativeArgs += @('--max-parallel', [string]$ParallelLimit) }
     $nativeArgs += $Objective
@@ -642,6 +650,7 @@ if ($Action -eq 'Prepare') {
             native_test_scope      = $native.Scope
             windows_exclusion      = if ($native.Scope -eq 'windows-scoped') { '^TestNocmpIntegration$ (Windows-only atomic tasks; rationale in manifest native_verification)' } else { $null }
             task_completion        = 'NOT RUN'
+            planner_context_requested = $PlannerContext
             provider_calls         = 0
             input_tokens           = $null
             output_tokens          = $null
@@ -663,6 +672,7 @@ if ($Action -eq 'Prepare') {
         suite_id                      = $manifest.suite_id
         run_id                        = $RunId
         mode                          = 'prepare'
+        planner_context_requested  = $PlannerContext
         created_utc                   = [DateTime]::UtcNow.ToString('o')
         product_head                  = $productHead
         product_tree_dirty_at_prepare = $productDirty
@@ -726,6 +736,10 @@ $runJsonPath = Join-Path $runPath 'run.json'
 if (-not (Test-Path -LiteralPath $runJsonPath)) { throw "Prepared run not found: $runJsonPath. Prepare first with a new run nonce." }
 $priorRunJsonSha = (Get-FileSha256 $runJsonPath).ToLowerInvariant()
 $prior = Get-Content -Raw -LiteralPath $runJsonPath | ConvertFrom-Json
+$preparedPlannerContext = [string]$prior.planner_context_requested
+if ($preparedPlannerContext -ne $PlannerContext) {
+    throw 'PlannerContext must match the treatment recorded by the prepared run.'
+}
 $taskPins = @($entries | ForEach-Object { [ordered]@{ task_id = $_.id; source_sha = $_.sha; url = $_.url } })
 # Optional known external build receipt: validate binary hash when present,
 # never blindly trust stamped source.
@@ -770,6 +784,7 @@ foreach ($entry in $entries) {
     $result = [ordered]@{
         task_id = $entry.id; eval_mode = $EvalMode; terminal_state = 'BLOCKED'
         blocked_reason = $null; fail_reason = $null
+        planner_context_requested = $PlannerContext
     }
     try {
         if (-not (Test-Path -LiteralPath $taskPath)) { throw "Task checkout missing for $($entry.id): $taskPath" }
@@ -796,7 +811,7 @@ foreach ($entry in $entries) {
             $result.verification_config_sha256 = $verPolicy.ConfigSha
             $result.native_test_scope = $verPolicy.Scope
             Set-Content -NoNewline -Encoding utf8 (Join-Path $taskOutDir 'verification-argv.log') $verPolicy.ArgvText
-            $runArgs = @(Get-NativeRunArgs $taskPath $entry.task ([bool]$ParallelWriters) $MaxParallel)
+            $runArgs = @(Get-NativeRunArgs $taskPath $entry.task ([bool]$ParallelWriters) $MaxParallel $PlannerContext)
             $result.parallel_writers_requested = [bool]$ParallelWriters
             $result.writer_edit_validation_requested = [bool]$ValidateWriterEdits
             $result.max_parallel_requested = if ($MaxParallel -eq 0) { $null } else { $MaxParallel }
@@ -824,6 +839,9 @@ foreach ($entry in $entries) {
                 if ($LASTEXITCODE -ne 0) { throw "fabric diff failed for $($entry.id); see fabric-diff.*.log" }
             }
             $snap = (Get-Content -Raw -LiteralPath (Join-Path $taskOutDir 'fabric-inspect.stdout.log') | ConvertFrom-Json)
+            $observedPlannerContext = [string]$snap.creation.execution.planner_context
+            $result.planner_context_observed = $observedPlannerContext
+            if ($observedPlannerContext -ne $PlannerContext) { throw 'Inspected run planner_context does not match the requested treatment.' }
             $usage = (Get-Content -Raw -LiteralPath (Join-Path $taskOutDir 'fabric-usage.stdout.log') | ConvertFrom-Json)
             $diffOut = (Get-Content -Raw -LiteralPath (Join-Path $taskOutDir 'fabric-diff.stdout.log') | ConvertFrom-Json)
             $diffCandidateId = $diffOut.candidate_id
@@ -1112,6 +1130,7 @@ $evalRecord = [ordered]@{
     eval_mode              = $EvalMode
     model                  = $Model
     effort                 = $Effort
+    planner_context_requested = $PlannerContext
     parallel_writers_requested = [bool]$ParallelWriters
     writer_edit_validation_requested = [bool]$ValidateWriterEdits
     max_parallel_requested = if ($MaxParallel -eq 0) { $null } else { $MaxParallel }

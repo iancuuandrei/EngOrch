@@ -10,7 +10,7 @@ import (
 )
 
 func expectedPlanningAccess(s Snapshot) (access.Intent, error) {
-	invocation, err := plannerInvocation(s.Creation.Config, s.Creation.Objective)
+	invocation, err := plannerInvocationForSnapshot(s)
 	if err != nil {
 		return access.Intent{}, err
 	}

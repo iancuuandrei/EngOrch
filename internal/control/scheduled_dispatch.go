@@ -462,7 +462,7 @@ func scheduledInvocation(task taskscheduler.TaskSpec, turn *taskscheduler.AgentT
 	recordedTurnInvocation := false
 	switch task.Operation {
 	case taskscheduler.OperationPlanner:
-		invocation, err = plannerInvocation(s.Creation.Config, s.Creation.Objective)
+		invocation, err = plannerInvocationForSnapshot(s)
 	case taskscheduler.OperationExplorer:
 		invocation, err = explorerInvocation(s, task.Input)
 	case taskscheduler.OperationWriter:
@@ -654,7 +654,7 @@ func scheduledAdmissionID(s Snapshot, invocationID string) string {
 		}
 	}
 	if s.PlannerAccess != nil && s.Creation.Config.Planner.Runtime == "fake" {
-		planner, err := plannerInvocation(s.Creation.Config, s.Creation.Objective)
+		planner, err := plannerInvocationForSnapshot(s)
 		if err == nil && planner.ID == invocationID {
 			return s.PlannerAccess.Reservation.InvocationID
 		}

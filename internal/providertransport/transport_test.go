@@ -128,6 +128,38 @@ func TestExecuteSinglePostCompletesBeforeReturningForAPIAndSubscription(t *testi
 	}
 }
 
+func TestExecuteRejectsOversizedRequestBeforeProviderPost(t *testing.T) {
+	capture := &requestCapture{}
+	server := newTLSServer(t, func(w http.ResponseWriter, r *http.Request) {
+		capture.mu.Lock()
+		capture.calls++
+		capture.mu.Unlock()
+		w.Header().Set("content-type", "text/event-stream")
+		_, _ = w.Write(validChatSSE())
+	})
+	fixture := newTransportFixture(t, server, "api", "bearer", "", 4096)
+	fixture.request.Body = make([]byte, 4097)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := fixture.client.Execute(ctx, fixture.request); !errors.Is(err, ErrRejected) {
+		t.Fatalf("oversized request was not rejected before dispatch: %v", err)
+	}
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	if capture.calls != 0 {
+		t.Fatalf("oversized request reached provider transport %d times", capture.calls)
+	}
+	state, err := providergateway.Inspect(fixture.gatewayPath)
+	if err != nil || state.Pending != nil || len(state.Calls) != 0 {
+		t.Fatalf("oversized request created a provider call: state=%+v err=%v", state, err)
+	}
+	evidence, _, _ := readSinglePreflightArtifact(t, fixture.gatewayPath)
+	if evidence.Phase != preflightValidatePhase || evidence.RequestBytes != int64(len(fixture.request.Body)) || string(evidence.Body) != string(fixture.request.Body) {
+		t.Fatalf("route-bound rejection did not retain exact bounded preflight evidence: %+v", evidence)
+	}
+}
+
 func TestExecuteFiniteJSONUsesBoundFramingAndDurableReceipt(t *testing.T) {
 	var accept, body string
 	server := newTLSServer(t, func(w http.ResponseWriter, r *http.Request) {

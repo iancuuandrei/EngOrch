@@ -91,6 +91,9 @@ func TestRunAutonomousCreatesBoundPolicyAndReportsResumableBlocker(t *testing.T)
 	if s.Creation.Execution.GraphVersion != 1 || s.Creation.Execution.MaxParallel != 3 || s.Creation.Execution.Context != "bounded-v1" || s.Creation.Execution.RepairPlanningVersion != 1 || s.Creation.Execution.ParallelImplementationVersion != 0 || s.Creation.Config.PlannerContract != "plan-graph-v5" {
 		t.Fatalf("graph execution and bounded context not defaulted: %#v", s.Creation.Execution)
 	}
+	if s.Creation.Execution.PlannerContext != "" {
+		t.Fatalf("planner context must remain disabled by default: %#v", s.Creation.Execution)
+	}
 	if s.State != "IMPLEMENTING" || result.RunID != s.RunID || result.State != s.State || result.Phase != "implementation" || result.BlockedReason == "" {
 		t.Fatalf("failure summary or durable state mismatch: result=%#v snapshot=%#v", result, s)
 	}
@@ -112,6 +115,27 @@ func TestRunAutonomousCreatesBoundPolicyAndReportsResumableBlocker(t *testing.T)
 	}
 }
 
+func TestAutonomousPlannerContextOptInIsIndependentOfSchedulerAndRoleContext(t *testing.T) {
+	root := autonomousCLIFixture(t)
+	var out bytes.Buffer
+	err := Execute(context.Background(), []string{"run", "--autonomous", "--prepare-only", "--max-parallel", "1", "--planner-context", "source-bounded-v1", "A bounded fixture objective"}, root, &out)
+	if err == nil {
+		t.Fatal("fake planner's non-graph output should stop qualification without invoking a provider")
+	}
+	entries, err := filepath.Glob(filepath.Join(root, ".harness", "runs", "*.jsonl"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("expected one durable autonomous run, entries=%v err=%v", entries, err)
+	}
+	s, err := control.Inspect(entries[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := s.Creation.Execution
+	if policy == nil || policy.PlannerContext != "source-bounded-v1" || policy.Context != "bounded-v1" || policy.MaxParallel != 1 || policy.ParallelImplementationVersion != 0 {
+		t.Fatalf("planner context opt-in changed unrelated scheduler or role-context policy: %#v", policy)
+	}
+}
+
 func TestAutonomousCLIRejectsInvalidOptionsAndNonAutonomousResume(t *testing.T) {
 	root := autonomousCLIFixture(t)
 	for _, args := range [][]string{
@@ -121,6 +145,7 @@ func TestAutonomousCLIRejectsInvalidOptionsAndNonAutonomousResume(t *testing.T) 
 		{"run", "--autonomous", "--max-parallel", "0", "objective"},
 		{"run", "--autonomous", "--max-parallel", "9", "objective"},
 		{"run", "--autonomous", "--max-parallel", "not-a-number", "objective"},
+		{"run", "--autonomous", "--planner-context", "unsupported", "objective"},
 		{"run", "--autonomous"},
 		{"resume", "--autonomous", "one", "two"},
 	} {

@@ -494,7 +494,7 @@ func Execute(ctx context.Context, args []string, cwd string, out io.Writer) (res
 		} else if command == "resume" {
 			s, err = resume(ctx, p)
 		} else {
-			s, err = control.Inspect(p)
+			s, err = snapshotForCommand(command, bound, p)
 		}
 		if err != nil {
 			return err
@@ -554,6 +554,16 @@ func Execute(ctx context.Context, args []string, cwd string, out io.Writer) (res
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}
+}
+
+// snapshotForCommand reuses the already validated snapshot for a read-only
+// inspect. Other commands reach this fallback only after any command-specific
+// mutation or reconciliation and must load their resulting state again.
+func snapshotForCommand(command string, bound control.Snapshot, path string) (control.Snapshot, error) {
+	if command == "inspect" {
+		return bound, nil
+	}
+	return control.Inspect(path)
 }
 
 func resume(ctx context.Context, p string) (control.Snapshot, error) {
