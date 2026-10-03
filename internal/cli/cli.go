@@ -98,7 +98,7 @@ var commands = []Command{
 	{"inspect", "[RUN] [--export-jsonl]", "Replay one run and show its bound inputs and state, or export its validated canonical event history."},
 	{"resume", "[RUN] [ACTOR NONCE] or --autonomous [RUN]", "Resume planning, explicitly reopen a settled pause with ACTOR and NONCE, or continue one bounded autonomous run without resending uncertain work."},
 	{"approve", "RUN PLAN ACTOR", "Approve one exact plan with an explicit human actor."},
-	{"run", "RUN or --autonomous [--prepare-only] [--max-repairs N] [--max-parallel N] OBJECTIVE or --file PATH", "Create or validate an approved run's isolated writer worktree, or create and advance a bounded autonomous coding run; prepare-only returns after graph and workspace confirmation."},
+	{"run", "RUN or --autonomous [--prepare-only] [--max-repairs N] [--max-parallel N] [--parallel-writers] OBJECTIVE or --file PATH", "Create or validate an approved run's isolated writer worktree, or create and advance a bounded autonomous coding run; parallel-writers opts into up to two independent initial implementation tasks; prepare-only returns after graph and workspace confirmation."},
 	{"reconcile", "RUN", "Observe unknown local commit, RI import/publication, workspace or file effects without retrying writes."},
 	{"ri prepare-import", "RUN PLAN_JSON", "Validate an import plan and return its exact effect approval target."},
 	{"ri import", "RUN PLAN_JSON INTENT_ID ACTOR", "Execute an exactly authorized, journaled local SCIP import."},
@@ -523,7 +523,7 @@ func Execute(ctx context.Context, args []string, cwd string, out io.Writer) (res
 		}
 		runs := []runStatus{}
 		for _, p := range entries {
-			if graphSchedulerSidecar(p) {
+			if runJournalSidecar(p) {
 				continue
 			}
 			s, err := control.Inspect(p)

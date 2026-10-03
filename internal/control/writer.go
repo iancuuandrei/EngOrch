@@ -2,14 +2,18 @@ package control
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/engineeringplan"
 	"harness.local/engorch/internal/fileeffects"
 	"harness.local/engorch/internal/runtime"
+	"harness.local/engorch/internal/worktree"
 	"harness.local/engorch/internal/writercontract"
 )
 
@@ -62,7 +66,28 @@ func writerImplementationForV4(s Snapshot) (*writerImplementationContext, error)
 	}, nil
 }
 
+func writerImplementationForTask(s Snapshot, taskID string) (*writerImplementationContext, error) {
+	if s.Graph == nil || taskID == "" {
+		return nil, errors.New("task-bound writer requires an accepted graph task")
+	}
+	ready, err := graphReadyTasks(s)
+	if err != nil {
+		return nil, err
+	}
+	for _, task := range ready {
+		if task.ID != taskID || task.Kind != engineeringplan.Implementation || len(task.WritePaths) == 0 {
+			continue
+		}
+		return &writerImplementationContext{ID: task.ID, Title: task.Title, ScopePaths: append([]string(nil), task.ScopePaths...), WritePaths: append([]string(nil), task.WritePaths...), ExpectedEvidence: append([]engineeringplan.Evidence(nil), task.ExpectedEvidence...)}, nil
+	}
+	return nil, fmt.Errorf("graph implementation task %q is not ready with declared write paths", taskID)
+}
+
 func writerInvocation(s Snapshot) (runtime.Invocation, error) {
+	return writerInvocationForTask(s, "")
+}
+
+func writerInvocationForTask(s Snapshot, taskID string) (runtime.Invocation, error) {
 	if err := filesAllowed(s); err != nil {
 		return runtime.Invocation{}, err
 	}
@@ -97,7 +122,21 @@ func writerInvocation(s Snapshot) (runtime.Invocation, error) {
 	if err != nil {
 		return runtime.Invocation{}, err
 	}
-	taskCtx, err := taskContextForRole(s, role, s.Creation.Objective)
+	contextQuestion := s.Creation.Objective
+	if taskID != "" {
+		if s.Graph == nil {
+			return runtime.Invocation{}, errors.New("writer graph task unavailable")
+		}
+		task, ok := s.Graph.Graph.Task(taskID)
+		if !ok {
+			return runtime.Invocation{}, errors.New("writer graph task unavailable")
+		}
+		contextQuestion = fmt.Sprintf("[%s] %s | scope: %s | write paths: %s | objective: %s", task.ID, task.Title, strings.Join(task.ScopePaths, ","), strings.Join(task.WritePaths, ","), s.Creation.Objective)
+		if len(contextQuestion) > 4096 {
+			return runtime.Invocation{}, errors.New("writer task context exceeds bound")
+		}
+	}
+	taskCtx, err := taskContextForRole(s, role, contextQuestion)
 	if err != nil {
 		return runtime.Invocation{}, err
 	}
@@ -125,7 +164,11 @@ func writerInvocation(s Snapshot) (runtime.Invocation, error) {
 			if err != nil {
 				return runtime.Invocation{}, err
 			}
-			implementationTask, err = writerImplementationForV4(s)
+			if taskID != "" {
+				implementationTask, err = writerImplementationForTask(s, taskID)
+			} else {
+				implementationTask, err = writerImplementationForV4(s)
+			}
 			if err != nil {
 				return runtime.Invocation{}, err
 			}
@@ -141,7 +184,11 @@ func writerInvocation(s Snapshot) (runtime.Invocation, error) {
 			if err != nil {
 				return runtime.Invocation{}, err
 			}
-			implementationTask, err = writerImplementationForV4(s)
+			if taskID != "" {
+				implementationTask, err = writerImplementationForTask(s, taskID)
+			} else {
+				implementationTask, err = writerImplementationForV4(s)
+			}
 			if err != nil {
 				return runtime.Invocation{}, err
 			}
@@ -204,11 +251,15 @@ func PrepareWriterFiles(ctx context.Context, path string, invocation runtime.Inv
 }
 
 func prepareWriterFiles(ctx context.Context, path string, invocation runtime.Invocation, result runtime.Result) (PreparedFiles, []WriterEditPreimage, error) {
+	return prepareWriterFilesForTask(ctx, path, "", invocation, result)
+}
+
+func prepareWriterFilesForTask(ctx context.Context, path, taskID string, invocation runtime.Invocation, result runtime.Result) (PreparedFiles, []WriterEditPreimage, error) {
 	s, err := Inspect(path)
 	if err != nil {
 		return PreparedFiles{}, nil, err
 	}
-	expected, err := writerInvocation(s)
+	expected, err := writerInvocationForTask(s, taskID)
 	if err != nil {
 		return PreparedFiles{}, nil, err
 	}
@@ -255,7 +306,12 @@ func prepareWriterFiles(ctx context.Context, path string, invocation runtime.Inv
 			return PreparedFiles{}, nil, errors.New("writer candidate substitution")
 		}
 	}
-	prepared, err := PrepareFiles(ctx, path, proposal.Changes)
+	var prepared PreparedFiles
+	if taskID == "" {
+		prepared, err = PrepareFiles(ctx, path, proposal.Changes)
+	} else {
+		prepared, err = prepareGraphWriterFilesReadOnly(ctx, path, s, proposal.Changes)
+	}
 	if err != nil {
 		return PreparedFiles{}, nil, err
 	}
@@ -269,4 +325,41 @@ func prepareWriterFiles(ctx context.Context, path string, invocation runtime.Inv
 		return PreparedFiles{}, nil, errors.New("writer candidate changed during preparation")
 	}
 	return prepared, preimages, nil
+}
+
+func prepareGraphWriterFilesReadOnly(ctx context.Context, path string, s Snapshot, changes []fileeffects.Change) (prepared PreparedFiles, err error) {
+	if s.Workspace == nil || s.Candidate == nil || len(changes) == 0 {
+		return prepared, errors.New("graph writer proposal requires an admitted candidate")
+	}
+	lease, err := worktree.AcquireRead(s.Workspace.Request)
+	if err != nil {
+		return prepared, err
+	}
+	defer func() { err = errors.Join(err, lease.Close()) }()
+	latest, err := Inspect(path)
+	if err != nil {
+		return prepared, err
+	}
+	if latest.Workspace == nil || latest.Candidate == nil || *latest.Workspace != *s.Workspace || *latest.Candidate != *s.Candidate {
+		return prepared, errors.New("graph writer candidate changed before proposal preparation")
+	}
+	observed, _, err := worktree.Capture(ctx, *latest.Workspace)
+	if err != nil || observed != *latest.Candidate {
+		return prepared, errors.Join(errors.New("graph writer source changed before proposal preparation"), err)
+	}
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return prepared, err
+	}
+	proposal, err := fileeffects.Prepare(ctx, *latest.Workspace, hex.EncodeToString(nonce[:]), changes)
+	if err != nil {
+		return prepared, err
+	}
+	if err := fileeffects.Preflight(ctx, *latest.Workspace, proposal); err != nil {
+		return prepared, err
+	}
+	if proposal.Before != *latest.Candidate {
+		return prepared, errors.New("graph writer proposal preparation changed its candidate binding")
+	}
+	return preparedFiles(latest, proposal)
 }

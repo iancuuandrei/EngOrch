@@ -16,10 +16,13 @@ const plannerContractV1 = "plan-v1"
 const plannerContractGraphV1 = "plan-graph-v1"
 const plannerContractGraphV2 = "plan-graph-v2"
 const plannerContractGraphV3 = "plan-graph-v3"
+const plannerContractGraphV4 = "plan-graph-v4"
 
 const plannerAssignmentV1 = "As planner, produce an implementation plan using read-only source tools. Editing and testing belong to later roles. Read-only access is expected and is not a blocker. Return the plan without requesting additional capability."
 
 const plannerGraphAssignmentV1 = "As planner, produce a bounded engineering task graph as strict JSON matching the engineeringplan v1 schema (version 1, mode direct|graph, summary, tasks with id/kind/title/scope_paths/write_paths/expected_evidence/estimated_seconds and optional parent_id/dependencies). Use kinds research, design, implementation, verification, review. For graph mode include exactly one implementation with concrete write_paths within scope, research/design dependencies, and verification/review gates depending on the implementation. For direct mode include exactly one implementation with concrete write_paths. Never include completed or attempts; the runner owns progress. Return only the JSON object."
+
+const plannerGraphAssignmentV4 = "As planner, produce a bounded engineering task graph as strict JSON matching the engineeringplan v1 schema (version 1, mode direct|graph, summary, tasks with id/kind/title/scope_paths/write_paths/expected_evidence/estimated_seconds and optional parent_id/dependencies). Use kinds research, design, implementation, verification, review. In graph mode, plan one initial implementation task for work that should remain together. Use two initial implementation tasks only when the work can be split into genuinely independent paths after any shared research/design: each task must own concrete, disjoint write_paths within scope and depend on the shared research/design it needs. Do not duplicate work to fill a slot. Include native verification and review gates in graph mode; both gates must depend on both implementation tasks when there are two, and on the implementation when there is one. In direct mode include exactly one implementation with concrete write_paths and no verification or review tasks; the runner performs native gates. Never include completed or attempts; the runner owns progress. Return only the JSON object."
 
 // plannerInvocation binds the configured planner contract to the exact
 // objective. The empty contract deliberately retains the historical raw input
@@ -48,6 +51,13 @@ func plannerInvocation(c config.Config, objective string) (runtime.Invocation, e
 				readBudget = 0
 			}
 			assignment = plannerGraphAssignmentV1 + fmt.Sprintf(" Use at most %d research/design tasks in total. Keep the initial plan to at most 32 tasks and at most %d research/design tasks, reserving worst-case capacity for eight four-task repair slots.", readBudget, readBudget) + " In direct mode, include exactly one task total: the implementation task. Do not include verification or review tasks; the runner performs those native gates. expected_evidence MUST contain objects with nonempty kind and description strings, never plain strings. scope_paths may use a single dot for the repository root; write_paths must name concrete relative files or directories, never dot or parent paths. The review gate must depend on verification. For the initial implementation, treat scope_paths as the maximum repair area and write_paths as only the initial change. Inspect generated-source directives, templates, and extension points, and include relevant files in scope_paths even when they are not initially changed; do not add them to write_paths unless the first implementation edits them."
+			schema = engineeringplan.PlannerJSONSchema()
+		case plannerContractGraphV4:
+			readBudget := c.MaxExplorationRecords() - 8
+			if readBudget < 0 {
+				readBudget = 0
+			}
+			assignment = plannerGraphAssignmentV4 + fmt.Sprintf(" Use at most %d research/design tasks in total. Keep the initial plan to at most 32 tasks and at most %d research/design tasks, reserving worst-case capacity for eight four-task repair slots.", readBudget, readBudget) + " expected_evidence MUST contain objects with nonempty kind and description strings, never plain strings. scope_paths may use a single dot for the repository root; write_paths must name concrete relative files or directories, never dot or parent paths. The review gate must depend on verification. For the initial implementation, treat scope_paths as the maximum repair area and write_paths as only the initial change. Inspect generated-source directives, templates, and extension points, and include relevant files in scope_paths even when they are not initially changed; do not add them to write_paths unless the first implementation edits them."
 			schema = engineeringplan.PlannerJSONSchema()
 		default:
 			return runtime.Invocation{}, errors.New("unsupported planner contract")

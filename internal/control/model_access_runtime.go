@@ -138,6 +138,9 @@ func currentModelInvocation(s Snapshot, id string) (runtime.Invocation, error) {
 	if s.WriterHost != nil {
 		candidates = append(candidates, s.WriterHost.Intent.Invocation)
 	}
+	for _, host := range s.GraphWriterHosts {
+		candidates = append(candidates, host.Intent.Invocation)
+	}
 	if s.ReviewHost != nil {
 		candidates = append(candidates, s.ReviewHost.Intent.Invocation)
 	}

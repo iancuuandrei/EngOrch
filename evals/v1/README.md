@@ -1,13 +1,20 @@
-# Fabric v1 real-repository evaluation: six custom tasks
+# Fabric v1 real-repository evaluation: pinned custom tasks
 
-This suite defines six custom real-repository tasks, each pinned to an
+This suite defines seven custom real-repository tasks, each pinned to an
 audited upstream commit. It is not a SWE-bench score and it is not a general
-full-v1 proof; it reports per-task behavioral acceptance on these six
+full-v1 proof; it reports per-task behavioral acceptance on the selected
 repositories only. `manifest.json` is the authoritative source, commit,
 license, task, and package map. Source-task licenses were verified against
 each pinned repository's LICENSE file: go-humanize MIT, afero Apache-2.0,
 go-multierror MPL-2.0, go-atomic MIT, go-difflib BSD-3-Clause, logr
-Apache-2.0.
+Apache-2.0, godotenv MIT (`LICENCE`). The original six-task comparison remains
+a six-task result; adding a manifest entry does not add a successful run.
+The seventh task exercises multiline dotenv parsing, compatibility and
+documentation in a previously unfamiliar parser repository. Its pinned
+upstream tests pass before the change; its held-out multiline assertions fail
+before the feature. A [fresh public-main attempt](results/godotenv-main10-20261003.json)
+was blocked before file application because a proposed source anchor did not
+match the current file. Actual Fabric completion is still pending.
 
 Held-out acceptance sources live in `evals/v1/heldout/` and the classifier in
 `evals/v1/harness/Classify-CheckOutput.ps1` with regression fixtures under
@@ -120,3 +127,26 @@ native verification.
 The PR #5 sequential journey remains the comparison baseline. It requires its
 own clean clone and explicit human approval/review accounting; its historical
 single-task acceptance is not treated as a six-repository result.
+
+## Controlled parallel-writer comparison
+
+Native evaluations accept `-ParallelWriters` and `-MaxParallel 1..8`.
+Omitting both preserves the original invocation; these overrides reject in
+`PR5Matched` mode before any evaluation effects. The runner records requested
+policy separately from observed execution. A requested flag is not evidence
+that two writers actually ran.
+
+For a serial/parallel pair, prepare two fresh run directories with identical
+`-TaskIds`, source pins and objectives. Evaluate both with the same clean
+Fabric binary, runtime, model, effort, helper and build receipt, and enable
+`-ParallelWriters` in both. Set `-MaxParallel 1` for the serial arm and
+`-MaxParallel 2` for the parallel arm. Do not reuse or resume an uncertain
+evaluation as the second arm.
+
+Acceptance still requires the normal candidate-bound native tests, held-out
+checks and review. Inspect durable evidence for two genuinely independent
+implementation tasks, distinct actual runtime invocations, their start/end
+times, and one merged file effect. A single-writer plan can be a valid product
+result but cannot establish parallel implementation benefit. Compare elapsed
+time and token usage only within the accepted, equivalently scoped pair;
+unknown provider request counts or monetary costs remain unknown.
