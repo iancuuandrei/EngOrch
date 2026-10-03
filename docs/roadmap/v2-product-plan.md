@@ -124,3 +124,17 @@ integrated increment, without resurrecting a G0 promotion ladder.
   benefit, and remaining v1.1 gates are next. Resource-vector selection is
   separate unintegrated work for v1.2; isolated worktrees, serial integration
   and topology A/B are still outstanding. Later roadmap rows remain active.
+
+## Increment checkpoint — topology query
+
+- The next independent increment exposes source-bound package dependencies,
+  observed import hubs, explicit generator coupling and bounded impact review
+  groups through `fabric ri topology`. Query and CLI independent review and
+  focused actual-Rust integration tests pass. Full clean suite/hosted checks
+  still gate public integration.
+- `v1.0.3` completed its full clean Go suite. Its frozen eight-task evaluation
+  remains in progress; interim READY states do not establish held-out PASS.
+- Isolated writer/resource-vector integration is separate uncommitted work.
+  Its new policy preserves legacy JSON with omitted pointer fields; runtime
+  dispatch, combined verification and real topology A/B still require evidence.
+  No v1.2 or v2 completion is claimed.

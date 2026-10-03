@@ -62,3 +62,30 @@ context selector limits the prompt view to 12 files and 48 KiB.
 `CACHE_DIR`, when supplied to any of these commands, has the same trusted-local
 derived-cache meaning as above. The cache remains outside graph identity and
 does not turn partial syntax into semantic resolution.
+
+## Advisory topology query
+
+`fabric ri topology EXE EXE_SHA256 SPEC_JSON CHANGED_PATHS_JSON MAX_GROUP_FILES [CACHE_DIR]`
+reuses the same explicit committed corpus and graph builder, then summarizes
+observed package import degrees, graph-reachable impact, explicit generator
+coupling, potential test files and bounded review groups. `CHANGED_PATHS_JSON`
+is a strict JSON array of 1 to 64 unique eligible repository-relative `.go`
+paths; the entries must occur in `SPEC_JSON`. The file must be regular and no
+larger than 32 KiB. `MAX_GROUP_FILES` is an integer from 1 to 32. The result
+includes repository/source digests and the topology's graph and result digests.
+
+The query is deterministic and read-only. Package degrees count only exact
+package bindings already supplied in the graph; unresolved source-local imports
+remain unresolved. Review groups preserve component IDs when a large component
+must be split. These groups and potential tests are advisory only: they do not
+change scheduler policy, create a candidate, authorize edits, or count as
+verification evidence. Partial coverage, traversal limits, or omitted graph
+inputs must not be interpreted as proof that no other files are affected.
+
+Example:
+
+```powershell
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+[System.IO.File]::WriteAllText('changed-paths.json', '["internal/ri/engineering_graph.go"]', $utf8)
+fabric --root D:\src\project ri topology D:\tools\engorch-ri.exe <exe-sha256> go-graph-spec.json changed-paths.json 8 D:\cache\engorch\go-facts
+```

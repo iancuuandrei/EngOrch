@@ -61,6 +61,7 @@ Use `harness [--root PATH] COMMAND`. Output is canonical JSON except help, aggre
 | `ri facts` | `EXE EXE_SHA256 PATH [CACHE_DIR]` | Extract bounded partial Go syntax facts from the exact committed file; optional cache is a local derived optimization. |
 | `ri graph` | `EXE EXE_SHA256 SPEC_JSON [CACHE_DIR]` | Build a partial Go graph from an explicit bounded corpus of committed files and package/generator metadata; no generators are executed. |
 | `ri context` | `EXE EXE_SHA256 SPEC_JSON OBJECTIVE [CACHE_DIR]` | Compile a bounded task context from the same explicit committed Go corpus and partial graph; sensitive paths are rejected before reading. |
+| `ri topology` | `EXE EXE_SHA256 SPEC_JSON CHANGED_PATHS_JSON MAX_GROUP_FILES [CACHE_DIR]` | Query advisory Go package topology, observed impact, explicit generator coupling and bounded review groups from a committed partial graph. |
 | `ri prepare-lexical` | `RUN EXE EXE_SHA256 STAGE_ROOT BATCH_BYTES BATCH_FILES` | Observe committed files and preview an exact lexical indexing intent. |
 | `ri lexical` | `RUN PREVIEW_JSON INTENT_ID ACTOR` | Execute one authorized and journaled lexical indexing attempt. |
 | `ri lexical-ref` | `RUN` | Reverify confirmed lexical staging and emit its search reference. |

@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"harness.local/engorch/internal/canonical"
@@ -19,10 +20,12 @@ import (
 )
 
 const (
-	goGraphSpecMaxBytes = 256 << 10
-	goGraphMaxFiles     = 256
-	goGraphMaxBytes     = 8 << 20
-	goGraphMaxFileBytes = 1 << 20
+	goGraphSpecMaxBytes     = 256 << 10
+	goGraphMaxFiles         = 256
+	goGraphMaxBytes         = 8 << 20
+	goGraphMaxFileBytes     = 1 << 20
+	goTopologyPathsMaxBytes = 32 << 10
+	goTopologyMaxPaths      = 64
 )
 
 type goGraphSpec struct {
@@ -51,6 +54,12 @@ type goContextResult struct {
 	Repository ri.Source                  `json:"repository"`
 	Sources    []goGraphSourceObservation `json:"sources"`
 	Context    ri.GoContextManifest       `json:"context"`
+}
+
+type goTopologyResult struct {
+	Repository ri.Source                  `json:"repository"`
+	Sources    []goGraphSourceObservation `json:"sources"`
+	Topology   ri.GoTopologyResult        `json:"topology"`
 }
 
 type goGraphSource struct {
@@ -107,6 +116,85 @@ func riGoContextCommand(ctx context.Context, root string, args []string, out io.
 		return err
 	}
 	return output(out, goContextResult{Repository: built.result.Repository, Sources: built.result.Sources, Context: manifest})
+}
+
+func riGoTopologyCommand(ctx context.Context, root string, args []string, out io.Writer) error {
+	if len(args) != 6 && len(args) != 7 {
+		return errors.New("usage: ri topology EXE EXE_SHA256 SPEC_JSON CHANGED_PATHS_JSON MAX_GROUP_FILES [CACHE_DIR]")
+	}
+	if len(args) == 7 && args[6] == "" {
+		return errors.New("cache directory cannot be empty when supplied")
+	}
+	maxGroupFiles, err := strconv.Atoi(args[5])
+	if err != nil || maxGroupFiles < 1 || maxGroupFiles > 32 {
+		return errors.New("MAX_GROUP_FILES must be an integer from 1 to 32")
+	}
+	pathsFile, err := riAbsolutePath(root, args[4])
+	if err != nil {
+		return err
+	}
+	changedPaths, err := readGoTopologyPaths(pathsFile)
+	if err != nil {
+		return err
+	}
+	built, err := buildGoGraph(ctx, root, args[1], args[2], args[3], cacheArgument(args, 6))
+	if err != nil {
+		return err
+	}
+	result, err := queryGoTopologyResult(built, changedPaths, maxGroupFiles)
+	if err != nil {
+		return err
+	}
+	return output(out, result)
+}
+
+func queryGoTopologyResult(built builtGoGraph, changedPaths []string, maxGroupFiles int) (goTopologyResult, error) {
+	topology, err := ri.QueryGoTopology(built.result.Graph, changedPaths, maxGroupFiles)
+	if err != nil {
+		return goTopologyResult{}, err
+	}
+	return goTopologyResult{Repository: built.result.Repository, Sources: built.result.Sources, Topology: topology}, nil
+}
+
+func readGoTopologyPaths(path string) ([]string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > goTopologyPathsMaxBytes {
+		return nil, errors.New("changed paths must be a regular JSON file no larger than 32 KiB")
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, goTopologyPathsMaxBytes+1))
+	if err != nil || len(raw) > goTopologyPathsMaxBytes {
+		return nil, errors.New("changed paths exceed 32 KiB or could not be read")
+	}
+	var paths []string
+	normal, err := canonical.Normalize(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid changed-path JSON encoding: %w", err)
+	}
+	if err := canonical.Decode(normal, &paths); err != nil {
+		return nil, fmt.Errorf("invalid changed-path JSON: %w", err)
+	}
+	if len(paths) == 0 || len(paths) > goTopologyMaxPaths {
+		return nil, errors.New("changed paths must contain 1 to 64 entries")
+	}
+	seen := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		if len(path) > 4096 || safepath.Relative(path) != nil || filepath.Ext(path) != ".go" || !taskcontext.EligiblePath(path) {
+			return nil, errors.New("changed paths contain an invalid, sensitive, or ineligible Go source path")
+		}
+		if seen[path] {
+			return nil, fmt.Errorf("changed paths repeat %q", path)
+		}
+		seen[path] = true
+	}
+	return paths, nil
 }
 
 func cacheArgument(args []string, index int) string {
