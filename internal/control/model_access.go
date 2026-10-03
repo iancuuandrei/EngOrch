@@ -36,12 +36,8 @@ func codexRuntimeUsagePolicy(s Snapshot, role string) (budget int64, requireLive
 // exact runtime invocation. It is pure derivation: callers must separately
 // persist the intent before dispatch and record a terminal receipt afterward.
 func deriveModelAccessIntent(s Snapshot, invocation runtime.Invocation, attempt int) (access.Intent, error) {
-	exact, err := runtime.NewInvocation(invocation.Profile, invocation.Input)
-	if err != nil {
+	if err := invocation.Validate(); err != nil {
 		return access.Intent{}, err
-	}
-	if invocation != exact {
-		return access.Intent{}, errors.New("runtime invocation identity mismatch")
 	}
 
 	configured, err := s.Creation.Config.Route(invocation.Profile.Role)

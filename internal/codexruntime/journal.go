@@ -198,11 +198,10 @@ func replay(events []journal.Event) (State, error) {
 			if err := canonical.Decode(e.Payload, &intent); err != nil {
 				return s, err
 			}
-			i, err := runtime.NewInvocation(intent.Invocation.Profile, intent.Invocation.Input)
-			if err != nil {
+			if err := intent.Invocation.Validate(); err != nil {
 				return s, err
 			}
-			if intent.Invocation.Version != 1 || i.ID != intent.Invocation.ID || i.Profile.Runtime != "codex-app-server" || !filepath.IsAbs(intent.Directory) {
+			if intent.Invocation.Version != 1 || intent.Invocation.Profile.Runtime != "codex-app-server" || !filepath.IsAbs(intent.Directory) {
 				return s, errors.New("invalid runtime intent")
 			}
 			if intent.ToolOutputVersion != 0 && intent.ToolOutputVersion != ToolOutputVersionUTF8First {
@@ -217,7 +216,7 @@ func replay(events []journal.Event) (State, error) {
 			if err := canonical.Decode(e.Payload, &thread); err != nil {
 				return s, err
 			}
-			if err := thread.Validate(s.Intent.Invocation.Profile, s.Intent.Directory); err != nil {
+			if err := thread.ValidateInvocation(s.Intent.Invocation, s.Intent.Directory); err != nil {
 				return s, err
 			}
 			s.Thread = &thread

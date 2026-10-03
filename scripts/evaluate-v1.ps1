@@ -26,7 +26,7 @@ policy (init defaults to `go test ./...`) and hashed. Native mode runs
 gathering. Fabric and PR5 child calls temporarily prepend the selected Go
 directory and verify bare `go` resolves to that exact executable; caller PATH
 is restored in finally and the executable hash/binding are recorded. The
-`go-source-context-v1` and `go-source-context-v2` treatments require an explicit absolute, clean parser
+`go-source-context-v1`, `go-source-context-v2`, and `go-contract-context-v1` treatments require an explicit absolute, clean parser
 path and its lowercase SHA-256 via `-PlannerContextRIExecutable` and
 `-PlannerContextRIExecutableSHA256`; no parser is discovered from PATH or the
 environment, and both values are bound in the prepared/evaluated receipts.
@@ -104,15 +104,15 @@ if ($Action -eq 'Evaluate' -and $EvalMode -eq 'PR5Matched' -and ($ParallelWriter
 }
 Assert-IsolatedRunnerOptionShape ([bool]$IsolatedWriters) $IsolationPolicyPath ([bool]$ParallelWriters) $EvalMode $MaxParallel
 function Test-GoSourceContextMode([string]$Mode) {
-    return $Mode -ceq 'go-source-context-v1' -or $Mode -ceq 'go-source-context-v2'
+    return $Mode -ceq 'go-source-context-v1' -or $Mode -ceq 'go-source-context-v2' -or $Mode -ceq 'go-contract-context-v1'
 }
 function Assert-PlannerContextBindingShape([string]$Mode, [string]$Executable, [string]$ExecutableSHA256) {
-    if ($Mode -notin @('', 'source-bounded-v1', 'go-source-context-v1', 'go-source-context-v2')) {
-        throw 'PlannerContext must be empty, source-bounded-v1, go-source-context-v1, or go-source-context-v2.'
+    if ($Mode -cnotin @('', 'source-bounded-v1', 'go-source-context-v1', 'go-source-context-v2', 'go-contract-context-v1')) {
+        throw 'PlannerContext must be empty, source-bounded-v1, go-source-context-v1, go-source-context-v2, or go-contract-context-v1.'
     }
     if (Test-GoSourceContextMode $Mode) {
         if ([string]::IsNullOrWhiteSpace($Executable) -or [string]::IsNullOrWhiteSpace($ExecutableSHA256)) {
-            throw 'Go source context modes require PlannerContextRIExecutable and PlannerContextRIExecutableSHA256.'
+            throw 'Pinned Go planner context modes require PlannerContextRIExecutable and PlannerContextRIExecutableSHA256.'
         }
         if (-not [IO.Path]::IsPathFullyQualified($Executable) -or [IO.Path]::GetFullPath($Executable) -cne $Executable) {
             throw 'PlannerContextRIExecutable must be an absolute clean path, passed unchanged.'
@@ -123,7 +123,7 @@ function Assert-PlannerContextBindingShape([string]$Mode, [string]$Executable, [
         return
     }
     if ($Executable -ne '' -or $ExecutableSHA256 -ne '') {
-        throw 'PlannerContextRIExecutable and PlannerContextRIExecutableSHA256 require go-source-context-v1 or go-source-context-v2.'
+        throw 'PlannerContextRIExecutable and PlannerContextRIExecutableSHA256 require go-source-context-v1, go-source-context-v2, or go-contract-context-v1.'
     }
 }
 Assert-PlannerContextBindingShape $PlannerContext $PlannerContextRIExecutable $PlannerContextRIExecutableSHA256

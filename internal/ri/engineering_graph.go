@@ -658,11 +658,22 @@ func validateGoGraphOverlayModuleInventory(base GoEngineeringGraph, overlay GoGr
 
 func cloneGoModuleInventory(inventory GoModuleInventory) GoModuleInventory {
 	copy := inventory
-	copy.Files = append([]GoManifestObservation(nil), inventory.Files...)
+	if inventory.Files != nil {
+		copy.Files = append([]GoManifestObservation{}, inventory.Files...)
+	}
+	if inventory.Omissions != nil {
+		copy.Omissions = append([]GoManifestOmission{}, inventory.Omissions...)
+	}
 	for i := range copy.Files {
-		copy.Files[i].Requires = append([]GoModuleRequirement(nil), inventory.Files[i].Requires...)
-		copy.Files[i].Replaces = append([]GoModuleReplacement(nil), inventory.Files[i].Replaces...)
-		copy.Files[i].Uses = append([]GoWorkspaceUse(nil), inventory.Files[i].Uses...)
+		if inventory.Files[i].Requires != nil {
+			copy.Files[i].Requires = append([]GoModuleRequirement{}, inventory.Files[i].Requires...)
+		}
+		if inventory.Files[i].Replaces != nil {
+			copy.Files[i].Replaces = append([]GoModuleReplacement{}, inventory.Files[i].Replaces...)
+		}
+		if inventory.Files[i].Uses != nil {
+			copy.Files[i].Uses = append([]GoWorkspaceUse{}, inventory.Files[i].Uses...)
+		}
 	}
 	return copy
 }

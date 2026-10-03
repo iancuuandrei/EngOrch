@@ -490,13 +490,13 @@ func replayAgentDispatch(snapshot *Snapshot, event journal.Event) error {
 		if err := canonical.Decode(event.Payload, &admission); err != nil {
 			return err
 		}
-		expected, err := runtime.NewInvocation(admission.Invocation.Profile, admission.Invocation.Input)
+		err := admission.Invocation.Validate()
 		contextHash, contextErr := access.InputID(admission.Invocation.Input)
 		authority, authorityErr := agentAuthority(admission.Invocation.Profile.Role)
 		_, idErr := admission.ID()
 		nodeErr := agenttree.ValidateQueuedNode(admission.TreeID, admission.Node)
 		turnErr := validateAdmissionAgentTurn(admission, contextHash)
-		if err != nil || contextErr != nil || authorityErr != nil || idErr != nil || nodeErr != nil || turnErr != nil || admission.Version != 1 || admission.RunID != snapshot.RunID || admission.TreeID != snapshot.RunID || admission.Invocation != expected || admission.Node.Role != admission.Invocation.Profile.Role || admission.Node.Authority != authority || safepath.RequireDigest(admission.Node.AgentID) != nil || admission.Node.Status != agenttree.StatusQueued || admission.Node.ResultSHA256 != "" {
+		if err != nil || contextErr != nil || authorityErr != nil || idErr != nil || nodeErr != nil || turnErr != nil || admission.Version != 1 || admission.RunID != snapshot.RunID || admission.TreeID != snapshot.RunID || admission.Node.Role != admission.Invocation.Profile.Role || admission.Node.Authority != authority || safepath.RequireDigest(admission.Node.AgentID) != nil || admission.Node.Status != agenttree.StatusQueued || admission.Node.ResultSHA256 != "" {
 			return errors.Join(errors.New("invalid agent dispatch admission"), err, contextErr, authorityErr, idErr, nodeErr, turnErr)
 		}
 		if admission.Invocation.Profile.Role == "planner" {

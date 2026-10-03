@@ -146,8 +146,7 @@ func currentModelInvocation(s Snapshot, id string) (runtime.Invocation, error) {
 	}
 	for _, invocation := range candidates {
 		if invocation.ID == id {
-			exact, err := runtime.NewInvocation(invocation.Profile, invocation.Input)
-			if err != nil || exact != invocation {
+			if err := invocation.Validate(); err != nil {
 				return runtime.Invocation{}, errors.New("recorded runtime invocation identity mismatch")
 			}
 			return invocation, nil

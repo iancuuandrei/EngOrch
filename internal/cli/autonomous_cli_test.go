@@ -158,15 +158,20 @@ func TestAutonomousGoSourcePlannerContextRequiresAndBindsPinnedParser(t *testing
 	if err := validateAutonomousPlannerContext(autonomousPlannerContextGoSourceV2, parser, parserHash); err != nil {
 		t.Fatalf("valid v2 pinned parser binding rejected: %v", err)
 	}
+	if err := validateAutonomousPlannerContext(autonomousPlannerContextGoContractV1, parser, parserHash); err != nil {
+		t.Fatalf("valid contract-context pinned parser binding rejected: %v", err)
+	}
 
 	for _, test := range []struct {
 		name, mode, path, hash string
 	}{
 		{name: "go context missing binding", mode: autonomousPlannerContextGoSourceV1},
 		{name: "go context v2 missing binding", mode: autonomousPlannerContextGoSourceV2},
+		{name: "contract context missing binding", mode: autonomousPlannerContextGoContractV1},
 		{name: "go context missing hash", mode: autonomousPlannerContextGoSourceV1, path: parser},
 		{name: "relative parser path", mode: autonomousPlannerContextGoSourceV1, path: "ri.exe", hash: parserHash},
 		{name: "v2 relative parser path", mode: autonomousPlannerContextGoSourceV2, path: "ri.exe", hash: parserHash},
+		{name: "contract relative parser path", mode: autonomousPlannerContextGoContractV1, path: "ri.exe", hash: parserHash},
 		{name: "unclean parser path", mode: autonomousPlannerContextGoSourceV1, path: filepath.Dir(parser) + string(os.PathSeparator) + "." + string(os.PathSeparator) + filepath.Base(parser), hash: parserHash},
 		{name: "uppercase hash", mode: autonomousPlannerContextGoSourceV1, path: parser, hash: strings.ToUpper(parserHash)},
 		{name: "binding with legacy mode", mode: autonomousPlannerContextSourceBoundedV1, path: parser, hash: parserHash},
@@ -238,6 +243,46 @@ func TestAutonomousGoSourcePlannerContextRequiresAndBindsPinnedParser(t *testing
 	}
 }
 
+func TestAutonomousContractPlannerContextBindsSeparateOptIn(t *testing.T) {
+	parser, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary, err := os.ReadFile(parser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(binary)
+	root := autonomousCLIFixture(t)
+	var out bytes.Buffer
+	err = Execute(context.Background(), []string{
+		"run", "--autonomous", "--prepare-only", "--max-parallel", "1",
+		"--planner-context", autonomousPlannerContextGoContractV1,
+		"--planner-context-ri-executable", parser,
+		"--planner-context-ri-executable-sha256", hex.EncodeToString(sum[:]),
+		"A bounded contract fixture objective",
+	}, root, &out)
+	if err == nil {
+		t.Fatal("fixture should stop before external role dispatch")
+	}
+	var result autonomousFailure
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	path, err := runPath(root, result.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := control.Inspect(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := snapshot.Creation.Execution
+	if policy == nil || policy.PlannerContext != autonomousPlannerContextGoContractV1 || policy.PlannerParseCacheVersion != 0 || policy.PlannerContextRIExecutable != parser || policy.PlannerContextRIExecutableSHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("contract planner policy was not immutably bound: %#v", policy)
+	}
+}
+
 func TestPlannerParseCacheFlagIsV2OnlyAndVersioned(t *testing.T) {
 	for _, test := range []struct {
 		mode    string
@@ -294,6 +339,9 @@ func TestAutonomousCLIRejectsInvalidOptionsAndNonAutonomousResume(t *testing.T) 
 		{"run", "--autonomous", "--planner-context", autonomousPlannerContextGoSourceV1, "--planner-context-parse-cache", "objective"},
 		{"run", "--autonomous", "--planner-context-ri-executable", "C:\\tools\\ri.exe", "--planner-context-ri-executable-sha256", strings.Repeat("a", 64), "objective"},
 		{"run", "--autonomous", "--prompt-recipe", "unsupported", "objective"},
+		{"run", "--autonomous", "--auto-compact-token-limit", "0", "objective"},
+		{"run", "--autonomous", "--auto-compact-token-limit", "-1", "objective"},
+		{"run", "--autonomous", "--auto-compact-token-limit", "10000001", "objective"},
 		{"run", "--autonomous"},
 		{"resume", "--autonomous", "one", "two"},
 	} {

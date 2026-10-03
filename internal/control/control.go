@@ -63,7 +63,7 @@ type ExecutionPolicy struct {
 	// existing collection behavior; cache observations grant no authority.
 	PlannerParseCacheVersion int `json:"planner_parse_cache_version,omitempty"`
 	// PlannerContextRIExecutable and PlannerContextRIExecutableSHA256 pin the
-	// local read-only parser used only by go-source-context-v1 admission. They
+	// local read-only parser used only by Go planner-context admission. They
 	// are immutable run inputs and do not authorize a model or repository effect.
 	PlannerContextRIExecutable       string `json:"planner_context_ri_executable,omitempty"`
 	PlannerContextRIExecutableSHA256 string `json:"planner_context_ri_executable_sha256,omitempty"`
@@ -81,6 +81,15 @@ type ExecutionPolicy struct {
 	IsolatedImplementationVersion int                               `json:"isolated_implementation_version,omitempty"`
 	IsolationCapacity             *engineeringplan.ResourceCapacity `json:"isolation_capacity,omitempty"`
 	IsolationEstimate             *IsolationEstimateTemplate        `json:"isolation_estimate,omitempty"`
+	CodexAutoCompact              *runtime.CodexAutoCompactOptions  `json:"codex_auto_compact,omitempty"`
+}
+
+func codexAutoCompactForExecution(policy *ExecutionPolicy, profile runtime.Profile) *runtime.CodexAutoCompactOptions {
+	if policy == nil || policy.CodexAutoCompact == nil || profile.Runtime != "codex-app-server" {
+		return nil
+	}
+	options := *policy.CodexAutoCompact
+	return &options
 }
 
 // Validate admits only the bounded autonomous workflow with a repair budget
@@ -94,16 +103,21 @@ func (p ExecutionPolicy) Validate() error {
 	if p.Mode != "autonomous-v1" || p.MaxRepairs < 0 || p.MaxRepairs > 8 {
 		return errors.New("invalid execution policy")
 	}
+	if p.CodexAutoCompact != nil {
+		if err := p.CodexAutoCompact.Validate(); err != nil {
+			return err
+		}
+	}
 	if p.PromptRecipe != "" && p.PromptRecipe != promptRecipeCachePrefixV1 {
 		return errors.New("invalid execution prompt recipe")
 	}
 	if p.Context != "" && p.Context != taskContextBoundedV1 {
 		return errors.New("invalid execution task context")
 	}
-	if p.PlannerContext != "" && p.PlannerContext != plannerContextSourceBoundedV1 && p.PlannerContext != plannerContextGoSourceV1 && p.PlannerContext != plannerContextGoSourceV2 {
+	if p.PlannerContext != "" && p.PlannerContext != plannerContextSourceBoundedV1 && p.PlannerContext != plannerContextGoSourceV1 && p.PlannerContext != plannerContextGoSourceV2 && p.PlannerContext != plannerContextGoContractV1 {
 		return errors.New("invalid execution planner context")
 	}
-	if p.PlannerContext == plannerContextGoSourceV1 || p.PlannerContext == plannerContextGoSourceV2 {
+	if p.PlannerContext == plannerContextGoSourceV1 || p.PlannerContext == plannerContextGoSourceV2 || p.PlannerContext == plannerContextGoContractV1 {
 		if p.PlannerContextRIExecutable == "" || !filepath.IsAbs(p.PlannerContextRIExecutable) || filepath.Clean(p.PlannerContextRIExecutable) != p.PlannerContextRIExecutable || safepath.RequireDigest(p.PlannerContextRIExecutableSHA256) != nil {
 			return errors.New("Go planner context requires a pinned RI executable")
 		}
@@ -466,6 +480,9 @@ func Replay(events []journal.Event) (Snapshot, error) {
 			if err := c.Config.Validate(); err != nil {
 				return s, err
 			}
+			if c.Execution != nil && c.Execution.CodexAutoCompact != nil && !creationSupportsCodexAutoCompact(c.Config) {
+				return s, errors.New("Codex auto-compaction requires every configured role to use the Codex app-server runtime")
+			}
 			if err := validateCreationHostAdmission(c); err != nil {
 				return s, err
 			}
@@ -785,6 +802,18 @@ func Replay(events []journal.Event) (Snapshot, error) {
 		}
 	}
 	return s, nil
+}
+
+func creationSupportsCodexAutoCompact(c config.Config) bool {
+	if c.Planner.Runtime != "codex-app-server" {
+		return false
+	}
+	for _, profile := range []*runtime.Profile{c.Writer, c.Fixer, c.Explorer, c.Reviewer} {
+		if profile != nil && profile.Runtime != "codex-app-server" {
+			return false
+		}
+	}
+	return true
 }
 
 func validateRepairPlanningBinding(c Creation) error {

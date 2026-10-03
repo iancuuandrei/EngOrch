@@ -160,3 +160,22 @@ func TestPlannerContractDoesNotContaminateWriterContext(t *testing.T) {
 		t.Fatal("planner assignment contaminated writer context")
 	}
 }
+
+func TestPlannerInvocationCarriesFrozenCodexAutoCompactOption(t *testing.T) {
+	c := config.Config{Planner: runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "model", Effort: "high", Role: "planner"}}
+	policy := &ExecutionPolicy{CodexAutoCompact: &runtime.CodexAutoCompactOptions{Version: runtime.CodexAutoCompactVersion, TokenLimit: 50000}}
+	i, err := plannerInvocationWithContextsAndRecipe(c, "objective", nil, nil, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i.CodexAutoCompactOption() == nil || *i.CodexAutoCompactOption() != *policy.CodexAutoCompact {
+		t.Fatalf("planner invocation did not retain frozen threshold: %+v", i.CodexAutoCompactOption())
+	}
+	if err := i.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := plannerInvocation(c, "objective")
+	if err != nil || legacy.CodexAutoCompactOption() != nil {
+		t.Fatalf("legacy planner invocation changed: %+v, %v", legacy, err)
+	}
+}

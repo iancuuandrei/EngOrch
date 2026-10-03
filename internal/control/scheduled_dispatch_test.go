@@ -195,3 +195,21 @@ func TestScheduledClaimRejectsPathAndHeadSubstitutionBeforeAdmission(t *testing.
 		t.Fatal("rejected scheduled claim mutated controller", s.AgentDispatch, err)
 	}
 }
+
+func TestScheduledTurnInvocationPreservesCodexAutoCompactOption(t *testing.T) {
+	profile := runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "model", Effort: "high", Role: "writer"}
+	base, err := runtime.NewInvocationWithCodexAutoCompact(profile, "base input", &runtime.CodexAutoCompactOptions{Version: runtime.CodexAutoCompactVersion, TokenLimit: 50000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scoped, err := scheduledTurnInvocation(base, taskscheduler.OperationWriter, strings.Repeat("a", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scoped.CodexAutoCompactOption() == nil || *scoped.CodexAutoCompactOption() != *base.CodexAutoCompactOption() {
+		t.Fatalf("scheduled invocation dropped native thread option: %+v", scoped.CodexAutoCompactOption())
+	}
+	if err := scoped.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}

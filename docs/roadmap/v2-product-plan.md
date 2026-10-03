@@ -351,3 +351,28 @@ integrated increment, without resurrecting a G0 promotion ladder.
 - The next context comparison uses one frozen candidate binary and objective
   v2 on both arms, changing only the context mode across the six fixed tasks,
   godotenv and numeric-text. Budgets and held-out checks stay unchanged.
+
+## Checkpoint — v1.0.10 integrated; v1.0.11 candidate
+
+- v1.0.10 is public on main/dev at
+  `fbd1e5d60760d213edc017761091dbaf4e414838`, automation PR #19 merged.
+  Clean full Go, independent review, native-argument/doc checks, security and
+  Sonar passed (zero issues, 2.1% duplication). See the increment qualification
+  record for frozen CPU/RSS, cold/warm disk and allocation observations.
+- The contract-context candidate now passes offline admission and durable
+  replay on all eight pinned repositories with zero provider effects. Its
+  record retains only the longest fitting ranked source prefix and the exact
+  literal generator/tool/output source closure. This avoids duplicating
+  irrelevant generator-discovery inputs while preserving source-bound replay.
+- The numeric context retains the actual generator owner, template, tool and
+  output evidence. The new planner prompt derives bounded coupling/test hints
+  from that exact graph and contract selection. These are planning hints,
+  not an independence certificate or write authority.
+- An optional, invocation-bound Codex native-compaction threshold is under
+  independent review. Default identities are unchanged; configured limits do
+  not prove effective runtime thresholds or actual compaction. Live sustained
+  qualification and all fresh provider comparisons remain required.
+- A usable topology comparison is specified using the existing Humanize
+  feature/performance task and both unchanged held-out checks. A changed
+  generator hub followed by isolated leaf stages is a separate unsupported
+  design, and is not allowed to drive new recovery machinery.

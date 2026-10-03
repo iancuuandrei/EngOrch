@@ -38,9 +38,10 @@ $tomlPolicy = Join-Path $PSScriptRoot 'Toml-ArgvPolicy.ps1'
 . $tomlPolicy
 if (-not (Test-GoSourceContextMode 'go-source-context-v1') -or
     -not (Test-GoSourceContextMode 'go-source-context-v2') -or
+    -not (Test-GoSourceContextMode 'go-contract-context-v1') -or
     (Test-GoSourceContextMode 'source-bounded-v1') -or
     (Test-GoSourceContextMode '')) {
-    throw 'Go source context mode predicate does not distinguish both explicit versions from legacy modes.'
+    throw 'Pinned Go planner context predicate does not distinguish v1, v2, contract v1, and legacy modes.'
 }
 Assert-IsolatedRunnerOptionShape $false '' $false 'Native' 0
 foreach ($invalidOptions in @(
@@ -81,6 +82,9 @@ if (($goSource | ConvertTo-Json -Compress) -ne ($expectedGoSource | ConvertTo-Js
 $goSourceV2 = @(Get-NativeRunArgs $taskPath $objective $false 0 'go-source-context-v2' '' $parserPath $parserHash)
 $expectedGoSourceV2 = @('--root', $taskPath, 'run', '--autonomous', '--planner-context', 'go-source-context-v2', '--planner-context-ri-executable', $parserPath, '--planner-context-ri-executable-sha256', $parserHash, $objective)
 if (($goSourceV2 | ConvertTo-Json -Compress) -ne ($expectedGoSourceV2 | ConvertTo-Json -Compress)) { throw 'go-source-context-v2 argv does not preserve the exact explicit parser binding.' }
+$goContractV1 = @(Get-NativeRunArgs $taskPath $objective $false 0 'go-contract-context-v1' '' $parserPath $parserHash)
+$expectedGoContractV1 = @('--root', $taskPath, 'run', '--autonomous', '--planner-context', 'go-contract-context-v1', '--planner-context-ri-executable', $parserPath, '--planner-context-ri-executable-sha256', $parserHash, $objective)
+if (($goContractV1 | ConvertTo-Json -Compress) -ne ($expectedGoContractV1 | ConvertTo-Json -Compress)) { throw 'go-contract-context-v1 argv does not preserve the exact explicit parser binding.' }
 $policyRoot = Join-Path $env:TEMP ('isolated-runner-policy-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $policyRoot | Out-Null
 try {
@@ -211,6 +215,10 @@ $invalidBindings = @(
     @{ Mode='go-source-context-v2'; Path=''; Hash='' },
     @{ Mode='go-source-context-v2'; Path=$parserPath; Hash='' },
     @{ Mode='go-source-context-v2'; Path=$parserPath; Hash=$parserHash.ToUpperInvariant() },
+    @{ Mode='go-contract-context-v1'; Path=''; Hash='' },
+    @{ Mode='go-contract-context-v1'; Path=$parserPath; Hash='' },
+    @{ Mode='go-contract-context-v1'; Path=$parserPath; Hash=$parserHash.ToUpperInvariant() },
+    @{ Mode='GO-CONTRACT-CONTEXT-V1'; Path=''; Hash='' },
     @{ Mode='source-bounded-v1'; Path=$parserPath; Hash=$parserHash }
 )
 foreach ($binding in $invalidBindings) {
@@ -226,4 +234,4 @@ foreach ($invalid in @(-1, 9)) {
     try { Get-NativeRunArgs $taskPath $objective $true $invalid | Out-Null } catch { $rejected = $true }
     if (-not $rejected) { throw "Invalid limit $invalid was admitted." }
 }
-Write-Output 'PASS: legacy argv is byte-order stable; v1/v2 Go planner treatments bind exact parser provenance; isolated mode binds policy and a validated external controller state root into the task config hash; inside-checkout roots reject; invalid combinations and mutations reject; objectives stay one argument; no provider calls.'
+Write-Output 'PASS: legacy argv is byte-order stable; v1/v2/contract-v1 Go planner treatments bind exact parser provenance; isolated mode binds policy and a validated external controller state root into the task config hash; inside-checkout roots reject; invalid combinations and mutations reject; objectives stay one argument; no provider calls.'

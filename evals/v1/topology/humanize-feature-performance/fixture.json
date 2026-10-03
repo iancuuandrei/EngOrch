@@ -1,0 +1,59 @@
+{
+  "schema": "fabric.eval.topology-fixture.v1",
+  "fixture_id": "humanize-feature-performance-disjoint-v1",
+  "status": "DESIGN_ONLY",
+  "runner_consumed": false,
+  "repository": {
+    "id": "go-humanize-feature-performance",
+    "url": "https://github.com/dustin/go-humanize.git",
+    "commit": "a1b4e66b9a6d890e9e15e7091cf16c8032367d6e",
+    "license": "MIT"
+  },
+  "manifest_task": "go-humanize-feature-performance",
+  "objective": "objective.md",
+  "acceptance_recipe": "acceptance.md",
+  "read_only_hub_paths": [
+    "go.mod",
+    "bytes.go",
+    "bytes_test.go",
+    "comma.go",
+    "comma_test.go",
+    "common_test.go"
+  ],
+  "desired_plan_properties": {
+    "read_only_hub_precedes_implementation": true,
+    "hub_has_no_candidate_file_effect": true,
+    "initial_implementation_leaves": 2,
+    "implementation_write_sets_disjoint": true,
+    "leaf_a_paths": ["bytes.go", "bytes_test.go"],
+    "leaf_b_paths": ["comma.go", "comma_test.go"],
+    "task_ids_are_fixed": false,
+    "plan_may_be_rewritten_to_force_topology": false
+  },
+  "native_check": ["go", "test", "-count=1", "./..."],
+  "heldout_check": [
+    "../../heldout/humanize.heldout_test.go",
+    "../../heldout/commaf_performance.heldout_test.go",
+    "combined by the existing runner as humanize-feature-performance"
+  ],
+  "resource_policy_proposal": {
+    "version": 1,
+    "max_parallel": 2,
+    "capacity": {
+      "cpu_milli": 2000,
+      "memory_mib": 4096,
+      "verification_slots": 1,
+      "total_runtime_slots": 2,
+      "provider_slots": 2,
+      "model_slots": 2,
+      "runtime_slots": 2
+    },
+    "estimate_per_implementation": {
+      "cpu_milli": 1000,
+      "memory_mib": 1024,
+      "verification_slots": 0,
+      "runtime_slots": 1
+    }
+  },
+  "current_product_gate": "design_only_until_a_fresh_matched_pair_is_prepared_and_qualified"
+}

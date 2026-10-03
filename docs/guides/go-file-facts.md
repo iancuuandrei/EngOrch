@@ -218,6 +218,9 @@ paths. It uses a distinct digest domain and labels these seeds
 projection is capped at 8 KiB and reports omitted groups, paths, couplings,
 packages, and potential tests. The projection contains graph observations only,
 not source bytes, write authority, or proof that tasks are independent.
+The v4 `go-contract-context-v1` planner prompt recomputes this projection from
+its durable contract excerpts and admitted graph. Excerpts absent from the graph
+are not used as seeds; an unavailable projection carries a bounded reason.
 
 Example:
 

@@ -16,17 +16,18 @@ import (
 
 // ThreadSettings records selected server settings, not proof of OS isolation.
 type ThreadSettings struct {
-	ThreadID         string  `json:"thread_id"`
-	Model            string  `json:"model"`
-	Provider         string  `json:"provider"`
-	Effort           *string `json:"effort"`
-	ServiceTier      *string `json:"service_tier,omitempty"`
-	Directory        string  `json:"directory"`
-	Approval         string  `json:"approval"`
-	Sandbox          string  `json:"sandbox"`
-	Network          bool    `json:"network"`
-	Role             string  `json:"role,omitempty"`
-	DynamicToolsHash string  `json:"dynamic_tools_hash,omitempty"`
+	ThreadID                       string  `json:"thread_id"`
+	Model                          string  `json:"model"`
+	Provider                       string  `json:"provider"`
+	Effort                         *string `json:"effort"`
+	ServiceTier                    *string `json:"service_tier,omitempty"`
+	Directory                      string  `json:"directory"`
+	Approval                       string  `json:"approval"`
+	Sandbox                        string  `json:"sandbox"`
+	Network                        bool    `json:"network"`
+	Role                           string  `json:"role,omitempty"`
+	DynamicToolsHash               string  `json:"dynamic_tools_hash,omitempty"`
+	RequestedAutoCompactTokenLimit *int64  `json:"requested_auto_compact_token_limit,omitempty"`
 }
 
 var (
@@ -81,6 +82,29 @@ func (s ThreadSettings) Validate(p runtime.Profile, directory string) error {
 	return nil
 }
 
+// ValidateInvocation checks the locally recorded start request against the
+// immutable invocation. The threshold is a requested setting, not provider
+// confirmation that compaction occurred.
+func (s ThreadSettings) ValidateInvocation(i runtime.Invocation, directory string) error {
+	if err := i.Validate(); err != nil {
+		return err
+	}
+	if err := s.Validate(i.Profile, directory); err != nil {
+		return err
+	}
+	autoCompact := i.CodexAutoCompactOption()
+	if autoCompact == nil {
+		if s.RequestedAutoCompactTokenLimit != nil {
+			return errors.New("thread auto-compaction request mismatch")
+		}
+		return nil
+	}
+	if s.RequestedAutoCompactTokenLimit == nil || *s.RequestedAutoCompactTokenLimit != autoCompact.TokenLimit {
+		return errors.New("thread auto-compaction request mismatch")
+	}
+	return nil
+}
+
 // StartThread selects explicit routing and read-only tool policy. The caller must
 // durably record intent first and ensure the server has no inherited connectors.
 func (c *Client) StartThread(ctx context.Context, p runtime.Profile, directory string) (ThreadSettings, error) {
@@ -90,9 +114,31 @@ func (c *Client) StartThread(ctx context.Context, p runtime.Profile, directory s
 // StartThreadWithTools registers caller-owned dynamic tools under the same
 // read-only policy. Tool specifications do not grant native tool authority.
 func (c *Client) StartThreadWithTools(ctx context.Context, p runtime.Profile, directory string, tools []any) (ThreadSettings, error) {
+	return c.startThread(ctx, p, directory, tools, nil)
+}
+
+// StartThreadForInvocation binds the exact invocation's optional Codex thread
+// settings to the provider-facing start request. A nil option retains the
+// legacy request shape.
+func (c *Client) StartThreadForInvocation(ctx context.Context, i runtime.Invocation, directory string, tools []any) (ThreadSettings, error) {
+	if err := i.Validate(); err != nil {
+		return ThreadSettings{}, err
+	}
+	return c.startThread(ctx, i.Profile, directory, tools, i.CodexAutoCompactOption())
+}
+
+func (c *Client) startThread(ctx context.Context, p runtime.Profile, directory string, tools []any, autoCompact *runtime.CodexAutoCompactOptions) (ThreadSettings, error) {
 	var observed ThreadSettings
 	if err := p.Validate(); err != nil {
 		return observed, err
+	}
+	if autoCompact != nil {
+		if p.Runtime != "codex-app-server" {
+			return observed, errors.New("Codex auto-compaction requires the Codex app-server runtime")
+		}
+		if err := autoCompact.Validate(); err != nil {
+			return observed, err
+		}
 	}
 	if !filepath.IsAbs(directory) {
 		return observed, errors.New("absolute thread directory required")
@@ -100,10 +146,14 @@ func (c *Client) StartThreadWithTools(ctx context.Context, p runtime.Profile, di
 	if err := c.validateThreadConstraint(p, directory, tools); err != nil {
 		return observed, err
 	}
+	config := map[string]any{"model_reasoning_effort": p.Effort, "agents.enabled": false, "features.multi_agent": false, "features.multi_agent_v2": false, "features.code_mode": map[string]any{"enabled": false, "direct_only_tool_namespaces": []string{"functions"}}}
+	if autoCompact != nil {
+		config["model_auto_compact_token_limit"] = autoCompact.TokenLimit
+	}
 	response, events, err := c.callConstrained(ctx, "thread/start", map[string]any{
 		"model": p.Model, "modelProvider": p.Provider, "cwd": directory,
 		"approvalPolicy": "never", "sandbox": "read-only",
-		"config":       map[string]any{"model_reasoning_effort": p.Effort, "agents.enabled": false, "features.multi_agent": false, "features.multi_agent_v2": false, "features.code_mode": map[string]any{"enabled": false, "direct_only_tool_namespaces": []string{"functions"}}},
+		"config":       config,
 		"environments": []any{}, "selectedCapabilityRoots": []any{},
 		"allowProviderModelFallback": false,
 		"dynamicTools":               tools,
@@ -145,6 +195,10 @@ func (c *Client) StartThreadWithTools(ctx context.Context, p runtime.Profile, di
 		return observed, err
 	}
 	observed = ThreadSettings{ThreadID: wire.Thread.ID, Model: wire.Model, Provider: wire.Provider, Effort: wire.Effort, ServiceTier: wire.ServiceTier, Directory: wire.Directory, Approval: wire.Approval, Sandbox: wire.Sandbox.Type, Network: wire.Sandbox.Network, Role: p.Role, DynamicToolsHash: toolsHash}
+	if autoCompact != nil {
+		limit := autoCompact.TokenLimit
+		observed.RequestedAutoCompactTokenLimit = &limit
+	}
 	if err := observed.Validate(p, directory); err != nil {
 		return observed, err
 	}
@@ -259,14 +313,17 @@ func (c *Client) StartTurn(ctx context.Context, thread ThreadSettings, i runtime
 	var wire struct {
 		Turn Turn `json:"turn"`
 	}
-	expected, err := runtime.NewInvocation(i.Profile, i.Input)
+	if err := i.Validate(); err != nil {
+		return wire.Turn, nil, err
+	}
+	expected, err := runtime.NewInvocationWithCodexAutoCompact(i.Profile, i.Input, i.CodexAutoCompactOption())
 	if err != nil {
 		return wire.Turn, nil, err
 	}
 	if expected.ID != i.ID || i.Version != 1 {
 		return wire.Turn, nil, errors.New("invocation identity mismatch")
 	}
-	if err := thread.Validate(i.Profile, thread.Directory); err != nil {
+	if err := thread.ValidateInvocation(i, thread.Directory); err != nil {
 		return wire.Turn, nil, err
 	}
 	if err := c.validateContinuationConstraint(i.Profile, thread.Directory, thread.DynamicToolsHash); err != nil {

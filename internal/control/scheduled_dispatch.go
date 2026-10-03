@@ -479,8 +479,7 @@ func scheduledInvocation(task taskscheduler.TaskSpec, turn *taskscheduler.AgentT
 		if s.Review != nil {
 			invocation = s.Review.Invocation
 			recordedTurnInvocation = turn != nil
-			exact, exactErr := runtime.NewInvocation(invocation.Profile, invocation.Input)
-			if exactErr != nil || exact != invocation {
+			if exactErr := invocation.Validate(); exactErr != nil {
 				err = errors.New("recorded review invocation identity mismatch")
 			}
 		} else {
@@ -508,7 +507,7 @@ func scheduledTurnInvocation(base runtime.Invocation, operation taskscheduler.Op
 	if err != nil {
 		return runtime.Invocation{}, err
 	}
-	return runtime.NewInvocation(base.Profile, string(input))
+	return runtime.NewInvocationWithCodexAutoCompact(base.Profile, string(input), base.CodexAutoCompactOption())
 }
 
 func scheduledInvocationFromContext(ctx context.Context, operation taskscheduler.Operation, base runtime.Invocation) (runtime.Invocation, error) {

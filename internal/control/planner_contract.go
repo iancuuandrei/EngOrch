@@ -144,7 +144,7 @@ func plannerInvocationWithContextsAndRecipe(c config.Config, objective string, p
 	if err != nil {
 		return runtime.Invocation{}, err
 	}
-	return runtime.NewInvocation(profile, input)
+	return runtime.NewInvocationWithCodexAutoCompact(profile, input, codexAutoCompactForExecution(recipe, profile))
 }
 
 type plannerIsolationConstraints struct {

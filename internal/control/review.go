@@ -94,7 +94,7 @@ func reviewInvocation(s Snapshot) (runtime.Invocation, error) {
 	if err != nil {
 		return runtime.Invocation{}, err
 	}
-	return runtime.NewInvocation(profile, string(input))
+	return runtime.NewInvocationWithCodexAutoCompact(profile, string(input), codexAutoCompactForExecution(s.Creation.Execution, profile))
 }
 
 // PrepareReviewInvocation fixes reviewer routing, candidate and verification input.

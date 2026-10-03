@@ -288,7 +288,7 @@ func writerInvocationBody(s Snapshot, taskID string, isolated *isolatedWriterBin
 	if err != nil {
 		return runtime.Invocation{}, err
 	}
-	return runtime.NewInvocation(profile, string(input))
+	return runtime.NewInvocationWithCodexAutoCompact(profile, string(input), codexAutoCompactForExecution(s.Creation.Execution, profile))
 }
 
 type isolatedWriterInvocationContext struct {

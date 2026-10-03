@@ -82,7 +82,7 @@ func explorerInvocation(s Snapshot, question string) (runtime.Invocation, error)
 	if err != nil {
 		return runtime.Invocation{}, err
 	}
-	return runtime.NewInvocation(profile, string(input))
+	return runtime.NewInvocationWithCodexAutoCompact(profile, string(input), codexAutoCompactForExecution(s.Creation.Execution, profile))
 }
 
 // PrepareExplorerInvocation binds a read-only question to the configured role and candidate.

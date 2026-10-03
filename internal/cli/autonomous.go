@@ -18,6 +18,7 @@ import (
 	"harness.local/engorch/internal/controllerstate"
 	"harness.local/engorch/internal/engineeringplan"
 	"harness.local/engorch/internal/repository"
+	"harness.local/engorch/internal/runtime"
 )
 
 const defaultAutonomousMaxRepairs = 2
@@ -29,6 +30,8 @@ const autonomousPlannerContextSourceBoundedV1 = "source-bounded-v1"
 const autonomousPlannerContextGoSourceV1 = "go-source-context-v1"
 
 const autonomousPlannerContextGoSourceV2 = "go-source-context-v2"
+
+const autonomousPlannerContextGoContractV1 = "go-contract-context-v1"
 
 const isolatedWriterPolicyMaxBytes = 32 << 10
 
@@ -91,15 +94,25 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	parallelWriters := fs.Bool("parallel-writers", false, "allow two independent initial implementation tasks when justified")
 	isolatedWriters := fs.Bool("isolated-writers", false, "run an explicitly resource-bounded initial implementation cohort in separate worktrees")
 	isolationPolicyPath := fs.String("isolation-policy", "", "strict versioned JSON resource capacity and per-writer estimate file (required with --isolated-writers)")
-	plannerContext := fs.String("planner-context", "", "planner evidence mode: source-bounded-v1 or pinned go-source-context-v1/go-source-context-v2")
+	plannerContext := fs.String("planner-context", "", "planner evidence mode: source-bounded-v1 or pinned go-source-context-v1/go-source-context-v2/go-contract-context-v1")
 	plannerContextRIExecutable := fs.String("planner-context-ri-executable", "", "absolute path to the pinned Go-source RI parser (required for either go-source-context mode)")
 	plannerContextRIExecutableSHA256 := fs.String("planner-context-ri-executable-sha256", "", "lowercase SHA-256 of the pinned Go-source RI parser")
 	plannerContextParseCache := fs.Bool("planner-context-parse-cache", false, "reuse local Go parser facts for go-source-context-v2 only")
 	promptRecipe := fs.String("prompt-recipe", "", "opt in to cache-prefix-v1 prompt ordering")
+	autoCompactTokenLimit := fs.Int64("auto-compact-token-limit", 0, "opt in to Codex automatic in-turn compaction at this positive token threshold")
 	prepareOnly := fs.Bool("prepare-only", false, "accept the graph and confirm its workspace, then return before explorer or writer dispatch")
 	goalFile := fs.String("file", "", "read objective from file")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	autoCompactFlagSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "auto-compact-token-limit" {
+			autoCompactFlagSet = true
+		}
+	})
+	if autoCompactFlagSet && (*autoCompactTokenLimit <= 0 || *autoCompactTokenLimit > runtime.MaxCodexAutoCompactTokenLimit) {
+		return fmt.Errorf("auto-compact-token-limit must be between 1 and %d", runtime.MaxCodexAutoCompactTokenLimit)
 	}
 	if *maxRepairs < 0 || *maxRepairs > 8 {
 		return errors.New("max-repairs must be between 0 and 8")
@@ -145,7 +158,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 		if err := validateAutonomousObjective(objective); err != nil {
 			return err
 		}
-		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *prepareOnly, out)
+		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, out)
 	}
 	if fs.NArg() != 1 || fs.Arg(0) == "" {
 		return errors.New("run --autonomous requires one objective or --file PATH")
@@ -153,7 +166,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	if err := validateAutonomousObjective(fs.Arg(0)); err != nil {
 		return err
 	}
-	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *prepareOnly, out)
+	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, out)
 }
 
 func validatePlannerParseCacheVersion(plannerContext string, version int) error {
@@ -219,11 +232,11 @@ func validateAutonomousPlannerContext(mode, executable, executableSHA256 string)
 	switch mode {
 	case "", autonomousPlannerContextSourceBoundedV1:
 		if executable != "" || executableSHA256 != "" {
-			return errors.New("planner-context RI executable binding requires go-source-context-v1 or go-source-context-v2")
+			return errors.New("planner-context RI executable binding requires a Go planner context")
 		}
-	case autonomousPlannerContextGoSourceV1, autonomousPlannerContextGoSourceV2:
+	case autonomousPlannerContextGoSourceV1, autonomousPlannerContextGoSourceV2, autonomousPlannerContextGoContractV1:
 		if executable == "" || executableSHA256 == "" {
-			return errors.New("go-source-context-v1 and go-source-context-v2 require planner-context-ri-executable and planner-context-ri-executable-sha256")
+			return errors.New("Go planner contexts require planner-context-ri-executable and planner-context-ri-executable-sha256")
 		}
 		if !filepath.IsAbs(executable) || filepath.Clean(executable) != executable {
 			return errors.New("planner-context-ri-executable must be an absolute clean path")
@@ -232,7 +245,7 @@ func validateAutonomousPlannerContext(mode, executable, executableSHA256 string)
 			return errors.New("planner-context-ri-executable-sha256 must be 64 lowercase hexadecimal characters")
 		}
 	default:
-		return errors.New("planner-context must be empty, source-bounded-v1, go-source-context-v1, or go-source-context-v2")
+		return errors.New("planner-context must be empty, source-bounded-v1, go-source-context-v1, go-source-context-v2, or go-contract-context-v1")
 	}
 	return nil
 }
@@ -265,7 +278,7 @@ func validateAutonomousObjective(objective string) error {
 	return nil
 }
 
-func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, parallelWriters bool, isolationPolicy *isolatedWriterPolicyFile, plannerContext string, plannerParseCacheVersion int, plannerContextRIExecutable, plannerContextRIExecutableSHA256, promptRecipe string, prepareOnly bool, out io.Writer) error {
+func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, parallelWriters bool, isolationPolicy *isolatedWriterPolicyFile, plannerContext string, plannerParseCacheVersion int, plannerContextRIExecutable, plannerContextRIExecutableSHA256, promptRecipe string, autoCompactTokenLimit int64, prepareOnly bool, out io.Writer) error {
 	if err := validateAutonomousObjective(objective); err != nil {
 		return err
 	}
@@ -280,6 +293,13 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 	}
 	if promptRecipe != "" && promptRecipe != "cache-prefix-v1" {
 		return errors.New("prompt-recipe must be empty or cache-prefix-v1")
+	}
+	var autoCompact *runtime.CodexAutoCompactOptions
+	if autoCompactTokenLimit != 0 {
+		autoCompact = &runtime.CodexAutoCompactOptions{Version: runtime.CodexAutoCompactVersion, TokenLimit: autoCompactTokenLimit}
+		if err := autoCompact.Validate(); err != nil {
+			return err
+		}
 	}
 	cfg, err := configuration(root)
 	if err != nil {
@@ -369,6 +389,7 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 			GraphVersion:                     1, MaxParallel: maxParallel, RepairPlanningVersion: 1,
 			ParallelImplementationVersion: parallelImplementationVersion,
 			IsolatedImplementationVersion: isolatedImplementationVersion, IsolationCapacity: isolationCapacity, IsolationEstimate: isolationEstimate,
+			CodexAutoCompact: autoCompact,
 		},
 	}
 	creation, err = bindCurrentHost(ctx, creation)

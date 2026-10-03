@@ -59,6 +59,9 @@ func (a *Adapter) Execute(ctx context.Context, i runtime.Invocation) (executionR
 	if err := ctx.Err(); err != nil {
 		return runtime.Result{}, err
 	}
+	if err := i.Validate(); err != nil {
+		return runtime.Result{}, err
+	}
 	if a.UnlimitedTokens && a.UsageBudget != 0 {
 		return runtime.Result{}, errors.New("unlimited token policy requires zero numeric reservation")
 	}
@@ -116,7 +119,7 @@ func (a *Adapter) Execute(ctx context.Context, i runtime.Invocation) (executionR
 		}
 	}
 	a.Client.SetObserver(a.observeUsage)
-	thread, err := a.Client.StartThreadWithTools(ctx, i.Profile, a.Directory, a.SourceToolsForInvocation(i))
+	thread, err := a.Client.StartThreadForInvocation(ctx, i, a.Directory, a.SourceToolsForInvocation(i))
 	if err != nil {
 		return runtime.Result{}, err
 	}

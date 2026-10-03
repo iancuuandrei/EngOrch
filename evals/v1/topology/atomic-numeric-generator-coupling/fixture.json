@@ -1,0 +1,43 @@
+{
+  "schema": "fabric.eval.topology-fixture.v1",
+  "fixture_id": "atomic-numeric-generator-coupling-v1",
+  "status": "DESIGN_ONLY",
+  "runner_consumed": false,
+  "repository": {
+    "id": "go-atomic-numeric-text",
+    "url": "https://github.com/uber-go/atomic.git",
+    "commit": "2d2bdbd262f95d0a890c696fb6f91d4776cb142c",
+    "license": "MIT"
+  },
+  "objective": "objective.md",
+  "acceptance_recipe": "acceptance.md",
+  "native_check": ["go", "test", "-count=1", "."],
+  "heldout_check": "../../heldout/atomic_numeric.heldout_test.go",
+  "generation_check": ["make", "generate"],
+  "generation_check_environment": "disposable acceptance copy; compare generated outputs before/after",
+  "windows_native_exclusion": {
+    "test_regex": "^TestNocmpIntegration$",
+    "platform": "windows",
+    "reason": "Existing manifest exclusion for the upstream test that drops TEMP/TMP; held-out checks are not excluded."
+  },
+  "resource_policy_proposal": {
+    "version": 1,
+    "max_parallel": 2,
+    "capacity": {
+      "cpu_milli": 2000,
+      "memory_mib": 4096,
+      "verification_slots": 1,
+      "total_runtime_slots": 2,
+      "provider_slots": 2,
+      "model_slots": 2,
+      "runtime_slots": 2
+    },
+    "estimate_per_implementation": {
+      "cpu_milli": 1000,
+      "memory_mib": 1024,
+      "verification_slots": 0,
+      "runtime_slots": 1
+    }
+  },
+  "current_product_gate": "blocked_until_versioned_staged_graph_and_repeated_isolated_cohorts_are_supported"
+}

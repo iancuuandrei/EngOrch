@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,6 +14,48 @@ import (
 	"harness.local/engorch/internal/codexrpc"
 	"harness.local/engorch/internal/runtime"
 )
+
+func TestInvalidAutoCompactionInvocationFailsBeforeRuntimeIntent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime.jsonl")
+	profile := runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "model", Effort: "high", Role: "writer"}
+	i := runtime.Invocation{Version: 1, ID: "tampered", Profile: profile, Input: "write", CodexAutoCompactVersion: runtime.CodexAutoCompactVersion, CodexAutoCompactTokenLimit: 1000}
+	a := &Adapter{JournalPath: path}
+	if _, err := a.Execute(context.Background(), i); err == nil {
+		t.Fatal("tampered invocation dispatched")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("invalid invocation wrote runtime intent: stat err=%v", err)
+	}
+}
+
+func TestRuntimeIntentReplayBindsAutoCompactionOption(t *testing.T) {
+	profile := runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "model", Effort: "high", Role: "planner"}
+	invocation, err := runtime.NewInvocationWithCodexAutoCompact(profile, "objective", &runtime.CodexAutoCompactOptions{Version: runtime.CodexAutoCompactVersion, TokenLimit: 50000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawInvocation, err := json.Marshal(invocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roundTrip runtime.Invocation
+	if err := json.Unmarshal(rawInvocation, &roundTrip); err != nil || roundTrip.Validate() != nil {
+		t.Fatalf("option-bound invocation JSON failed validation: %s, %v", rawInvocation, err)
+	}
+	validPath := filepath.Join(t.TempDir(), "valid.jsonl")
+	if err := appendEvent(validPath, "runtime.intent", Intent{Invocation: invocation, Directory: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	if state, err := Inspect(validPath); err != nil || state.Intent == nil || state.Intent.Invocation.CodexAutoCompactOption() == nil {
+		t.Fatalf("valid option-bound intent did not replay: %+v, %v", state.Intent, err)
+	}
+	forgedPath := filepath.Join(t.TempDir(), "forged.jsonl")
+	forged := invocation
+	forged.CodexAutoCompactTokenLimit = 50001
+	if err := appendEvent(forgedPath, "runtime.intent", Intent{Invocation: forged, Directory: t.TempDir()}); err == nil {
+		t.Fatal("runtime journal accepted an option changed after invocation identity was bound")
+	}
+}
 
 func invocation(t *testing.T) runtime.Invocation {
 	t.Helper()

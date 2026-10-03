@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -19,8 +20,9 @@ import (
 )
 
 const (
-	plannerContextGoSourceV1 = "go-source-context-v1"
-	plannerContextGoSourceV2 = "go-source-context-v2"
+	plannerContextGoSourceV1   = "go-source-context-v1"
+	plannerContextGoSourceV2   = "go-source-context-v2"
+	plannerContextGoContractV1 = "go-contract-context-v1"
 )
 
 const (
@@ -57,19 +59,37 @@ type PlannerGoContextRecord struct {
 	RecordID           string                    `json:"record_id"`
 	GenerationMetadata *ri.GoGenerationMetadata  `json:"generation_metadata,omitempty"`
 	GenerationContext  *ri.GoGenerationContext   `json:"generation_context,omitempty"`
+	// ContractContext is the compact, source-bound v1 contract evidence view.
+	// It replaces the v2 broad context and generation prompt text for this mode.
+	ContractContext *ri.GoContractContext `json:"contract_context,omitempty"`
+	// ContractSources retains the complete admitted source corpus only for v4
+	// replay. It is never copied into the model-visible planner prompt.
+	ContractSources           []PlannerGoContractSource `json:"contract_sources,omitempty"`
+	ContractGenerationSources []PlannerGoContractSource `json:"contract_generation_sources,omitempty"`
+}
+
+// PlannerGoContractSource is v4-only durable compiler input. Content is a
+// string so canonical journal JSON retains the exact UTF-8 source bytes.
+type PlannerGoContractSource struct {
+	Path    string `json:"path"`
+	Hash    string `json:"hash"`
+	Content string `json:"content"`
 }
 
 // plannerGoContextPrompt is the model-visible view of a larger durable
 // record. It excludes the full graph/fact corpus while retaining the exact
 // selected evidence, its graph digest, and the immutable record identity.
 type plannerGoContextPrompt struct {
-	RecordID           string                     `json:"record_id"`
-	Coverage           string                     `json:"coverage"`
-	RIExecutableSHA256 string                     `json:"ri_executable_sha256"`
-	GraphDigest        string                     `json:"graph_digest,omitempty"`
-	Context            *ri.GoContextManifest      `json:"context,omitempty"`
-	Unavailable        string                     `json:"unavailable,omitempty"`
-	Generation         *plannerGoGenerationPrompt `json:"generation,omitempty"`
+	RecordID                       string                     `json:"record_id"`
+	Coverage                       string                     `json:"coverage"`
+	RIExecutableSHA256             string                     `json:"ri_executable_sha256"`
+	GraphDigest                    string                     `json:"graph_digest,omitempty"`
+	Context                        *ri.GoContextManifest      `json:"context,omitempty"`
+	ContractContext                *ri.GoContractContext      `json:"contract_context,omitempty"`
+	FocusTopology                  *ri.GoFocusTopology        `json:"focus_topology,omitempty"`
+	FocusTopologyUnavailableReason string                     `json:"focus_topology_unavailable_reason,omitempty"`
+	Unavailable                    string                     `json:"unavailable,omitempty"`
+	Generation                     *plannerGoGenerationPrompt `json:"generation,omitempty"`
 }
 
 // plannerGoGenerationPrompt is the compact planner view of source-bound
@@ -128,14 +148,54 @@ func plannerGoContextPromptFor(record *PlannerGoContextRecord) *plannerGoContext
 		context := *record.Context
 		prompt.Context = &context
 	}
-	if record.GenerationMetadata != nil {
+	if record.Unavailable == "" && record.Graph != nil && record.ContractContext != nil {
+		prompt.GraphDigest = record.Graph.Digest
+		contract := *record.ContractContext
+		prompt.ContractContext = &contract
+	}
+	if record.Version == 4 {
+		prompt.FocusTopology, prompt.FocusTopologyUnavailableReason = plannerGoFocusTopologyFor(record)
+	}
+	if record.Version == 3 && record.GenerationMetadata != nil {
 		prompt.Generation = plannerGoGenerationPromptFor(record.GenerationMetadata, record.GenerationContext)
 	}
 	return prompt
 }
 
+func plannerGoFocusTopologyFor(record *PlannerGoContextRecord) (*ri.GoFocusTopology, string) {
+	if record == nil || record.Graph == nil || record.ContractContext == nil || record.Unavailable != "" {
+		return nil, "contract_context_unavailable"
+	}
+	graph, contract := record.Graph, record.ContractContext
+	if graph.SourceID != record.Source.RepositoryID || graph.SourceID != contract.SourceID || graph.CandidateID != contract.CandidateID || graph.Digest != contract.GraphDigest || graph.ProducerSHA256 != contract.ProducerSHA256 {
+		return nil, "contract_graph_binding_mismatch"
+	}
+	pathsPresent := make(map[string]bool, len(graph.Files))
+	for _, file := range graph.Files {
+		pathsPresent[file.Facts.Path] = true
+	}
+	seen := make(map[string]bool, len(contract.Excerpts))
+	focusPaths := make([]string, 0, len(contract.Excerpts))
+	for _, excerpt := range contract.Excerpts {
+		if !pathsPresent[excerpt.Path] || seen[excerpt.Path] {
+			continue
+		}
+		seen[excerpt.Path] = true
+		focusPaths = append(focusPaths, excerpt.Path)
+	}
+	sort.Strings(focusPaths)
+	if len(focusPaths) == 0 {
+		return nil, "no_graph_contract_excerpt_paths"
+	}
+	topology, err := ri.QueryGoFocusTopology(*graph, focusPaths, 8)
+	if err != nil {
+		return nil, "focus_topology_query_failed"
+	}
+	return &topology, ""
+}
+
 func plannerGoContextEnabled(s Snapshot) bool {
-	return s.Creation.Execution != nil && (s.Creation.Execution.PlannerContext == plannerContextGoSourceV1 || s.Creation.Execution.PlannerContext == plannerContextGoSourceV2)
+	return s.Creation.Execution != nil && (s.Creation.Execution.PlannerContext == plannerContextGoSourceV1 || s.Creation.Execution.PlannerContext == plannerContextGoSourceV2 || s.Creation.Execution.PlannerContext == plannerContextGoContractV1)
 }
 
 func plannerGoContextRecordID(rec PlannerGoContextRecord) (string, error) {
@@ -144,7 +204,33 @@ func plannerGoContextRecordID(rec PlannerGoContextRecord) (string, error) {
 	if rec.Version == 3 {
 		domain = "harness.control.planner-go-context.v2"
 	}
+	if rec.Version == 4 {
+		domain = "harness.control.planner-go-context.v3"
+	}
 	return canonical.Hash(domain, rec)
+}
+
+// plannerGoContractUnavailable removes v4 evidence that cannot fit the strict
+// journal ceiling. It records an unavailable admission rather than retaining a
+// partial compiler input that replay could not reproduce exactly.
+func plannerGoContractUnavailable(rec PlannerGoContextRecord, reason string) PlannerGoContextRecord {
+	rec.Unavailable = reason
+	rec.ReadFiles = 0
+	rec.Sources = nil
+	rec.Graph = nil
+	rec.Context = nil
+	rec.GenerationMetadata = nil
+	rec.GenerationContext = nil
+	rec.ContractContext = nil
+	rec.ContractSources = nil
+	rec.ContractGenerationSources = nil
+	rec.OmittedCount++
+	if len(rec.Omissions) < 64 {
+		rec.Omissions = append(rec.Omissions, taskcontext.Omission{Path: "[context]", Reason: reason})
+	} else {
+		rec.OmissionsTrimmed = true
+	}
+	return rec
 }
 
 // AdmitPlannerGoContext gathers one bounded, committed Go corpus and compiles
@@ -179,15 +265,24 @@ func AdmitPlannerGoContext(ctx context.Context, path string) (PlannerGoContextRe
 	}
 	query, truncated, queryHash, queryLen := truncateTaskQuery(s.Creation.Objective)
 	client := ri.Client{Executable: policy.PlannerContextRIExecutable, ExecutableHash: policy.PlannerContextRIExecutableSHA256}
+	options := ri.GoCorpusOptions{}
+	if policy.PlannerContext == plannerContextGoContractV1 {
+		inventory, inventoryErr := ri.CollectGoModuleInventory(ctx, s.Creation.Repository)
+		if inventoryErr != nil {
+			return PlannerGoContextRecord{}, inventoryErr
+		}
+		options.ModuleInventory = &inventory
+	}
 	var corpus ri.GoCommittedCorpus
 	if policy.PlannerParseCacheVersion == 1 {
 		cacheDir, cacheErr := ensurePlannerParseCacheDir(s.Creation.Repository, policy.PlannerContextRIExecutableSHA256)
 		if cacheErr != nil {
 			return PlannerGoContextRecord{}, cacheErr
 		}
-		corpus, err = ri.CollectCommittedGoCorpusWithOptions(ctx, s.Creation.Repository, client, cacheDir, query, ri.GoCorpusOptions{EnableParseCache: true})
+		options.EnableParseCache = true
+		corpus, err = ri.CollectCommittedGoCorpusWithOptions(ctx, s.Creation.Repository, client, cacheDir, query, options)
 	} else {
-		corpus, err = ri.CollectCommittedGoCorpus(ctx, s.Creation.Repository, client, "", query)
+		corpus, err = ri.CollectCommittedGoCorpusWithOptions(ctx, s.Creation.Repository, client, "", query, options)
 	}
 	if err != nil {
 		return PlannerGoContextRecord{}, err
@@ -205,8 +300,12 @@ func AdmitPlannerGoContext(ctx context.Context, path string) (PlannerGoContextRe
 	// An unavailable corpus has no admitted seed path. Preserve the legacy
 	// unavailable representation rather than asking generation discovery to
 	// manufacture an empty seed record.
-	if policy.PlannerContext == plannerContextGoSourceV2 {
-		record.Version = 3
+	if policy.PlannerContext == plannerContextGoSourceV2 || policy.PlannerContext == plannerContextGoContractV1 {
+		if policy.PlannerContext == plannerContextGoSourceV2 {
+			record.Version = 3
+		} else {
+			record.Version = 4
+		}
 		if record.ReadFiles > 0 {
 			metadata, discoverErr := ri.DiscoverCommittedGoGenerators(ctx, s.Creation.Repository, sourcePaths(record.Sources))
 			if discoverErr != nil {
@@ -216,7 +315,7 @@ func AdmitPlannerGoContext(ctx context.Context, path string) (PlannerGoContextRe
 				return PlannerGoContextRecord{}, err
 			}
 			record.GenerationMetadata = &metadata
-			if len(metadata.Bindings) > 0 {
+			if policy.PlannerContext == plannerContextGoSourceV2 && len(metadata.Bindings) > 0 {
 				generation, compileErr := ri.CompileGoGenerationContext(metadata, query)
 				if compileErr != nil {
 					return PlannerGoContextRecord{}, compileErr
@@ -235,22 +334,42 @@ func AdmitPlannerGoContext(ctx context.Context, path string) (PlannerGoContextRe
 		if record.GenerationMetadata != nil {
 			generators = admittedGoGenerationBindings(*record.GenerationMetadata, record.Sources)
 		}
-		graph, buildErr := ri.BuildGoEngineeringGraph(ri.GoGraphSnapshotInput{SourceID: sourceID, ProducerSHA256: policy.PlannerContextRIExecutableSHA256, Files: corpus.GraphInputs, Generators: generators})
+		graph, buildErr := ri.BuildGoEngineeringGraph(ri.GoGraphSnapshotInput{SourceID: sourceID, ProducerSHA256: policy.PlannerContextRIExecutableSHA256, Files: corpus.GraphInputs, Generators: generators, ModuleInventory: corpus.ModuleInventory})
 		if buildErr != nil {
 			return PlannerGoContextRecord{}, buildErr
 		}
 		if err := boundedCanonical(graph, plannerGoContextMaxGraphBytes); err != nil {
 			return PlannerGoContextRecord{}, errors.New("Go planner graph exceeds bounded admission size")
 		}
-		limits := taskcontext.DefaultLimits()
-		if policy.PlannerContext == plannerContextGoSourceV2 {
-			limits.MaxBytes = 24 << 10
+		if policy.PlannerContext == plannerContextGoContractV1 {
+			compilerFiles := clonePlannerGoContractFiles(corpus.ContextFiles)
+			durableSources := plannerGoContractSources(corpus.ContextFiles)
+			generationFiles := plannerGoContractGenerationFiles(record.GenerationMetadata)
+			contract, compileErr := ri.CompileGoContractContext(ri.GoContractContextInput{SourceID: sourceID, Graph: graph, ModuleInventory: corpus.ModuleInventory, Generation: record.GenerationMetadata, GenerationFiles: generationFiles, Objective: query, Files: compilerFiles})
+			if compileErr != nil {
+				return PlannerGoContextRecord{}, compileErr
+			}
+			record.Graph, record.ContractContext, record.ContractSources = &graph, &contract, durableSources
+			record.ContractGenerationSources = plannerGoContractSources(generationFiles)
+		} else {
+			limits := taskcontext.DefaultLimits()
+			if policy.PlannerContext == plannerContextGoSourceV2 {
+				limits.MaxBytes = 24 << 10
+			}
+			manifest, compileErr := ri.CompileGoContext(ri.GoContextInput{ContextVersion: 2, SourceID: sourceID, Graph: graph, Objective: query, Files: corpus.ContextFiles, Limits: limits})
+			if compileErr != nil {
+				return PlannerGoContextRecord{}, compileErr
+			}
+			record.Graph, record.Context = &graph, &manifest
 		}
-		manifest, compileErr := ri.CompileGoContext(ri.GoContextInput{ContextVersion: 2, SourceID: sourceID, Graph: graph, Objective: query, Files: corpus.ContextFiles, Limits: limits})
-		if compileErr != nil {
-			return PlannerGoContextRecord{}, compileErr
+	}
+	if policy.PlannerContext == plannerContextGoContractV1 {
+		if !plannerGoContractRecordFits(record) {
+			record, err = retainPlannerGoContractRecord(ctx, s.Creation.Repository, sourceID, corpus, record)
+			if err != nil {
+				return PlannerGoContextRecord{}, err
+			}
 		}
-		record.Graph, record.Context = &graph, &manifest
 	}
 	record.RecordID, err = plannerGoContextRecordID(record)
 	if err != nil {
@@ -260,12 +379,59 @@ func AdmitPlannerGoContext(ctx context.Context, path string) (PlannerGoContextRe
 		return PlannerGoContextRecord{}, err
 	}
 	if err := boundedCanonical(record, plannerGoContextMaxRecord); err != nil {
-		return PlannerGoContextRecord{}, errors.New("Go planner context record exceeds bounded journal size")
+		if policy.PlannerContext != plannerContextGoContractV1 {
+			return PlannerGoContextRecord{}, errors.New("Go planner context record exceeds bounded journal size")
+		}
+		record = plannerGoContractUnavailable(record, "contract_record_budget")
+		record.RecordID, err = plannerGoContextRecordID(record)
+		if err != nil {
+			return PlannerGoContextRecord{}, err
+		}
+		if err := validatePlannerGoContextRecord(s, record); err != nil {
+			return PlannerGoContextRecord{}, err
+		}
+		if err := boundedCanonical(record, plannerGoContextMaxRecord); err != nil {
+			return PlannerGoContextRecord{}, errors.New("unavailable Go planner contract record exceeds bounded journal size")
+		}
 	}
 	if err := Append(path, "planner.go-context-admitted", record); err != nil {
 		return PlannerGoContextRecord{}, err
 	}
 	return record, nil
+}
+
+func clonePlannerGoContractFiles(files []taskcontext.File) []taskcontext.File {
+	clone := make([]taskcontext.File, len(files))
+	for index, file := range files {
+		clone[index] = file
+		clone[index].Content = append([]byte(nil), file.Content...)
+	}
+	return clone
+}
+
+func plannerGoContractSources(files []taskcontext.File) []PlannerGoContractSource {
+	sources := make([]PlannerGoContractSource, len(files))
+	for index, file := range files {
+		sources[index] = PlannerGoContractSource{Path: file.Path, Hash: file.Hash, Content: string(file.Content)}
+	}
+	return sources
+}
+
+func plannerGoContractFiles(sources []PlannerGoContractSource) []taskcontext.File {
+	files := make([]taskcontext.File, len(sources))
+	for index, source := range sources {
+		files[index] = taskcontext.File{Path: source.Path, Hash: source.Hash, Content: []byte(source.Content)}
+	}
+	return files
+}
+
+func plannerGoContractGenerationMetadata(metadata *ri.GoGenerationMetadata) *ri.GoGenerationMetadata {
+	if metadata == nil {
+		return nil
+	}
+	clone := *metadata
+	clone.ContextFiles = nil
+	return &clone
 }
 
 func boundedCanonical(value any, maximum int) error {
@@ -321,6 +487,9 @@ func validatePlannerGoContextRecord(s Snapshot, rec PlannerGoContextRecord) erro
 	if s.Creation.Execution != nil && s.Creation.Execution.PlannerContext == plannerContextGoSourceV2 {
 		wantVersion = 3
 	}
+	if s.Creation.Execution != nil && s.Creation.Execution.PlannerContext == plannerContextGoContractV1 {
+		wantVersion = 4
+	}
 	if s.State != "OBJECTIVE" || !plannerGoContextEnabled(s) || s.PlannerGoContext != nil || s.PlannerContext != nil || rec.Version != wantVersion || safepath.RequireDigest(rec.RIExecutableSHA256) != nil || s.Creation.Execution == nil || rec.RIExecutableSHA256 != s.Creation.Execution.PlannerContextRIExecutableSHA256 {
 		return errors.New("Go planner context transition rejected")
 	}
@@ -344,7 +513,8 @@ func validatePlannerGoContextRecord(s Snapshot, rec PlannerGoContextRecord) erro
 		}
 	}
 	if rec.Unavailable != "" {
-		if rec.Unavailable != "no_eligible_complete_go_source" || rec.ReadFiles != 0 || len(rec.Sources) != 0 || rec.Graph != nil || rec.Context != nil {
+		validUnavailable := rec.Unavailable == "no_eligible_complete_go_source" || rec.Version == 4 && rec.Unavailable == "contract_record_budget"
+		if !validUnavailable || rec.ReadFiles != 0 || len(rec.Sources) != 0 || rec.Graph != nil || rec.Context != nil || rec.ContractContext != nil || len(rec.ContractSources) != 0 || len(rec.ContractGenerationSources) != 0 {
 			return errors.New("invalid unavailable Go planner context")
 		}
 	} else {
@@ -354,7 +524,7 @@ func validatePlannerGoContextRecord(s Snapshot, rec PlannerGoContextRecord) erro
 		if err := validatePlannerGoSources(rec, sourceID); err != nil {
 			return err
 		}
-		if rec.Graph == nil || rec.Context == nil {
+		if rec.Graph == nil || rec.Context == nil && rec.ContractContext == nil {
 			return errors.New("Go planner graph or context is missing")
 		}
 		if err := ri.ValidateGoEngineeringGraph(*rec.Graph); err != nil || rec.Graph.SourceID != sourceID || rec.Graph.CandidateID != "" || rec.Graph.ProducerSHA256 != rec.RIExecutableSHA256 {
@@ -366,18 +536,34 @@ func validatePlannerGoContextRecord(s Snapshot, rec PlannerGoContextRecord) erro
 		if err := boundedCanonical(*rec.Graph, plannerGoContextMaxGraphBytes); err != nil {
 			return errors.New("Go planner graph exceeds bound")
 		}
-		contextBudget := 48 << 10
-		if rec.Version == 3 {
-			contextBudget = 24 << 10
-		}
-		if err := validatePlannerGoManifest(*rec.Context, *rec.Graph, rec.Sources, rec.Query, contextBudget); err != nil {
-			return err
+		if rec.Version == 4 {
+			if rec.Context != nil || rec.ContractContext == nil || len(rec.ContractSources) == 0 {
+				return errors.New("Go planner contract context is missing or mixed")
+			}
+			metadata := plannerGoContractGenerationMetadata(rec.GenerationMetadata)
+			if err := validatePlannerGoContractContext(*rec.ContractContext, *rec.Graph, rec.Sources, rec.Source, rec.Query, metadata, plannerGoContractFiles(rec.ContractSources), plannerGoContractFiles(rec.ContractGenerationSources)); err != nil {
+				return err
+			}
+		} else {
+			contextBudget := 48 << 10
+			if rec.Version == 3 {
+				contextBudget = 24 << 10
+			}
+			if rec.Context == nil || rec.ContractContext != nil {
+				return errors.New("Go planner context is missing or mixed")
+			}
+			if err := validatePlannerGoManifest(*rec.Context, *rec.Graph, rec.Sources, rec.Query, contextBudget); err != nil {
+				return err
+			}
 		}
 	}
-	if rec.Version == 2 && (rec.GenerationMetadata != nil || rec.GenerationContext != nil) {
+	if rec.Version == 2 && (rec.GenerationMetadata != nil || rec.GenerationContext != nil || rec.ContractContext != nil || len(rec.ContractSources) != 0 || len(rec.ContractGenerationSources) != 0) {
 		return errors.New("legacy Go planner context carries generation data")
 	}
 	if rec.Version == 3 {
+		if len(rec.ContractSources) != 0 || len(rec.ContractGenerationSources) != 0 {
+			return errors.New("v2 Go planner context carries contract source input")
+		}
 		if rec.Unavailable != "" {
 			if rec.GenerationMetadata != nil || rec.GenerationContext != nil {
 				return errors.New("unavailable Go planner context carries generation data")
@@ -409,6 +595,18 @@ func validatePlannerGoContextRecord(s Snapshot, rec PlannerGoContextRecord) erro
 			if rec.GenerationContext.SourceID != sourceID || ri.ValidateGoGenerationContext(*rec.GenerationContext, *rec.GenerationMetadata) != nil {
 				return errors.New("invalid Go generation context")
 			}
+		}
+	}
+	if rec.Version == 4 {
+		if rec.Context != nil || rec.GenerationContext != nil {
+			return errors.New("contract Go planner context carries v2 prompt evidence")
+		}
+		if rec.Unavailable != "" {
+			if rec.GenerationMetadata != nil || rec.ContractContext != nil || len(rec.ContractSources) != 0 || len(rec.ContractGenerationSources) != 0 {
+				return errors.New("unavailable contract Go planner context carries evidence")
+			}
+		} else if rec.GenerationMetadata == nil || rec.GenerationMetadata.SourceID != sourceID || ri.ValidateGoGenerationMetadata(*rec.GenerationMetadata) != nil {
+			return errors.New("invalid contract Go generation metadata")
 		}
 	}
 	id, err := plannerGoContextRecordID(rec)
@@ -536,6 +734,121 @@ func validatePlannerGoManifest(manifest ri.GoContextManifest, graph ri.GoEnginee
 		return errors.New("Go planner context manifest exceeds bound")
 	}
 	return nil
+}
+
+// validatePlannerGoContractContext replays the compact v1 contract view from
+// durable graph, source-digest and generation metadata. The journal stores
+// selected bytes, their hashes and full-source bindings; it never needs to
+// reopen a repository or infer unresolved semantics during replay.
+func validatePlannerGoContractContext(contract ri.GoContractContext, graph ri.GoEngineeringGraph, sources []repository.SourceDigest, sourceIdentity ri.Source, query string, metadata *ri.GoGenerationMetadata, contractFiles, generationFiles []taskcontext.File) error {
+	if contract.Schema != "engorch.ri.go-contract-context.v1" || contract.Version != 1 || contract.SourceID != graph.SourceID || contract.CandidateID != "" || contract.GraphDigest != graph.Digest || contract.ProducerSHA256 != graph.ProducerSHA256 || contract.Coverage != "PARTIAL" || safepath.RequireDigest(contract.Digest) != nil || safepath.RequireDigest(contract.QuerySHA256) != nil || len(contract.Excerpts) > 12 || len(contract.Relations) > 32 || contract.SourceBytes < 0 || contract.SourceBytes > 12<<10 || contract.GenerationBytes < 0 || contract.GenerationBytes > 4<<10 || contract.OmittedCount < len(contract.Omissions) || len(contract.Omissions) > 64 || (contract.OmissionsTrimmed && contract.OmittedCount <= len(contract.Omissions)) || (!contract.OmissionsTrimmed && contract.OmittedCount != len(contract.Omissions)) || metadata == nil {
+		return errors.New("invalid Go planner contract context header")
+	}
+	if (graph.ModuleInventory == nil && contract.ModuleInventoryDigest != "") || (graph.ModuleInventory != nil && (contract.ModuleInventoryDigest != graph.ModuleInventory.Digest || ri.ValidateGoModuleInventoryRecord(*graph.ModuleInventory) != nil)) || contract.GenerationMetadataDigest != metadata.Digest || ri.ValidateGoGenerationMetadata(*metadata) != nil {
+		return errors.New("Go planner contract context provenance mismatch")
+	}
+	if err := ri.ValidateGoContractContext(contract, ri.GoContractContextInput{SourceID: graph.SourceID, Graph: graph, ModuleInventory: graph.ModuleInventory, Generation: metadata, GenerationFiles: generationFiles, Objective: query, Files: clonePlannerGoContractFiles(contractFiles)}); err != nil {
+		return fmt.Errorf("Go planner contract context does not reproduce from durable source input: %w", err)
+	}
+	querySum := sha256.Sum256([]byte(query))
+	if contract.QuerySHA256 != hex.EncodeToString(querySum[:]) || metadata.SourceID != graph.SourceID || !reflect.DeepEqual(metadata.SeedPaths, sourcePaths(sources)) {
+		return errors.New("Go planner contract context query or seed substitution")
+	}
+	for _, source := range metadata.Sources {
+		if source.RepositoryID != graph.SourceID || source.Commit != sourceIdentity.Commit {
+			return errors.New("Go planner contract generation source substitution")
+		}
+	}
+	if !reflect.DeepEqual(graph.Generators, admittedGoGenerationBindings(*metadata, sources)) {
+		return errors.New("Go planner contract generation graph substitution")
+	}
+	graphFiles := make(map[string]ri.GoGraphFile, len(graph.Files))
+	sizes := make(map[string]int64, len(sources))
+	for _, source := range sources {
+		sizes[source.Path] = source.Bytes
+	}
+	for _, file := range graph.Files {
+		graphFiles[file.Facts.Path] = file
+	}
+	generation := make(map[string]repository.SourceDigest, len(metadata.Sources))
+	for _, source := range metadata.Sources {
+		generation[source.Path] = source
+	}
+	seen := map[string]bool{}
+	sourceBytes, generationBytes := 0, 0
+	for _, selected := range contract.Excerpts {
+		if seen[selected.Path] || safepath.Relative(selected.Path) != nil || safepath.RequireDigest(selected.Hash) != nil || safepath.RequireDigest(selected.ExcerptHash) != nil || selected.Start < 0 || selected.End <= selected.Start || int64(len(selected.Content)) != selected.End-selected.Start || !utf8.ValidString(selected.Content) || !plannerGoContractReason(selected.Reason) {
+			return errors.New("invalid Go planner contract excerpt")
+		}
+		seen[selected.Path] = true
+		if strings.HasPrefix(selected.Reason, "generation_") {
+			source, ok := generation[selected.Path]
+			if !ok || selected.Hash != source.SHA256 || selected.End > source.Bytes {
+				return errors.New("Go planner contract generation excerpt substitution")
+			}
+			generationBytes += len(selected.Content)
+		} else {
+			file, ok := graphFiles[selected.Path]
+			if !ok || selected.Hash != file.Facts.SourceSHA256 || selected.End > sizes[selected.Path] {
+				return errors.New("Go planner contract source excerpt substitution")
+			}
+			sourceBytes += len(selected.Content)
+		}
+		sum := sha256.Sum256([]byte(selected.Content))
+		if selected.ExcerptHash != hex.EncodeToString(sum[:]) {
+			return errors.New("Go planner contract excerpt hash substitution")
+		}
+	}
+	if sourceBytes != contract.SourceBytes || generationBytes != contract.GenerationBytes {
+		return errors.New("Go planner contract excerpt byte mismatch")
+	}
+	for _, omission := range contract.Omissions {
+		if (omission.Path != "[redacted]" && safepath.Relative(omission.Path) != nil) || strings.TrimSpace(omission.Reason) == "" || len(omission.Reason) > 64 {
+			return errors.New("invalid Go planner contract omission")
+		}
+	}
+	for _, relation := range contract.Relations {
+		if !plannerGoGraphHasEdge(graph, relation) || !plannerGoContractVisibleEdge(relation, contract.Excerpts) {
+			return errors.New("Go planner contract relation is not visible graph evidence")
+		}
+	}
+	for _, module := range contract.Modules {
+		if !seen[module.Path] {
+			return errors.New("Go planner contract module is not selected")
+		}
+		ownership, err := ri.GoModuleOwnershipForPath(*graph.ModuleInventory, module.Path)
+		if err != nil || ownership != module.Ownership || ownership.Status != "declared_module" {
+			return errors.New("Go planner contract module substitution")
+		}
+	}
+	body := contract
+	body.Digest = ""
+	id, err := canonical.Hash("harness.ri.go-contract-context.v1", body)
+	if err != nil || id != contract.Digest {
+		return errors.New("Go planner contract context digest mismatch")
+	}
+	return nil
+}
+
+func plannerGoContractReason(reason string) bool {
+	switch reason {
+	case "objective_declaration", "impact_declaration", "test_contract", "generation_owner", "generation_template", "generation_tool", "generation_build", "generation_output":
+		return true
+	default:
+		return false
+	}
+}
+
+func plannerGoContractVisibleEdge(edge ri.GoGraphEdge, selected []taskcontext.SelectedFile) bool {
+	for _, file := range selected {
+		if file.Path != edge.Path {
+			continue
+		}
+		if edge.Range == nil || int64(edge.Range.StartByte) >= file.Start && int64(edge.Range.EndByte) <= file.End {
+			return true
+		}
+	}
+	return false
 }
 
 func plannerGoOverlaps(candidate taskcontext.SelectedFile, existing []taskcontext.SelectedFile) bool {
