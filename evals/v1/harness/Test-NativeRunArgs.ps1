@@ -158,25 +158,46 @@ try {
     $configPath = Join-Path $taskRepo 'harness.toml'
     $entry = [pscustomobject]@{ id = 'fixture'; native_argv = @('go', 'test', './...') }
     $baselineConfig = "version = 1`nrepository = 'fixture'`nbase_branch = 'main'`n`n[verification]`nname = 'native'`nargv = ['go', 'test', './...']`ntimeout_seconds = 60`n"
-    [IO.File]::WriteAllText($configPath, $baselineConfig, (New-Object System.Text.UTF8Encoding($false)))
+    # `fabric init` currently marshals this default as an empty TOML string.
+    $initDefaultConfig = 'controller_state_root = ""' + "`n" + $baselineConfig
+    [IO.File]::WriteAllText($configPath, $initDefaultConfig, (New-Object System.Text.UTF8Encoding($false)))
     $externalStateRoot = Join-Path $taskOutput 'controller-state'
     $bound = Set-TaskVerificationConfig $taskRepo $entry $externalStateRoot
     $configured = Get-Content -Raw -LiteralPath $configPath
-    if ($configured -notmatch '(?m)^controller_state_root\s*=\s*"') { throw 'Isolated task config omitted its external controller state root.' }
+    $rootCount = ([regex]::Matches($configured, '(?m)^\s*controller_state_root\s*=')).Count
+    if ($rootCount -ne 1 -or $configured -notmatch '(?m)^controller_state_root\s*=\s*"') { throw 'Isolated task config omitted or duplicated its external controller state root.' }
     $quotedRoot = [regex]::Match($configured, '(?m)^controller_state_root\s*=\s*(?<value>"(?:[^"\\]|\\.)*")').Groups['value'].Value
     if ([string]::IsNullOrWhiteSpace($quotedRoot) -or (ConvertFrom-Json $quotedRoot) -cne $externalStateRoot) { throw 'TOML controller state root does not bind the exact external path.' }
     if ($bound.ControllerStateRoot -cne $externalStateRoot -or $bound.ConfigSha -cne (Get-FileSha256 $configPath)) { throw 'Task config hash/metadata omitted the external root binding.' }
 
-    [IO.File]::WriteAllText($configPath, $baselineConfig, (New-Object System.Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText($configPath, $initDefaultConfig, (New-Object System.Text.UTF8Encoding($false)))
     $beforeRejected = Get-FileSha256 $configPath
     $insideRejected = $false
     try { Set-TaskVerificationConfig $taskRepo $entry (Join-Path $taskRepo 'controller-state') | Out-Null } catch { $insideRejected = $true }
     if (-not $insideRejected -or (Get-FileSha256 $configPath) -cne $beforeRejected) { throw 'Inside-checkout state root was not rejected without changing config.' }
 
-    [IO.File]::WriteAllText($configPath, $baselineConfig, (New-Object System.Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText($configPath, 'controller_state_root = '''' # empty init default' + "`n" + $baselineConfig, (New-Object System.Text.UTF8Encoding($false)))
+    $singleQuoted = Set-TaskVerificationConfig $taskRepo $entry $externalStateRoot
+    $singleQuotedConfig = Get-Content -Raw -LiteralPath $configPath
+    if (([regex]::Matches($singleQuotedConfig, '(?m)^\s*controller_state_root\s*=')).Count -ne 1 -or $singleQuoted.ControllerStateRoot -cne $externalStateRoot) { throw 'Single-quoted empty TOML default was not replaced with one bound external root.' }
+
+    $invalidRootCases = @(
+        [pscustomobject]@{ Name = 'nonempty'; Line = 'controller_state_root = "D:\\already-set"' },
+        [pscustomobject]@{ Name = 'malformed'; Line = 'controller_state_root = null' },
+        [pscustomobject]@{ Name = 'duplicate'; Line = 'controller_state_root = ""' + "`n" + 'controller_state_root = ""' }
+    )
+    foreach ($invalidRootCase in $invalidRootCases) {
+        [IO.File]::WriteAllText($configPath, $invalidRootCase.Line + "`n" + $baselineConfig, (New-Object System.Text.UTF8Encoding($false)))
+        $invalidRootHash = Get-FileSha256 $configPath
+        $invalidRootRejected = $false
+        try { Set-TaskVerificationConfig $taskRepo $entry $externalStateRoot | Out-Null } catch { $invalidRootRejected = $true }
+        if (-not $invalidRootRejected -or (Get-FileSha256 $configPath) -cne $invalidRootHash) { throw "Invalid controller state root case '$($invalidRootCase.Name)' did not reject without changing config." }
+    }
+
+    [IO.File]::WriteAllText($configPath, $initDefaultConfig, (New-Object System.Text.UTF8Encoding($false)))
     $legacy = Set-TaskVerificationConfig $taskRepo $entry
     $legacyConfig = Get-Content -Raw -LiteralPath $configPath
-    if ($legacyConfig -match '(?m)^controller_state_root\s*=') { throw 'Default task config acquired an isolated controller-state field.' }
+    if ($legacyConfig -notmatch '(?m)^controller_state_root\s*=\s*""\s*$') { throw 'Default isolated-state field changed on the ordinary evaluation path.' }
     if ($null -ne $legacy.ControllerStateRoot) { throw 'Default task config metadata acquired isolated state provenance.' }
 } finally {
     Remove-Item -LiteralPath $configTestRoot -Recurse -Force -ErrorAction SilentlyContinue

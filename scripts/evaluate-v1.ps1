@@ -534,11 +534,24 @@ function Set-TaskVerificationConfig([string]$TaskPath, [object]$Entry, [string]$
         if ($stateWithinRepository -or $repositoryWithinState) {
             throw 'Isolated controller state root must be separate from the task checkout.'
         }
-        if ([regex]::IsMatch($text, '(?m)^controller_state_root\s*=')) {
-            throw 'Fresh isolated task config unexpectedly already contains controller_state_root.'
-        }
         $quotedStateRoot = ConvertTo-Json -InputObject $stateRoot -Compress
-        $text = 'controller_state_root = ' + $quotedStateRoot + "`n" + $text
+        $stateRootLines = [regex]::Matches($text, '(?m)^[ \t]*controller_state_root\b[^\n]*$')
+        if ($stateRootLines.Count -gt 1) {
+            throw 'Isolated task config contains duplicate controller_state_root settings.'
+        }
+        if ($stateRootLines.Count -eq 1) {
+            # `fabric init` emits this default empty TOML string. Replace only
+            # that exact empty setting; malformed or operator-supplied values
+            # remain an error and the config file is not written on failure.
+            $emptyStateRoot = [regex]::Match($text, '(?m)^(?<prefix>[ \t]*controller_state_root[ \t]*=[ \t]*)(?<value>(?<quote>[\x22\x27])\k<quote>)[ \t]*(?:\x23[^\r\n]*)?\r?$')
+            if (-not $emptyStateRoot.Success) {
+                throw 'Isolated task config controller_state_root must be a single empty TOML string before binding.'
+            }
+            $value = $emptyStateRoot.Groups['value']
+            $text = $text.Substring(0, $value.Index) + $quotedStateRoot + $text.Substring($value.Index + $value.Length)
+        } else {
+            $text = 'controller_state_root = ' + $quotedStateRoot + "`n" + $text
+        }
     }
     Set-Content -NoNewline -Encoding utf8 -LiteralPath $configPath $text
     return [ordered]@{

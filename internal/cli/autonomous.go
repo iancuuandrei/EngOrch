@@ -94,6 +94,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	plannerContext := fs.String("planner-context", "", "planner evidence mode: source-bounded-v1 or pinned go-source-context-v1/go-source-context-v2")
 	plannerContextRIExecutable := fs.String("planner-context-ri-executable", "", "absolute path to the pinned Go-source RI parser (required for either go-source-context mode)")
 	plannerContextRIExecutableSHA256 := fs.String("planner-context-ri-executable-sha256", "", "lowercase SHA-256 of the pinned Go-source RI parser")
+	plannerContextParseCache := fs.Bool("planner-context-parse-cache", false, "reuse local Go parser facts for go-source-context-v2 only")
 	promptRecipe := fs.String("prompt-recipe", "", "opt in to cache-prefix-v1 prompt ordering")
 	prepareOnly := fs.Bool("prepare-only", false, "accept the graph and confirm its workspace, then return before explorer or writer dispatch")
 	goalFile := fs.String("file", "", "read objective from file")
@@ -123,6 +124,13 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	if err := validateAutonomousPlannerContext(*plannerContext, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256); err != nil {
 		return err
 	}
+	plannerParseCacheVersion := 0
+	if *plannerContextParseCache {
+		if err := validatePlannerParseCacheVersion(*plannerContext, 1); err != nil {
+			return err
+		}
+		plannerParseCacheVersion = 1
+	}
 	if *promptRecipe != "" && *promptRecipe != "cache-prefix-v1" {
 		return errors.New("prompt-recipe must be empty or cache-prefix-v1")
 	}
@@ -137,7 +145,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 		if err := validateAutonomousObjective(objective); err != nil {
 			return err
 		}
-		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *prepareOnly, out)
+		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *prepareOnly, out)
 	}
 	if fs.NArg() != 1 || fs.Arg(0) == "" {
 		return errors.New("run --autonomous requires one objective or --file PATH")
@@ -145,7 +153,17 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	if err := validateAutonomousObjective(fs.Arg(0)); err != nil {
 		return err
 	}
-	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *prepareOnly, out)
+	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *prepareOnly, out)
+}
+
+func validatePlannerParseCacheVersion(plannerContext string, version int) error {
+	if version == 0 {
+		return nil
+	}
+	if version != 1 || plannerContext != autonomousPlannerContextGoSourceV2 {
+		return errors.New("planner-context-parse-cache requires go-source-context-v2")
+	}
+	return nil
 }
 
 func readIsolatedWriterPolicy(path string) (isolatedWriterPolicyFile, error) {
@@ -247,7 +265,7 @@ func validateAutonomousObjective(objective string) error {
 	return nil
 }
 
-func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, parallelWriters bool, isolationPolicy *isolatedWriterPolicyFile, plannerContext, plannerContextRIExecutable, plannerContextRIExecutableSHA256, promptRecipe string, prepareOnly bool, out io.Writer) error {
+func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, parallelWriters bool, isolationPolicy *isolatedWriterPolicyFile, plannerContext string, plannerParseCacheVersion int, plannerContextRIExecutable, plannerContextRIExecutableSHA256, promptRecipe string, prepareOnly bool, out io.Writer) error {
 	if err := validateAutonomousObjective(objective); err != nil {
 		return err
 	}
@@ -255,6 +273,9 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 		return errors.New("parallel-writers and isolated-writers are mutually exclusive")
 	}
 	if err := validateAutonomousPlannerContext(plannerContext, plannerContextRIExecutable, plannerContextRIExecutableSHA256); err != nil {
+		return err
+	}
+	if err := validatePlannerParseCacheVersion(plannerContext, plannerParseCacheVersion); err != nil {
 		return err
 	}
 	if promptRecipe != "" && promptRecipe != "cache-prefix-v1" {
@@ -344,6 +365,7 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 			Mode: "autonomous-v1", MaxRepairs: maxRepairs, PromptRecipe: promptRecipe, Context: "bounded-v1",
 			PlannerContext: plannerContext, PlannerContextRIExecutable: plannerContextRIExecutable,
 			PlannerContextRIExecutableSHA256: plannerContextRIExecutableSHA256,
+			PlannerParseCacheVersion:         plannerParseCacheVersion,
 			GraphVersion:                     1, MaxParallel: maxParallel, RepairPlanningVersion: 1,
 			ParallelImplementationVersion: parallelImplementationVersion,
 			IsolatedImplementationVersion: isolatedImplementationVersion, IsolationCapacity: isolationCapacity, IsolationEstimate: isolationEstimate,

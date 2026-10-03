@@ -201,9 +201,14 @@ func TestAutonomousGoSourcePlannerContextRequiresAndBindsPinnedParser(t *testing
 	policy := s.Creation.Execution
 	if policy == nil ||
 		policy.PlannerContext != autonomousPlannerContextGoSourceV1 ||
+		policy.PlannerParseCacheVersion != 0 ||
 		policy.PlannerContextRIExecutable != parser ||
 		policy.PlannerContextRIExecutableSHA256 != parserHash {
 		t.Fatalf("explicit parser provenance was not bound unchanged in run creation: %#v", policy)
+	}
+	policyBytes, err := canonical.Bytes(policy)
+	if err != nil || strings.Contains(string(policyBytes), "planner_parse_cache_version") {
+		t.Fatalf("disabled parser cache changed the legacy policy encoding: %s (%v)", policyBytes, err)
 	}
 
 	v2Root := autonomousCLIFixture(t)
@@ -211,6 +216,7 @@ func TestAutonomousGoSourcePlannerContextRequiresAndBindsPinnedParser(t *testing
 	v2Err := Execute(context.Background(), []string{
 		"run", "--autonomous", "--prepare-only", "--max-parallel", "1",
 		"--planner-context", autonomousPlannerContextGoSourceV2,
+		"--planner-context-parse-cache",
 		"--planner-context-ri-executable", parser,
 		"--planner-context-ri-executable-sha256", parserHash,
 		"A bounded v2 fixture objective",
@@ -227,8 +233,29 @@ func TestAutonomousGoSourcePlannerContextRequiresAndBindsPinnedParser(t *testing
 		t.Fatal(err)
 	}
 	v2Policy := v2Snapshot.Creation.Execution
-	if v2Policy == nil || v2Policy.PlannerContext != autonomousPlannerContextGoSourceV2 || v2Policy.PlannerContextRIExecutable != parser || v2Policy.PlannerContextRIExecutableSHA256 != parserHash {
+	if v2Policy == nil || v2Policy.PlannerContext != autonomousPlannerContextGoSourceV2 || v2Policy.PlannerParseCacheVersion != 1 || v2Policy.PlannerContextRIExecutable != parser || v2Policy.PlannerContextRIExecutableSHA256 != parserHash {
 		t.Fatalf("v2 parser provenance was not bound unchanged in run creation: %#v", v2Policy)
+	}
+}
+
+func TestPlannerParseCacheFlagIsV2OnlyAndVersioned(t *testing.T) {
+	for _, test := range []struct {
+		mode    string
+		version int
+		wantErr bool
+	}{
+		{mode: "", version: 0},
+		{mode: autonomousPlannerContextGoSourceV1, version: 0},
+		{mode: autonomousPlannerContextGoSourceV2, version: 0},
+		{mode: autonomousPlannerContextGoSourceV2, version: 1},
+		{mode: autonomousPlannerContextGoSourceV1, version: 1, wantErr: true},
+		{mode: autonomousPlannerContextSourceBoundedV1, version: 1, wantErr: true},
+		{mode: autonomousPlannerContextGoSourceV2, version: 2, wantErr: true},
+	} {
+		err := validatePlannerParseCacheVersion(test.mode, test.version)
+		if (err != nil) != test.wantErr {
+			t.Fatalf("unexpected parse-cache validation for mode=%q version=%d: %v", test.mode, test.version, err)
+		}
 	}
 }
 
@@ -263,6 +290,8 @@ func TestAutonomousCLIRejectsInvalidOptionsAndNonAutonomousResume(t *testing.T) 
 		{"run", "--autonomous", "--max-parallel", "not-a-number", "objective"},
 		{"run", "--autonomous", "--planner-context", "unsupported", "objective"},
 		{"run", "--autonomous", "--planner-context", autonomousPlannerContextGoSourceV1, "objective"},
+		{"run", "--autonomous", "--planner-context-parse-cache", "objective"},
+		{"run", "--autonomous", "--planner-context", autonomousPlannerContextGoSourceV1, "--planner-context-parse-cache", "objective"},
 		{"run", "--autonomous", "--planner-context-ri-executable", "C:\\tools\\ri.exe", "--planner-context-ri-executable-sha256", strings.Repeat("a", 64), "objective"},
 		{"run", "--autonomous", "--prompt-recipe", "unsupported", "objective"},
 		{"run", "--autonomous"},

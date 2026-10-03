@@ -282,3 +282,26 @@ integrated increment, without resurrecting a G0 promotion ladder.
   removed while unrelated facts survive, and an all-omitted candidate rejects
   with no usable graph. Independent review approves both changes. The original
   full-suite run does not qualify this amendment; a clean rerun is required.
+
+## Checkpoint — v1.0.8 integrated; v1.0.9 candidate
+
+- v1.0.8 at `16174ba460f7aacaea0238b87552e8ff9ec04214` passed the clean
+  full Go suite (control 918.712 s, CLI 153.859 s, RI 72.078 s), hosted run
+  `37151367477`, and direct Sonar enumeration (zero issues, 0.7% duplication).
+  Public main/dev contain that SHA; automation-authored PR #17 is merged.
+- v1.0.9 adds opt-in committed-source planner parse caching, payload-free
+  `checkpoint RUN` inspection, and the evaluator's empty controller-root
+  replacement fix. Independent review and focused regressions passed.
+  Cache replay preserves admitted evidence; final candidate checks remain fresh.
+- Five exploratory samples showed synthetic warm-cache median 605.9 ms versus
+  uncached 759.3 ms; pinned humanize warm 951.6 ms versus uncached 951.4 ms.
+  No material allocation reduction or representative speedup is established.
+  The cache remains optional. CPU/RAM sampling and clean frozen qualification
+  are pending. See the cache and checkpoint guides for limits.
+- v1.0.7 serial/isolation evidence remains 1/2 PASS and 0/2 BLOCKED respectively.
+  The latter stopped before run creation due to evaluator configuration;
+  no failed or exhausted run was resumed. Future arms require new identities
+  and the same public objective v2 on both arms.
+- Contract evidence compilation and automatic compaction observation are
+  separate unintegrated candidates. The v2 goal remains active and fixed-six
+  acceptance remains 5/6 until fresh qualifying evidence proves otherwise.

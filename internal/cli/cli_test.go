@@ -375,3 +375,14 @@ func TestReferenceIsCurrent(t *testing.T) {
 		t.Fatal("regenerate CLI reference with harness reference")
 	}
 }
+
+func TestCheckpointCommandIsRegistered(t *testing.T) {
+	var out bytes.Buffer
+	err := Execute(context.Background(), []string{"checkpoint"}, t.TempDir(), &out)
+	if err == nil || err.Error() != "checkpoint requires one run ID" {
+		t.Fatalf("checkpoint command was not routed to its handler: %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("invalid checkpoint invocation emitted output: %s", out.String())
+	}
+}

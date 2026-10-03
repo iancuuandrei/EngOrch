@@ -179,7 +179,16 @@ func AdmitPlannerGoContext(ctx context.Context, path string) (PlannerGoContextRe
 	}
 	query, truncated, queryHash, queryLen := truncateTaskQuery(s.Creation.Objective)
 	client := ri.Client{Executable: policy.PlannerContextRIExecutable, ExecutableHash: policy.PlannerContextRIExecutableSHA256}
-	corpus, err := ri.CollectCommittedGoCorpus(ctx, s.Creation.Repository, client, "", query)
+	var corpus ri.GoCommittedCorpus
+	if policy.PlannerParseCacheVersion == 1 {
+		cacheDir, cacheErr := ensurePlannerParseCacheDir(s.Creation.Repository, policy.PlannerContextRIExecutableSHA256)
+		if cacheErr != nil {
+			return PlannerGoContextRecord{}, cacheErr
+		}
+		corpus, err = ri.CollectCommittedGoCorpusWithOptions(ctx, s.Creation.Repository, client, cacheDir, query, ri.GoCorpusOptions{EnableParseCache: true})
+	} else {
+		corpus, err = ri.CollectCommittedGoCorpus(ctx, s.Creation.Repository, client, "", query)
+	}
 	if err != nil {
 		return PlannerGoContextRecord{}, err
 	}

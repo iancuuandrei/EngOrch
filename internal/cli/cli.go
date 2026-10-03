@@ -104,9 +104,10 @@ var commands = []Command{
 	{"plan", "OBJECTIVE or --file PATH", "Create a plan from exact objective text or a bounded UTF-8 file using the explicitly configured runtime and access profile."},
 	{"status", "", "List validated local run IDs, workflow/lifecycle states and plan IDs without input or evidence bodies."},
 	{"inspect", "[RUN] [--export-jsonl]", "Replay one run and show its bound inputs and state, or export its validated canonical event history."},
+	{"checkpoint", "RUN", "Emit a payload-free checkpoint with exact source/candidate/graph identity, completed tasks, gate status, uncertainty counts and a bounded acceptance conclusion."},
 	{"resume", "[RUN] [ACTOR NONCE] or --autonomous [RUN]", "Resume planning, explicitly reopen a settled pause with ACTOR and NONCE, or continue one bounded autonomous run without resending uncertain work."},
 	{"approve", "RUN PLAN ACTOR", "Approve one exact plan with an explicit human actor."},
-	{"run", "RUN or --autonomous [--prepare-only] [--max-repairs N] [--max-parallel N] [--parallel-writers | --isolated-writers --isolation-policy PATH] [--planner-context source-bounded-v1|go-source-context-v1|go-source-context-v2] [--planner-context-ri-executable PATH --planner-context-ri-executable-sha256 SHA256] [--prompt-recipe cache-prefix-v1] OBJECTIVE or --file PATH", "Create or validate an approved run's isolated writer worktree, or create and advance a bounded autonomous coding run; either Go-source planner context version requires an explicit absolute parser path and lowercase SHA-256; parallel-writers opts into up to two independent initial implementation tasks; isolated-writers requires a versioned resource policy and creates a resource-bounded initial cohort in separate worktrees; isolated-writers and parallel-writers are exclusive; prompt-recipe opts into cache-prefix-v1 request ordering; prepare-only returns after graph and workspace confirmation."},
+	{"run", "RUN or --autonomous [--prepare-only] [--max-repairs N] [--max-parallel N] [--parallel-writers | --isolated-writers --isolation-policy PATH] [--planner-context source-bounded-v1|go-source-context-v1|go-source-context-v2] [--planner-context-ri-executable PATH --planner-context-ri-executable-sha256 SHA256] [--planner-context-parse-cache] [--prompt-recipe cache-prefix-v1] OBJECTIVE or --file PATH", "Create or validate an approved run's isolated writer worktree, or create and advance a bounded autonomous coding run; either Go-source planner context version requires an explicit absolute parser path and lowercase SHA-256; planner-context-parse-cache is a versioned v2-only local RI optimization; parallel-writers opts into up to two independent initial implementation tasks; isolated-writers requires a versioned resource policy and creates a resource-bounded initial cohort in separate worktrees; isolated-writers and parallel-writers are exclusive; prompt-recipe opts into cache-prefix-v1 request ordering; prepare-only returns after graph and workspace confirmation."},
 	{"reconcile", "RUN", "Observe unknown local commit, RI import/publication, workspace or file effects without retrying writes."},
 	{"ri prepare-import", "RUN PLAN_JSON", "Validate an import plan and return its exact effect approval target."},
 	{"ri import", "RUN PLAN_JSON INTENT_ID ACTOR", "Execute an exactly authorized, journaled local SCIP import."},
@@ -284,6 +285,8 @@ func Execute(ctx context.Context, args []string, cwd string, out io.Writer) (res
 		return pushLeaseCommand(ctx, *root, command, args, out)
 	case "ri":
 		return riCommand(ctx, *root, args, out)
+	case "checkpoint":
+		return checkpointCommand(ctx, *root, args, out)
 	case "runtime-usage":
 		if len(args) != 1 {
 			return errors.New("runtime-usage requires one journal path")

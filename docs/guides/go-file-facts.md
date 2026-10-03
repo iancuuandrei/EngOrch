@@ -178,6 +178,21 @@ Example:
 fabric --root D:\src\project ri candidate-query <run-id> D:\tools\engorch-ri.exe <exe-sha256> go-graph-spec.json candidate-query.json
 ```
 
+## Planner parser cache
+
+Autonomous `go-source-context-v2` runs can opt into a local derived parser cache
+with `--planner-context-parse-cache`. The flag is rejected for every other
+planner context. Its version is recorded in the immutable run policy; the
+absolute cache path is derived locally from the operating-system user cache,
+the checkout identity, and the pinned RI executable digest, and is not stored
+in the run journal or planner prompt. The cache remains outside the repository.
+
+This only avoids repeated parsing of unchanged committed Go files. It does not
+change the admitted source bindings, graph or context digests, or planner input
+bytes. Replay uses the durable admitted record and does not inspect or recreate
+the cache. The cache may therefore be removed to reclaim space; the next new
+v2 admission reparses source with the explicitly pinned RI executable.
+
 ## Advisory topology query
 
 `fabric ri topology EXE EXE_SHA256 SPEC_JSON CHANGED_PATHS_JSON MAX_GROUP_FILES [CACHE_DIR]`

@@ -58,6 +58,10 @@ type ExecutionPolicy struct {
 	// PlannerContext opts planning into a bounded committed-source manifest.
 	// Empty retains historic planner input identity exactly.
 	PlannerContext string `json:"planner_context,omitempty"`
+	// PlannerParseCacheVersion opts Go-source-context-v2 into local reuse of
+	// validated, content-addressed source syntax facts. Zero preserves the
+	// existing collection behavior; cache observations grant no authority.
+	PlannerParseCacheVersion int `json:"planner_parse_cache_version,omitempty"`
 	// PlannerContextRIExecutable and PlannerContextRIExecutableSHA256 pin the
 	// local read-only parser used only by go-source-context-v1 admission. They
 	// are immutable run inputs and do not authorize a model or repository effect.
@@ -105,6 +109,12 @@ func (p ExecutionPolicy) Validate() error {
 		}
 	} else if p.PlannerContextRIExecutable != "" || p.PlannerContextRIExecutableSHA256 != "" {
 		return errors.New("RI planner context binding requires Go planner context")
+	}
+	if p.PlannerParseCacheVersion != 0 && p.PlannerParseCacheVersion != 1 {
+		return errors.New("invalid planner parse-cache version")
+	}
+	if p.PlannerParseCacheVersion == 1 && p.PlannerContext != plannerContextGoSourceV2 {
+		return errors.New("planner parse cache requires go-source-context-v2")
 	}
 	if p.GraphVersion != 0 && p.GraphVersion != 1 {
 		return errors.New("invalid execution graph version")
