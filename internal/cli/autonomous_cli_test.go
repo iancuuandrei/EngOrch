@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -136,6 +138,67 @@ func TestAutonomousPlannerContextOptInIsIndependentOfSchedulerAndRoleContext(t *
 	}
 }
 
+func TestAutonomousGoSourcePlannerContextRequiresAndBindsPinnedParser(t *testing.T) {
+	parser, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parserBytes, err := os.ReadFile(parser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(parserBytes)
+	parserHash := hex.EncodeToString(sum[:])
+	if err := validateAutonomousPlannerContext(autonomousPlannerContextGoSourceV1, parser, parserHash); err != nil {
+		t.Fatalf("valid pinned parser binding rejected: %v", err)
+	}
+
+	for _, test := range []struct {
+		name, mode, path, hash string
+	}{
+		{name: "go context missing binding", mode: autonomousPlannerContextGoSourceV1},
+		{name: "go context missing hash", mode: autonomousPlannerContextGoSourceV1, path: parser},
+		{name: "relative parser path", mode: autonomousPlannerContextGoSourceV1, path: "ri.exe", hash: parserHash},
+		{name: "unclean parser path", mode: autonomousPlannerContextGoSourceV1, path: filepath.Dir(parser) + string(os.PathSeparator) + "." + string(os.PathSeparator) + filepath.Base(parser), hash: parserHash},
+		{name: "uppercase hash", mode: autonomousPlannerContextGoSourceV1, path: parser, hash: strings.ToUpper(parserHash)},
+		{name: "binding with legacy mode", mode: autonomousPlannerContextSourceBoundedV1, path: parser, hash: parserHash},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := validateAutonomousPlannerContext(test.mode, test.path, test.hash); err == nil {
+				t.Fatal("invalid planner context binding was accepted")
+			}
+		})
+	}
+
+	root := autonomousCLIFixture(t)
+	var out bytes.Buffer
+	err = Execute(context.Background(), []string{
+		"run", "--autonomous", "--prepare-only", "--max-parallel", "1",
+		"--planner-context", autonomousPlannerContextGoSourceV1,
+		"--planner-context-ri-executable", parser,
+		"--planner-context-ri-executable-sha256", parserHash,
+		"A bounded fixture objective",
+	}, root, &out)
+	if err == nil {
+		t.Fatal("fixture should stop before external role dispatch")
+	}
+	var failure autonomousFailure
+	if decodeErr := json.Unmarshal(out.Bytes(), &failure); decodeErr != nil || failure.RunID == "" {
+		t.Fatalf("failure did not identify the locally prepared run: %s (%v)", out.String(), decodeErr)
+	}
+	s, err := control.Inspect(filepath.Join(root, ".harness", "runs", failure.RunID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := s.Creation.Execution
+	if policy == nil ||
+		policy.PlannerContext != autonomousPlannerContextGoSourceV1 ||
+		policy.PlannerContextRIExecutable != parser ||
+		policy.PlannerContextRIExecutableSHA256 != parserHash {
+		t.Fatalf("explicit parser provenance was not bound unchanged in run creation: %#v", policy)
+	}
+}
+
 func TestAutonomousPromptRecipeIsExplicitlyBoundInCreation(t *testing.T) {
 	root := autonomousCLIFixture(t)
 	var out bytes.Buffer
@@ -166,6 +229,8 @@ func TestAutonomousCLIRejectsInvalidOptionsAndNonAutonomousResume(t *testing.T) 
 		{"run", "--autonomous", "--max-parallel", "9", "objective"},
 		{"run", "--autonomous", "--max-parallel", "not-a-number", "objective"},
 		{"run", "--autonomous", "--planner-context", "unsupported", "objective"},
+		{"run", "--autonomous", "--planner-context", autonomousPlannerContextGoSourceV1, "objective"},
+		{"run", "--autonomous", "--planner-context-ri-executable", "C:\\tools\\ri.exe", "--planner-context-ri-executable-sha256", strings.Repeat("a", 64), "objective"},
 		{"run", "--autonomous", "--prompt-recipe", "unsupported", "objective"},
 		{"run", "--autonomous"},
 		{"resume", "--autonomous", "one", "two"},

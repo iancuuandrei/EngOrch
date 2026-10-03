@@ -2,6 +2,7 @@ package control
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 
 	"harness.local/engorch/internal/access"
@@ -13,6 +14,7 @@ import (
 	"harness.local/engorch/internal/journal"
 	"harness.local/engorch/internal/repository"
 	"harness.local/engorch/internal/runtime"
+	"harness.local/engorch/internal/safepath"
 	"harness.local/engorch/internal/worktree"
 )
 
@@ -55,8 +57,13 @@ type ExecutionPolicy struct {
 	// PlannerContext opts planning into a bounded committed-source manifest.
 	// Empty retains historic planner input identity exactly.
 	PlannerContext string `json:"planner_context,omitempty"`
-	GraphVersion   int    `json:"graph_version,omitempty"`
-	MaxParallel    int    `json:"max_parallel,omitempty"`
+	// PlannerContextRIExecutable and PlannerContextRIExecutableSHA256 pin the
+	// local read-only parser used only by go-source-context-v1 admission. They
+	// are immutable run inputs and do not authorize a model or repository effect.
+	PlannerContextRIExecutable       string `json:"planner_context_ri_executable,omitempty"`
+	PlannerContextRIExecutableSHA256 string `json:"planner_context_ri_executable_sha256,omitempty"`
+	GraphVersion                     int    `json:"graph_version,omitempty"`
+	MaxParallel                      int    `json:"max_parallel,omitempty"`
 	// RepairPlanningVersion opts new graph runs into candidate-bound design
 	// tasks that refine never-started repair write paths within original scope.
 	RepairPlanningVersion int `json:"repair_planning_version,omitempty"`
@@ -83,8 +90,15 @@ func (p ExecutionPolicy) Validate() error {
 	if p.Context != "" && p.Context != taskContextBoundedV1 {
 		return errors.New("invalid execution task context")
 	}
-	if p.PlannerContext != "" && p.PlannerContext != plannerContextSourceBoundedV1 {
+	if p.PlannerContext != "" && p.PlannerContext != plannerContextSourceBoundedV1 && p.PlannerContext != plannerContextGoSourceV1 {
 		return errors.New("invalid execution planner context")
+	}
+	if p.PlannerContext == plannerContextGoSourceV1 {
+		if p.PlannerContextRIExecutable == "" || !filepath.IsAbs(p.PlannerContextRIExecutable) || filepath.Clean(p.PlannerContextRIExecutable) != p.PlannerContextRIExecutable || safepath.RequireDigest(p.PlannerContextRIExecutableSHA256) != nil {
+			return errors.New("Go planner context requires a pinned RI executable")
+		}
+	} else if p.PlannerContextRIExecutable != "" || p.PlannerContextRIExecutableSHA256 != "" {
+		return errors.New("RI planner context binding requires Go planner context")
 	}
 	if p.GraphVersion != 0 && p.GraphVersion != 1 {
 		return errors.New("invalid execution graph version")
@@ -197,6 +211,7 @@ type Snapshot struct {
 	AgentDispatch      map[string]AgentDispatchState      `json:"agent_dispatch,omitempty"`
 	TaskContexts       []TaskContextRecord                `json:"task_contexts,omitempty"`
 	PlannerContext     *PlannerContextRecord              `json:"planner_context,omitempty"`
+	PlannerGoContext   *PlannerGoContextRecord            `json:"planner_go_context,omitempty"`
 	Graph              *GraphState                        `json:"graph,omitempty"`
 	Lifecycle          LifecycleState                     `json:"lifecycle"`
 }
@@ -710,6 +725,14 @@ func Replay(events []journal.Event) (Snapshot, error) {
 				return s, err
 			}
 			if err := replayPlannerContext(&s, record); err != nil {
+				return s, err
+			}
+		case "planner.go-context-admitted":
+			var record PlannerGoContextRecord
+			if err := canonical.Decode(e.Payload, &record); err != nil {
+				return s, err
+			}
+			if err := replayPlannerGoContext(&s, record); err != nil {
 				return s, err
 			}
 		case "graph.recorded", "graph.progress", "graph.revised":

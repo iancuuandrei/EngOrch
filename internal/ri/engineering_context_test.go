@@ -37,6 +37,9 @@ func TestCompileGoContextBindsExactGraphSourceAndQuery(t *testing.T) {
 	if first.Coverage != "PARTIAL" || first.GraphDigest != input.Graph.Digest || len(first.Selection.Selected) != 1 || len(first.Symbols) != 1 || first.Symbols[0].Label != "F" {
 		t.Fatalf("incorrect evidence: %+v", first)
 	}
+	if first.Digest != "b5fce9e45c2899d7f0b1f15045527efde6299d7917f5741142712d786cfb922a" {
+		t.Fatalf("legacy context fixture digest changed: %s", first.Digest)
+	}
 	before := input.Objective
 	input.Objective = "Explain F"
 	changed, err := CompileGoContext(input)
@@ -167,4 +170,82 @@ func TestCompileGoContextTruncatesExcessDeclarationHints(t *testing.T) {
 	if !manifest.HintsTruncated || len(manifest.Selection.Selected) != 12 {
 		t.Fatal("hint overflow was not bounded and recorded")
 	}
+}
+
+func TestCompileGoContextV2IncludesBoundedCallerChainExcerpts(t *testing.T) {
+	producer := strings.Repeat("a", 64)
+	var source strings.Builder
+	source.WriteString("package p\nfunc SplitLines() {}\n")
+	for _, function := range []struct{ name, body string }{
+		{"WriteUnifiedDiff", "SplitLines()"},
+		{"GetUnifiedDiffString", "WriteUnifiedDiff()"},
+		{"ExampleGetUnifiedDiffCode", "GetUnifiedDiffString()"},
+	} {
+		source.WriteString(strings.Repeat("// unrelated padding keeps caller spans separate\n", 300))
+		source.WriteString("func " + function.name + "() { " + function.body + " }\n")
+	}
+	source.WriteString(strings.Repeat("// another separated wrapper\n", 300))
+	source.WriteString("func ExampleOuterWrapper() { ExampleGetUnifiedDiffCode() }\n")
+	text := source.String()
+	declarations := []GoSymbol{
+		{Name: "SplitLines", Kind: "function_declaration", Range: graphSpan(text, "SplitLines", 0)},
+		{Name: "WriteUnifiedDiff", Kind: "function_declaration", Range: graphSpan(text, "WriteUnifiedDiff", 0)},
+		{Name: "GetUnifiedDiffString", Kind: "function_declaration", Range: graphSpan(text, "GetUnifiedDiffString", 0)},
+		{Name: "ExampleGetUnifiedDiffCode", Kind: "function_declaration", Range: graphSpan(text, "ExampleGetUnifiedDiffCode", 0)},
+	}
+	calls := []GoCall{
+		{Spelling: "SplitLines", Resolution: "UNRESOLVED", Range: graphSpan(text, "SplitLines", strings.Index(text, "func WriteUnifiedDiff"))},
+		{Spelling: "WriteUnifiedDiff", Resolution: "UNRESOLVED", Range: graphSpan(text, "WriteUnifiedDiff", strings.Index(text, "func GetUnifiedDiffString"))},
+		{Spelling: "GetUnifiedDiffString", Resolution: "UNRESOLVED", Range: graphSpan(text, "GetUnifiedDiffString", strings.Index(text, "func ExampleGetUnifiedDiffCode"))},
+	}
+	file := graphInput("src/diff.go", text, GoPackageBinding{ImportPath: "example/p", ModulePath: "example"}, declarations, nil, calls, nil, producer)
+	graph, err := BuildGoEngineeringGraph(GoGraphSnapshotInput{SourceID: strings.Repeat("c", 64), ProducerSHA256: producer, Files: []GoGraphFileInput{file}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := GoContextInput{SourceID: graph.SourceID, Graph: graph, Objective: "Fix SplitLines", Files: []taskcontext.File{{Path: file.Facts.Path, Hash: file.Facts.SourceSHA256, Content: file.Source}}, Limits: taskcontext.DefaultLimits()}
+	v1, err := CompileGoContext(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v1.ContractExcerpts) != 0 {
+		t.Fatal("legacy context unexpectedly gained extra excerpts")
+	}
+	input.ContextVersion = goContextV2
+	v2, err := CompileGoContext(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2Again, err := CompileGoContext(input)
+	if err != nil || v2Again.Digest != v2.Digest {
+		t.Fatalf("v2 caller context is nondeterministic: %v", err)
+	}
+	totalBytes := v2.Selection.SelectedBytes
+	foundExample := false
+	for _, excerpt := range v2.ContractExcerpts {
+		totalBytes += int(excerpt.End - excerpt.Start)
+		if excerpt.Reason != "graph_anchor" && excerpt.Reason != "graph_caller" {
+			t.Fatalf("unexpected excerpt reason %q", excerpt.Reason)
+		}
+		if strings.Contains(excerpt.Content, "ExampleGetUnifiedDiffCode") {
+			foundExample = true
+		}
+	}
+	if v2.Schema != "engorch.ri.go-context.v2" || !foundExample || len(v2.ContractExcerpts) < 2 || totalBytes > goContextV2MaxPromptBytes || len(v2.ContractExcerpts) > goContextV2MaxExtraExcerpts {
+		t.Fatalf("v2 caller chain/budget mismatch: foundExample=%v bytes=%d excerpts=%d", foundExample, totalBytes, len(v2.ContractExcerpts))
+	}
+	if !v2.FactsTruncated {
+		t.Fatal("v2 caller-depth limit did not report a potentially omitted fourth-hop caller")
+	}
+	for _, relation := range v2.Relations {
+		if relation.Range == nil {
+			t.Fatal("v2 exposed a relation without a source range")
+		}
+	}
+	for _, symbol := range v2.Symbols {
+		if symbol.Label == "ExampleGetUnifiedDiffCode" {
+			return
+		}
+	}
+	t.Fatal("v2 did not expose a graph symbol whose range is inside the caller excerpt")
 }

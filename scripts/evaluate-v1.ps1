@@ -25,7 +25,12 @@ policy (init defaults to `go test ./...`) and hashed. Native mode runs
 `fabric run --autonomous` objective plus inspect/usage/diff evidence
 gathering. Fabric and PR5 child calls temporarily prepend the selected Go
 directory and verify bare `go` resolves to that exact executable; caller PATH
-is restored in finally and the executable hash/binding are recorded. PR5Matched mode uses the explicit -PR5BaselineScript with the
+is restored in finally and the executable hash/binding are recorded. The
+`go-source-context-v1` treatment requires an explicit absolute, clean parser
+path and its lowercase SHA-256 via `-PlannerContextRIExecutable` and
+`-PlannerContextRIExecutableSHA256`; no parser is discovered from PATH or the
+environment, and both values are bound in the prepared/evaluated receipts.
+PR5Matched mode uses the explicit -PR5BaselineScript with the
 supplied baseline exe (init with baseline exe/model first, inspect+usage
 with the baseline exe, exact run-identity parsing, diff collected from the
 candidate path because the baseline lacks diff). Task PASS requires a
@@ -58,6 +63,8 @@ param(
     [ValidateSet('Native', 'PR5Matched')][string]$EvalMode = 'Native',
     [string]$Effort = 'high',
     [string]$PlannerContext = '',
+    [string]$PlannerContextRIExecutable = '',
+    [string]$PlannerContextRIExecutableSHA256 = '',
     [ValidateSet('', 'cache-prefix-v1')][string]$PromptRecipe = '',
     [switch]$ParallelWriters,
     [switch]$ValidateWriterEdits,
@@ -75,10 +82,28 @@ $ErrorActionPreference = 'Stop'
 if ($Action -eq 'Evaluate' -and $EvalMode -eq 'PR5Matched' -and ($ParallelWriters -or $ValidateWriterEdits -or $MaxParallel -ne 0)) {
     throw 'Writer and scheduler overrides require Native mode; PR5Matched retains its original invocation.'
 }
-if ($PlannerContext -notin @('', 'source-bounded-v1')) {
-    throw 'PlannerContext must be empty or source-bounded-v1.'
+function Assert-PlannerContextBindingShape([string]$Mode, [string]$Executable, [string]$ExecutableSHA256) {
+    if ($Mode -notin @('', 'source-bounded-v1', 'go-source-context-v1')) {
+        throw 'PlannerContext must be empty, source-bounded-v1, or go-source-context-v1.'
+    }
+    if ($Mode -eq 'go-source-context-v1') {
+        if ([string]::IsNullOrWhiteSpace($Executable) -or [string]::IsNullOrWhiteSpace($ExecutableSHA256)) {
+            throw 'go-source-context-v1 requires PlannerContextRIExecutable and PlannerContextRIExecutableSHA256.'
+        }
+        if (-not [IO.Path]::IsPathFullyQualified($Executable) -or [IO.Path]::GetFullPath($Executable) -cne $Executable) {
+            throw 'PlannerContextRIExecutable must be an absolute clean path, passed unchanged.'
+        }
+        if ($ExecutableSHA256 -cnotmatch '^[0-9a-f]{64}$') {
+            throw 'PlannerContextRIExecutableSHA256 must be 64 lowercase hexadecimal characters.'
+        }
+        return
+    }
+    if ($Executable -ne '' -or $ExecutableSHA256 -ne '') {
+        throw 'PlannerContextRIExecutable and PlannerContextRIExecutableSHA256 require go-source-context-v1.'
+    }
 }
-if ($Action -eq 'Evaluate' -and $EvalMode -eq 'PR5Matched' -and $PlannerContext -ne '') {
+Assert-PlannerContextBindingShape $PlannerContext $PlannerContextRIExecutable $PlannerContextRIExecutableSHA256
+if ($Action -eq 'Evaluate' -and $EvalMode -eq 'PR5Matched' -and ($PlannerContext -ne '' -or $PlannerContextRIExecutable -ne '' -or $PlannerContextRIExecutableSHA256 -ne '')) {
     throw 'PlannerContext requires Native mode; PR5Matched retains its original invocation.'
 }
 if ($Action -eq 'Evaluate' -and $EvalMode -eq 'PR5Matched' -and $PromptRecipe -ne '') {
@@ -107,11 +132,15 @@ function Get-NativeInitArgs([string]$TaskPath, [string]$RuntimePath, [string]$Wr
     return $nativeArgs
 }
 
-function Get-NativeRunArgs([string]$TaskPath, [string]$Objective, [bool]$EnableParallelWriters, [int]$ParallelLimit, [string]$PlannerContext, [string]$PromptRecipe) {
+function Get-NativeRunArgs([string]$TaskPath, [string]$Objective, [bool]$EnableParallelWriters, [int]$ParallelLimit, [string]$PlannerContext = '', [string]$PromptRecipe = '', [string]$PlannerContextRIExecutable = '', [string]$PlannerContextRIExecutableSHA256 = '') {
     if ($ParallelLimit -lt 0 -or $ParallelLimit -gt 8) { throw 'Scheduler override must be 0 (default) or 1..8.' }
     if ($PromptRecipe -notin @('', 'cache-prefix-v1')) { throw 'Unsupported prompt recipe.' }
+    Assert-PlannerContextBindingShape $PlannerContext $PlannerContextRIExecutable $PlannerContextRIExecutableSHA256
     $nativeArgs = @('--root', $TaskPath, 'run', '--autonomous')
     if ($PlannerContext -ne '') { $nativeArgs += @('--planner-context', $PlannerContext) }
+    if ($PlannerContext -eq 'go-source-context-v1') {
+        $nativeArgs += @('--planner-context-ri-executable', $PlannerContextRIExecutable, '--planner-context-ri-executable-sha256', $PlannerContextRIExecutableSHA256)
+    }
     if ($PromptRecipe -ne '') { $nativeArgs += @('--prompt-recipe', $PromptRecipe) }
     if ($EnableParallelWriters) { $nativeArgs += '--parallel-writers' }
     if ($ParallelLimit -ne 0) { $nativeArgs += @('--max-parallel', [string]$ParallelLimit) }
@@ -132,6 +161,16 @@ function Get-FileSha256([string]$Path) {
         try { return ([BitConverter]::ToString($h.ComputeHash($fs)) -replace '-', '').ToLowerInvariant() }
         finally { $fs.Close() }
     } finally { $h.Dispose() }
+}
+
+if ($PlannerContext -eq 'go-source-context-v1') {
+    if (-not (Test-Path -LiteralPath $PlannerContextRIExecutable -PathType Leaf)) {
+        throw 'PlannerContextRIExecutable must name an existing regular file.'
+    }
+    $actualPlannerContextRIExecutableSHA256 = (Get-FileSha256 $PlannerContextRIExecutable).ToLowerInvariant()
+    if ($actualPlannerContextRIExecutableSHA256 -cne $PlannerContextRIExecutableSHA256) {
+        throw 'PlannerContextRIExecutableSHA256 does not match the selected parser executable bytes.'
+    }
 }
 
 function Get-PinnedGoEnvironmentBinding([string]$GoPath) {
@@ -676,6 +715,8 @@ if ($Action -eq 'Prepare') {
             windows_exclusion      = if ($native.Scope -eq 'windows-scoped') { '^TestNocmpIntegration$ (Windows-only atomic tasks; rationale in manifest native_verification)' } else { $null }
             task_completion        = 'NOT RUN'
             planner_context_requested = $PlannerContext
+            planner_context_ri_executable_requested = if ($PlannerContext -eq 'go-source-context-v1') { $PlannerContextRIExecutable } else { $null }
+            planner_context_ri_executable_sha256_requested = if ($PlannerContext -eq 'go-source-context-v1') { $PlannerContextRIExecutableSHA256 } else { $null }
             prompt_recipe_requested = $PromptRecipe
             provider_calls         = 0
             input_tokens           = $null
@@ -699,6 +740,9 @@ if ($Action -eq 'Prepare') {
         run_id                        = $RunId
         mode                          = 'prepare'
         planner_context_requested  = $PlannerContext
+        planner_context_ri_executable_requested = if ($PlannerContext -eq 'go-source-context-v1') { $PlannerContextRIExecutable } else { $null }
+        planner_context_ri_executable_sha256_requested = if ($PlannerContext -eq 'go-source-context-v1') { $PlannerContextRIExecutableSHA256 } else { $null }
+        planner_context_ri_executable_sha256_verified = if ($PlannerContext -eq 'go-source-context-v1') { $actualPlannerContextRIExecutableSHA256 } else { $null }
         prompt_recipe_requested  = $PromptRecipe
         created_utc                   = [DateTime]::UtcNow.ToString('o')
         product_head                  = $productHead
@@ -767,6 +811,12 @@ $preparedPlannerContext = [string]$prior.planner_context_requested
 if ($preparedPlannerContext -ne $PlannerContext) {
     throw 'PlannerContext must match the treatment recorded by the prepared run.'
 }
+$preparedPlannerContextRIExecutable = [string]$prior.planner_context_ri_executable_requested
+$preparedPlannerContextRIExecutableSHA256 = [string]$prior.planner_context_ri_executable_sha256_requested
+if ($preparedPlannerContextRIExecutable -cne $PlannerContextRIExecutable -or
+    $preparedPlannerContextRIExecutableSHA256 -cne $PlannerContextRIExecutableSHA256) {
+    throw 'PlannerContext RI parser path and hash must match the explicit treatment recorded by the prepared run.'
+}
 $preparedPromptRecipe = [string]$prior.prompt_recipe_requested
 if ($preparedPromptRecipe -ne $PromptRecipe) {
     throw 'PromptRecipe must match the treatment recorded by the prepared run.'
@@ -816,6 +866,8 @@ foreach ($entry in $entries) {
         task_id = $entry.id; eval_mode = $EvalMode; terminal_state = 'BLOCKED'
         blocked_reason = $null; fail_reason = $null
         planner_context_requested = $PlannerContext
+        planner_context_ri_executable_requested = if ($PlannerContext -eq 'go-source-context-v1') { $PlannerContextRIExecutable } else { $null }
+        planner_context_ri_executable_sha256_requested = if ($PlannerContext -eq 'go-source-context-v1') { $PlannerContextRIExecutableSHA256 } else { $null }
         prompt_recipe_requested = $PromptRecipe
     }
     try {
@@ -843,7 +895,7 @@ foreach ($entry in $entries) {
             $result.verification_config_sha256 = $verPolicy.ConfigSha
             $result.native_test_scope = $verPolicy.Scope
             Set-Content -NoNewline -Encoding utf8 (Join-Path $taskOutDir 'verification-argv.log') $verPolicy.ArgvText
-            $runArgs = @(Get-NativeRunArgs $taskPath $entry.task ([bool]$ParallelWriters) $MaxParallel $PlannerContext $PromptRecipe)
+            $runArgs = @(Get-NativeRunArgs $taskPath $entry.task ([bool]$ParallelWriters) $MaxParallel $PlannerContext $PromptRecipe $PlannerContextRIExecutable $PlannerContextRIExecutableSHA256)
             $result.parallel_writers_requested = [bool]$ParallelWriters
             $result.writer_edit_validation_requested = [bool]$ValidateWriterEdits
             $result.max_parallel_requested = if ($MaxParallel -eq 0) { $null } else { $MaxParallel }
@@ -874,6 +926,14 @@ foreach ($entry in $entries) {
             $observedPlannerContext = [string]$snap.creation.execution.planner_context
             $result.planner_context_observed = $observedPlannerContext
             if ($observedPlannerContext -ne $PlannerContext) { throw 'Inspected run planner_context does not match the requested treatment.' }
+            $observedPlannerContextRIExecutable = [string]$snap.creation.execution.planner_context_ri_executable
+            $observedPlannerContextRIExecutableSHA256 = [string]$snap.creation.execution.planner_context_ri_executable_sha256
+            $result.planner_context_ri_executable_observed = if ($PlannerContext -eq 'go-source-context-v1') { $observedPlannerContextRIExecutable } else { $null }
+            $result.planner_context_ri_executable_sha256_observed = if ($PlannerContext -eq 'go-source-context-v1') { $observedPlannerContextRIExecutableSHA256 } else { $null }
+            if ($observedPlannerContextRIExecutable -cne $PlannerContextRIExecutable -or
+                $observedPlannerContextRIExecutableSHA256 -cne $PlannerContextRIExecutableSHA256) {
+                throw 'Inspected run RI parser path/hash does not match the requested treatment.'
+            }
             $observedPromptRecipe = [string]$snap.creation.execution.prompt_recipe
             $result.prompt_recipe_observed = $observedPromptRecipe
             if ($observedPromptRecipe -ne $PromptRecipe) { throw 'Inspected run prompt_recipe does not match the requested treatment.' }
@@ -1174,6 +1234,9 @@ $evalRecord = [ordered]@{
     model                  = $Model
     effort                 = $Effort
     planner_context_requested = $PlannerContext
+    planner_context_ri_executable_requested = if ($PlannerContext -eq 'go-source-context-v1') { $PlannerContextRIExecutable } else { $null }
+    planner_context_ri_executable_sha256_requested = if ($PlannerContext -eq 'go-source-context-v1') { $PlannerContextRIExecutableSHA256 } else { $null }
+    planner_context_ri_executable_sha256_verified = if ($PlannerContext -eq 'go-source-context-v1') { $actualPlannerContextRIExecutableSHA256 } else { $null }
     prompt_recipe_requested = $PromptRecipe
     parallel_writers_requested = [bool]$ParallelWriters
     writer_edit_validation_requested = [bool]$ValidateWriterEdits

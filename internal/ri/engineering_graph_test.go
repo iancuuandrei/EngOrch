@@ -90,6 +90,9 @@ func TestBuildGoEngineeringGraphDeterministicRelationsAndQueries(t *testing.T) {
 	if first.Digest != second.Digest || first.Coverage != "PARTIAL" {
 		t.Fatalf("graph was not deterministic/partial: %s %s %s", first.Digest, second.Digest, first.Coverage)
 	}
+	if first.Digest != "3bb6de3c6937904f337a9af98521d6cfaad6245895ebc0703621b47c3b915980" {
+		t.Fatalf("legacy graph fixture digest changed: %s", first.Digest)
+	}
 	if err := ValidateGoEngineeringGraph(first); err != nil {
 		t.Fatal(err)
 	}
@@ -215,6 +218,85 @@ func TestBaseGoGraphUsesSourceIdentityAndCanBePromotedToCandidateOverlay(t *test
 	}
 }
 
+func TestSourceLocalPackageIdentityIsStableAndNeverResolvesImports(t *testing.T) {
+	sourceID := strings.Repeat("c", 64)
+	producer := strings.Repeat("b", 64)
+	firstBinding, err := SourceLocalGoPackageBinding(sourceID, "src/pkg/a.go", "pkg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondBinding, err := SourceLocalGoPackageBinding(sourceID, "src/pkg/b.go", "pkg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	internalTestBinding, err := SourceLocalGoPackageBinding(sourceID, "src/pkg/a_test.go", "pkg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	externalTestBinding, err := SourceLocalGoPackageBinding(sourceID, "src/pkg/external_test.go", "pkg_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherDirectory, err := SourceLocalGoPackageBinding(sourceID, "src/other/c.go", "pkg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstBinding.PackageIdentity != secondBinding.PackageIdentity || firstBinding.PackageIdentity != internalTestBinding.PackageIdentity || firstBinding.PackageIdentity == otherDirectory.PackageIdentity || firstBinding.PackageIdentity == externalTestBinding.PackageIdentity || externalTestBinding.TestOfPackageIdentity != firstBinding.PackageIdentity {
+		t.Fatal("source-local package identity is not stable by source and directory")
+	}
+	localASource := "package pkg\nfunc A() {}\n"
+	localA := graphInput("src/pkg/a.go", localASource, firstBinding, []GoSymbol{{Name: "A", Kind: "function_declaration", Range: graphSpan(localASource, "A", 0)}}, nil, nil, nil, producer)
+	localBSource := "package pkg\nfunc B() {}\n"
+	localB := graphInput("src/pkg/b.go", localBSource, secondBinding, []GoSymbol{{Name: "B", Kind: "function_declaration", Range: graphSpan(localBSource, "B", 0)}}, nil, nil, nil, producer)
+	testSource := "package pkg\nfunc TestA() {}\n"
+	internalTest := graphInput("src/pkg/a_test.go", testSource, internalTestBinding, []GoSymbol{{Name: "TestA", Kind: "function_declaration", Test: true, Range: graphSpan(testSource, "TestA", 0)}}, nil, nil, nil, producer)
+	externalTestSource := "package pkg_test\nfunc TestAExternal() {}\n"
+	externalTest := graphInput("src/pkg/external_test.go", externalTestSource, externalTestBinding, []GoSymbol{{Name: "TestAExternal", Kind: "function_declaration", Test: true, Range: graphSpan(externalTestSource, "TestAExternal", 0)}}, nil, nil, nil, producer)
+	consumerSource := "package use\nimport \"example.com/m/pkg\"\nfunc Use() {}\n"
+	consumer := graphInput("cmd/use.go", consumerSource, GoPackageBinding{ImportPath: "example.com/m/cmd", ModulePath: "example.com/m"}, []GoSymbol{{Name: "Use", Kind: "function_declaration", Range: graphSpan(consumerSource, "Use", 0)}}, []GoImport{{Path: "example.com/m/pkg", Range: graphSpan(consumerSource, `"example.com/m/pkg"`, 0)}}, nil, nil, producer)
+	graph, err := BuildGoEngineeringGraph(GoGraphSnapshotInput{SourceID: sourceID, ProducerSHA256: producer, Files: []GoGraphFileInput{localA, localB, internalTest, externalTest, consumer}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	localNodeID := graphPackageBindingNodeID(firstBinding)
+	var localNode *GoGraphNode
+	for i := range graph.Nodes {
+		if graph.Nodes[i].ID == localNodeID {
+			localNode = &graph.Nodes[i]
+		}
+	}
+	if localNode == nil || localNode.Kind != "source_local_package" || localNode.Label != firstBinding.PackageIdentity {
+		t.Fatalf("source-local package node missing or mislabeled: %+v", localNode)
+	}
+	if !hasGraphEdgeTarget(graph.Edges, "IN_PACKAGE", "src/pkg/a.go", localNodeID) || !hasGraphEdgeTarget(graph.Edges, "IN_PACKAGE", "src/pkg/b.go", localNodeID) || !hasGraphEdgeTarget(graph.Edges, "TESTS", "src/pkg/a_test.go", localNodeID) {
+		t.Fatal("same-directory source files/test did not share source-local package relation")
+	}
+	externalNodeID := graphPackageBindingNodeID(externalTestBinding)
+	if externalNodeID == localNodeID || !hasGraphEdgeTarget(graph.Edges, "TESTS", "src/pkg/external_test.go", localNodeID) || !hasGraphEdgeTarget(graph.Edges, "IN_PACKAGE", "src/pkg/external_test.go", externalNodeID) {
+		t.Fatal("external test package did not retain separate package identity and explicit target")
+	}
+	imports, err := QueryGoImports(graph, GoImportQuery{ImportPath: "example.com/m/pkg", Limit: 10})
+	if err != nil || len(imports) != 1 {
+		t.Fatalf("explicit import query: %#v err=%v", imports, err)
+	}
+	for _, node := range graph.Nodes {
+		if node.ID == imports[0].To && node.Kind != "import" {
+			t.Fatalf("synthetic source-local identity was treated as import resolution: %+v", node)
+		}
+	}
+	if _, err := SourceLocalGoPackageBinding("bad", "src/pkg/a.go", "pkg"); err == nil {
+		t.Fatal("invalid source identity accepted")
+	}
+	if _, err := SourceLocalGoPackageBinding(sourceID, "../escape.go", "pkg"); err == nil {
+		t.Fatal("escaping source path accepted")
+	}
+	wrongDirectory := localA
+	wrongDirectory.Package.SourceDirectory = "src/other"
+	if _, err := BuildGoEngineeringGraph(GoGraphSnapshotInput{SourceID: sourceID, ProducerSHA256: producer, Files: []GoGraphFileInput{wrongDirectory}}); err == nil {
+		t.Fatal("source-local package directory substitution accepted")
+	}
+}
+
 func TestGoEngineeringGraphRejectsAmbiguityBindingsAndBounds(t *testing.T) {
 	producer := strings.Repeat("f", 64)
 	source := "package p\nfunc Run() {}\nfunc Run() {}\nfunc caller() { Run() }\nfunc selector(x T) { x.Run() }\n"
@@ -321,6 +403,15 @@ func largeGoSymbolGraph(t testing.TB, count int) GoEngineeringGraph {
 func hasGoEdge(edges []GoGraphEdge, relation, path, resolution string) bool {
 	for _, edge := range edges {
 		if edge.Relation == relation && edge.Path == path && edge.Resolution == resolution {
+			return true
+		}
+	}
+	return false
+}
+
+func hasGraphEdgeTarget(edges []GoGraphEdge, relation, path, target string) bool {
+	for _, edge := range edges {
+		if edge.Relation == relation && edge.Path == path && edge.To == target {
 			return true
 		}
 	}

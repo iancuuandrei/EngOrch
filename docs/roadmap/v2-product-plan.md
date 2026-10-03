@@ -104,3 +104,23 @@ integrated increment, without resurrecting a G0 promotion ladder.
 - Earlier frozen evaluations and release tags retain their identities. The
   workflow-file selection failure in the previous 0/6 run is repaired; the
   newer 5/6 result does not erase the older result or establish v1.1 completion.
+
+## Current checkpoint — Go planner context candidate
+
+- Public main includes the reviewed RI foundation `v1.0.2`,
+  `cd5240d780de294d23cb34d648255af6960ae714`. Its clean full Go suite,
+  Rust/cross-language tests, independent review and hosted checks passed.
+  Detailed original and amended identities are in the foundation evaluation
+  note; Go test cache reuse is stated explicitly.
+- The next candidate wires immutable, opt-in `go-source-context-v1` into
+  planning. It adds selected-only Git batch reads with size preflight,
+  source-local package identities and context v2 caller/contract excerpts.
+  Default and old source-context identities remain covered by regressions.
+- All six committed corpus/controller admission and replay probes pass without
+  provider effects. Graphs are at most 512 KiB; source excerpts together at
+  most 48 KiB; complete admission records at most 768 KiB. This is offline
+  preparation evidence, not six successful coding tasks.
+- Fresh native fixed-six and supplement evaluation, measured model usage and
+  benefit, and remaining v1.1 gates are next. Resource-vector selection is
+  separate unintegrated work for v1.2; isolated worktrees, serial integration
+  and topology A/B are still outstanding. Later roadmap rows remain active.

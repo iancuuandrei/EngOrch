@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"go/token"
 	"path"
 	"path/filepath"
 	"sort"
@@ -39,9 +40,42 @@ type GoGraphFileInput struct {
 // TestOfImportPath is explicit metadata for an external-test package; an
 // internal *_test.go file is associated with its own supplied ImportPath.
 type GoPackageBinding struct {
-	ImportPath       string `json:"import_path"`
-	ModulePath       string `json:"module_path"`
-	TestOfImportPath string `json:"test_of_import_path,omitempty"`
+	ImportPath            string `json:"import_path"`
+	ModulePath            string `json:"module_path"`
+	TestOfImportPath      string `json:"test_of_import_path,omitempty"`
+	IdentityKind          string `json:"identity_kind,omitempty"`
+	SourceID              string `json:"source_id,omitempty"`
+	SourceDirectory       string `json:"source_directory,omitempty"`
+	PackageName           string `json:"package_name,omitempty"`
+	PackageIdentity       string `json:"package_identity,omitempty"`
+	TestOfPackageIdentity string `json:"test_of_package_identity,omitempty"`
+}
+
+// SourceLocalGoPackageBinding creates a stable package identity from an
+// immutable repository source ID, exact source file path, and parsed package
+// clause. External *_test.go package clauses receive a distinct identity and
+// a syntactic test-of-package relation. No Go import path is inferred.
+func SourceLocalGoPackageBinding(sourceID, sourcePath, packageName string) (GoPackageBinding, error) {
+	if safepath.RequireDigest(sourceID) != nil || safepath.Relative(sourcePath) != nil || filepath.Ext(sourcePath) != ".go" || !validGoPackageName(packageName) {
+		return GoPackageBinding{}, errors.New("invalid source-local Go package input")
+	}
+	directory := path.Dir(sourcePath)
+	identity, err := sourceLocalPackageIdentity(sourceID, directory, packageName)
+	if err != nil {
+		return GoPackageBinding{}, err
+	}
+	binding := GoPackageBinding{IdentityKind: "source_local_v1", SourceID: sourceID, SourceDirectory: directory, PackageName: packageName, PackageIdentity: identity}
+	if strings.HasSuffix(sourcePath, "_test.go") && strings.HasSuffix(packageName, "_test") {
+		testTargetName := strings.TrimSuffix(packageName, "_test")
+		if !validGoPackageName(testTargetName) {
+			return GoPackageBinding{}, errors.New("invalid external Go test package name")
+		}
+		binding.TestOfPackageIdentity, err = sourceLocalPackageIdentity(sourceID, directory, testTargetName)
+		if err != nil {
+			return GoPackageBinding{}, err
+		}
+	}
+	return binding, nil
 }
 
 // GoGeneratorBinding is an explicit, source-bound relation. It records a
@@ -145,7 +179,7 @@ func BuildGoEngineeringGraph(input GoGraphSnapshotInput) (GoEngineeringGraph, er
 	if !lowerDigest(input.SourceID) || (input.CandidateID != "" && !lowerDigest(input.CandidateID)) || !lowerDigest(input.ProducerSHA256) {
 		return GoEngineeringGraph{}, errors.New("Go graph source, candidate, or producer digest is malformed")
 	}
-	files, err := validateGoGraphInputs(input.Files, input.ProducerSHA256)
+	files, err := validateGoGraphInputs(input.Files, input.ProducerSHA256, input.SourceID)
 	if err != nil {
 		return GoEngineeringGraph{}, err
 	}
@@ -165,7 +199,7 @@ func ApplyGoEngineeringOverlay(base GoEngineeringGraph, overlay GoGraphOverlayIn
 	var replacements []GoGraphFile
 	if len(overlay.Replacements) > 0 {
 		var err error
-		replacements, err = validateGoGraphInputs(overlay.Replacements, overlay.ProducerSHA256)
+		replacements, err = validateGoGraphInputs(overlay.Replacements, overlay.ProducerSHA256, base.SourceID)
 		if err != nil {
 			return GoEngineeringGraph{}, err
 		}
@@ -220,7 +254,7 @@ func ValidateGoEngineeringGraph(graph GoEngineeringGraph) error {
 	}
 	totalFacts := 0
 	for i, file := range graph.Files {
-		if err := validateGoGraphFile(file, graph.ProducerSHA256); err != nil {
+		if err := validateGoGraphFile(file, graph.ProducerSHA256, graph.SourceID); err != nil {
 			return err
 		}
 		if i > 0 && graph.Files[i-1].Facts.Path >= file.Facts.Path {
@@ -407,7 +441,7 @@ func QueryGoImpact(graph GoEngineeringGraph, query GoImpactQuery) (GoImpactResul
 	packageByPath := make(map[string]string, len(graph.Files))
 	for _, file := range graph.Files {
 		fileSet[file.Facts.Path] = struct{}{}
-		packageByPath[file.Facts.Path] = graphPackageNodeID(file.Package.ImportPath)
+		packageByPath[file.Facts.Path] = graphPackageBindingNodeID(file.Package)
 	}
 	starts := append([]string(nil), query.Paths...)
 	sort.Strings(starts)
@@ -509,7 +543,7 @@ func QueryGoImpact(graph GoEngineeringGraph, query GoImpactQuery) (GoImpactResul
 	return GoImpactResult{Coverage: "PARTIAL", Paths: paths, Truncated: truncated}, nil
 }
 
-func validateGoGraphInputs(inputs []GoGraphFileInput, producer string) ([]GoGraphFile, error) {
+func validateGoGraphInputs(inputs []GoGraphFileInput, producer, sourceID string) ([]GoGraphFile, error) {
 	if len(inputs) == 0 || len(inputs) > goEngineeringMaxFiles {
 		return nil, errors.New("Go graph file count is outside bounds")
 	}
@@ -533,7 +567,7 @@ func validateGoGraphInputs(inputs []GoGraphFileInput, producer string) ([]GoGrap
 		if err := validateGoFileFacts(facts, facts.Path, facts.SourceSHA256, producer, input.Source); err != nil {
 			return nil, fmt.Errorf("invalid Go facts for %s: %w", facts.Path, err)
 		}
-		if err := validateGoPackageBinding(input.Package, facts.Path); err != nil {
+		if err := validateGoPackageBinding(input.Package, facts.Path, sourceID); err != nil {
 			return nil, err
 		}
 		files = append(files, GoGraphFile{Facts: normalizeGoGraphFacts(facts), Package: input.Package})
@@ -542,14 +576,14 @@ func validateGoGraphInputs(inputs []GoGraphFileInput, producer string) ([]GoGrap
 	return files, nil
 }
 
-func validateGoGraphFile(file GoGraphFile, producer string) error {
+func validateGoGraphFile(file GoGraphFile, producer, sourceID string) error {
 	if file.Facts.ProducerSHA256 != producer || file.Facts.Path == "" || filepath.Ext(file.Facts.Path) != ".go" || file.Facts.Coverage != "PARTIAL" || file.Facts.Schema != goFactsSchema || file.Facts.Language != "go" || file.Facts.ParserVersion != goFactsParserVersion || !lowerDigest(file.Facts.SourceSHA256) || !lowerDigest(file.Facts.BodySHA256) || !lowerDigest(file.Facts.CacheKey) {
 		return errors.New("Go graph contains an invalid file fact binding")
 	}
 	if err := safepath.Relative(file.Facts.Path); err != nil {
 		return errors.New("Go graph contains an invalid file path")
 	}
-	if err := validateGoPackageBinding(file.Package, file.Facts.Path); err != nil {
+	if err := validateGoPackageBinding(file.Package, file.Facts.Path, sourceID); err != nil {
 		return err
 	}
 	if err := validateNormalizedGoGraphFacts(file.Facts); err != nil {
@@ -597,12 +631,45 @@ func validateNormalizedGoGraphFacts(facts GoFileFacts) error {
 	return nil
 }
 
-func validateGoPackageBinding(binding GoPackageBinding, file string) error {
-	if err := safepath.Relative(file); err != nil || len(binding.ImportPath) == 0 || len(binding.ImportPath) > 4096 || len(binding.ModulePath) == 0 || len(binding.ModulePath) > 4096 || !validGoImportPath(binding.ImportPath) || !validGoImportPath(binding.ModulePath) {
-		return errors.New("Go graph package binding is invalid")
+func validateGoPackageBinding(binding GoPackageBinding, file, sourceID string) error {
+	if err := safepath.Relative(file); err != nil || filepath.Ext(file) != ".go" {
+		return errors.New("Go graph package binding has an invalid source path")
 	}
-	if binding.ImportPath != binding.ModulePath && !strings.HasPrefix(binding.ImportPath, strings.TrimSuffix(binding.ModulePath, "/")+"/") {
-		return errors.New("Go package import path is outside its explicit module path")
+	switch binding.IdentityKind {
+	case "":
+		if binding.SourceID != "" || binding.SourceDirectory != "" || binding.PackageIdentity != "" || len(binding.ImportPath) == 0 || len(binding.ImportPath) > 4096 || len(binding.ModulePath) == 0 || len(binding.ModulePath) > 4096 || !validGoImportPath(binding.ImportPath) || !validGoImportPath(binding.ModulePath) {
+			return errors.New("Go graph package binding is invalid")
+		}
+		if binding.ImportPath != binding.ModulePath && !strings.HasPrefix(binding.ImportPath, strings.TrimSuffix(binding.ModulePath, "/")+"/") {
+			return errors.New("Go package import path is outside its explicit module path")
+		}
+	case "source_local_v1":
+		if binding.ImportPath != "" || binding.ModulePath != "" || binding.TestOfImportPath != "" || binding.SourceID != sourceID || safepath.RequireDigest(binding.SourceID) != nil || binding.SourceDirectory != path.Dir(file) || (binding.SourceDirectory != "." && safepath.Relative(binding.SourceDirectory) != nil) || !validGoPackageName(binding.PackageName) {
+			return errors.New("Go source-local package binding differs from source identity or directory")
+		}
+		expected, err := sourceLocalPackageIdentity(binding.SourceID, binding.SourceDirectory, binding.PackageName)
+		if err != nil || binding.PackageIdentity != expected {
+			return errors.New("Go source-local package identity is invalid")
+		}
+		testTargetName := ""
+		if strings.HasSuffix(file, "_test.go") && strings.HasSuffix(binding.PackageName, "_test") {
+			testTargetName = strings.TrimSuffix(binding.PackageName, "_test")
+		}
+		if testTargetName == "" {
+			if binding.TestOfPackageIdentity != "" {
+				return errors.New("unexpected Go source-local test target")
+			}
+		} else {
+			if !validGoPackageName(testTargetName) {
+				return errors.New("invalid external Go test package name")
+			}
+			expectedTestTarget, err := sourceLocalPackageIdentity(binding.SourceID, binding.SourceDirectory, testTargetName)
+			if err != nil || binding.TestOfPackageIdentity != expectedTestTarget {
+				return errors.New("Go source-local test target identity is invalid")
+			}
+		}
+	default:
+		return errors.New("unsupported Go package identity kind")
 	}
 	if binding.TestOfImportPath != "" && (!validGoImportPath(binding.TestOfImportPath) || !strings.HasSuffix(file, "_test.go")) {
 		return errors.New("Go graph test package binding is invalid")
@@ -622,6 +689,20 @@ func validGoImportPath(value string) bool {
 	return true
 }
 
+func validGoPackageName(value string) bool { return len(value) <= 4096 && token.IsIdentifier(value) }
+
+func sourceLocalPackageIdentity(sourceID, directory, packageName string) (string, error) {
+	digest, err := canonical.Hash("harness.ri.go-source-local-package.v1", struct {
+		SourceID    string `json:"source_id"`
+		Directory   string `json:"directory"`
+		PackageName string `json:"package_name"`
+	}{sourceID, directory, packageName})
+	if err != nil {
+		return "", err
+	}
+	return "source_local_v1:" + digest, nil
+}
+
 func buildGoEngineeringGraph(sourceID, candidateID, producer string, files []GoGraphFile, generators []GoGeneratorBinding) (GoEngineeringGraph, error) {
 	if len(files) == 0 || len(files) > goEngineeringMaxFiles || len(generators) > goEngineeringMaxFacts {
 		return GoEngineeringGraph{}, errors.New("Go graph build input exceeds bounds")
@@ -631,7 +712,7 @@ func buildGoEngineeringGraph(sourceID, candidateID, producer string, files []GoG
 	packageFiles := make(map[string][]string)
 	totalFacts := 0
 	for _, file := range files {
-		if err := validateGoGraphFile(file, producer); err != nil {
+		if err := validateGoGraphFile(file, producer, sourceID); err != nil {
 			return GoEngineeringGraph{}, err
 		}
 		if _, exists := fileByPath[file.Facts.Path]; exists {
@@ -642,7 +723,9 @@ func buildGoEngineeringGraph(sourceID, candidateID, producer string, files []GoG
 			return GoEngineeringGraph{}, errors.New("Go graph build exceeds aggregate fact budget")
 		}
 		fileByPath[file.Facts.Path] = cloneGoGraphFile(file)
-		packageFiles[file.Package.ImportPath] = append(packageFiles[file.Package.ImportPath], file.Facts.Path)
+		if file.Package.IdentityKind == "" {
+			packageFiles[file.Package.ImportPath] = append(packageFiles[file.Package.ImportPath], file.Facts.Path)
+		}
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Facts.Path < files[j].Facts.Path })
 	generators = append([]GoGeneratorBinding(nil), generators...)
@@ -672,21 +755,34 @@ func buildGoEngineeringGraph(sourceID, candidateID, producer string, files []GoG
 		if err := addNode(GoGraphNode{ID: fileID, Kind: "file", Label: path, Path: path}); err != nil {
 			return GoEngineeringGraph{}, err
 		}
-		pkgID := graphPackageNodeID(file.Package.ImportPath)
-		if err := addNode(GoGraphNode{ID: pkgID, Kind: "package", Label: file.Package.ImportPath}); err != nil {
+		pkgID := graphPackageBindingNodeID(file.Package)
+		pkgKind, pkgLabel := graphPackageNodeKindLabel(file.Package)
+		if err := addNode(GoGraphNode{ID: pkgID, Kind: pkgKind, Label: pkgLabel}); err != nil {
 			return GoEngineeringGraph{}, err
 		}
 		addEdge(GoGraphEdge{From: fileID, To: pkgID, Relation: "IN_PACKAGE", Path: path})
-		testTarget := file.Package.TestOfImportPath
-		if testTarget == "" && strings.HasSuffix(path, "_test.go") {
-			testTarget = file.Package.ImportPath
-		}
-		if testTarget != "" {
-			testPkgID := graphPackageNodeID(testTarget)
-			if err := addNode(GoGraphNode{ID: testPkgID, Kind: "package", Label: testTarget}); err != nil {
-				return GoEngineeringGraph{}, err
+		if file.Package.IdentityKind == "source_local_v1" {
+			if file.Package.TestOfPackageIdentity != "" {
+				testPkgID := graphSourceLocalPackageNodeID(file.Package.TestOfPackageIdentity)
+				if err := addNode(GoGraphNode{ID: testPkgID, Kind: "source_local_package", Label: file.Package.TestOfPackageIdentity}); err != nil {
+					return GoEngineeringGraph{}, err
+				}
+				addEdge(GoGraphEdge{From: fileID, To: testPkgID, Relation: "TESTS", Path: path})
+			} else if strings.HasSuffix(path, "_test.go") {
+				addEdge(GoGraphEdge{From: fileID, To: pkgID, Relation: "TESTS", Path: path})
 			}
-			addEdge(GoGraphEdge{From: fileID, To: testPkgID, Relation: "TESTS", Path: path})
+		} else {
+			testTarget := file.Package.TestOfImportPath
+			if testTarget == "" && strings.HasSuffix(path, "_test.go") {
+				testTarget = file.Package.ImportPath
+			}
+			if testTarget != "" {
+				testPkgID := graphPackageNodeID(testTarget)
+				if err := addNode(GoGraphNode{ID: testPkgID, Kind: "package", Label: testTarget}); err != nil {
+					return GoEngineeringGraph{}, err
+				}
+				addEdge(GoGraphEdge{From: fileID, To: testPkgID, Relation: "TESTS", Path: path})
+			}
 		}
 		declByName := make(map[string][]GoSymbol)
 		for _, symbol := range file.Facts.Declarations {
@@ -842,6 +938,21 @@ func graphFileNodeID(path string) string {
 func graphPackageNodeID(importPath string) string {
 	id, _ := canonical.Hash("harness.ri.go-package-node.v1", importPath)
 	return "package:" + id
+}
+func graphPackageBindingNodeID(binding GoPackageBinding) string {
+	if binding.IdentityKind == "source_local_v1" {
+		return graphSourceLocalPackageNodeID(binding.PackageIdentity)
+	}
+	return graphPackageNodeID(binding.ImportPath)
+}
+func graphSourceLocalPackageNodeID(identity string) string {
+	return "source-package:" + strings.TrimPrefix(identity, "source_local_v1:")
+}
+func graphPackageNodeKindLabel(binding GoPackageBinding) (string, string) {
+	if binding.IdentityKind == "source_local_v1" {
+		return "source_local_package", binding.PackageIdentity
+	}
+	return "package", binding.ImportPath
 }
 func graphSymbolNodeID(path string, symbol GoSymbol) string {
 	id, _ := canonical.Hash("harness.ri.go-symbol-node.v1", map[string]any{"path": path, "name": symbol.Name, "kind": symbol.Kind, "range": symbol.Range, "test": symbol.Test})

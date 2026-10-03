@@ -239,6 +239,16 @@ evaluation receipt, requires Evaluate to match its prepared run, and records
 the value observed in the inspected run creation. `PR5Matched` rejects this
 Native-only option.
 
+The separate `go-source-context-v1` treatment also requires an explicitly
+selected RI parser: pass `-PlannerContextRIExecutable` with its absolute clean
+path and `-PlannerContextRIExecutableSHA256` with the lowercase SHA-256 of the
+executable bytes to both Prepare and Evaluate. The runner verifies those bytes
+before preparation/evaluation, records the path and digest in receipts, and
+requires the inspected run to retain the same binding. It never discovers the
+parser from PATH or environment variables. This treatment uses bounded,
+partial Go source graph evidence and should be evaluated as a distinct arm;
+the `source-bounded-v1` comparison below does not qualify it.
+
 For a matched comparison, prepare fresh runs for both treatments from the same
 six manifest tasks: `go-humanize`, `afero`, `go-multierror`, `go-atomic`,
 `go-difflib`, and `logr`. Evaluate both with the same clean Fabric binary and

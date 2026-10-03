@@ -38,25 +38,32 @@ func plannerInvocation(c config.Config, objective string) (runtime.Invocation, e
 // plannerInvocationForSnapshot binds an admitted planner context only for the
 // explicit opt-in. Empty policy retains the historic builder byte-for-byte.
 func plannerInvocationForSnapshot(s Snapshot) (runtime.Invocation, error) {
-	if !plannerContextEnabled(s) {
-		if s.PlannerContext != nil {
+	if !plannerContextEnabled(s) && !plannerGoContextEnabled(s) {
+		if s.PlannerContext != nil || s.PlannerGoContext != nil {
 			return runtime.Invocation{}, errors.New("planner context present without policy")
 		}
-		return plannerInvocationWithContextAndRecipe(s.Creation.Config, s.Creation.Objective, nil, s.Creation.Execution)
+		return plannerInvocationWithContextsAndRecipe(s.Creation.Config, s.Creation.Objective, nil, nil, s.Creation.Execution)
 	}
-	if s.PlannerContext == nil {
+	if plannerContextEnabled(s) && s.PlannerContext == nil {
 		return runtime.Invocation{}, errors.New("planner context admission missing")
 	}
-	return plannerInvocationWithContextAndRecipe(s.Creation.Config, s.Creation.Objective, s.PlannerContext, s.Creation.Execution)
+	if plannerGoContextEnabled(s) && s.PlannerGoContext == nil {
+		return runtime.Invocation{}, errors.New("Go planner context admission missing")
+	}
+	return plannerInvocationWithContextsAndRecipe(s.Creation.Config, s.Creation.Objective, s.PlannerContext, s.PlannerGoContext, s.Creation.Execution)
 }
 
 func plannerInvocationWithContext(c config.Config, objective string, plannerContext *PlannerContextRecord) (runtime.Invocation, error) {
-	return plannerInvocationWithContextAndRecipe(c, objective, plannerContext, nil)
+	return plannerInvocationWithContextsAndRecipe(c, objective, plannerContext, nil, nil)
 }
 
 func plannerInvocationWithContextAndRecipe(c config.Config, objective string, plannerContext *PlannerContextRecord, recipe *ExecutionPolicy) (runtime.Invocation, error) {
+	return plannerInvocationWithContextsAndRecipe(c, objective, plannerContext, nil, recipe)
+}
+
+func plannerInvocationWithContextsAndRecipe(c config.Config, objective string, plannerContext *PlannerContextRecord, plannerGoContext *PlannerGoContextRecord, recipe *ExecutionPolicy) (runtime.Invocation, error) {
 	input := objective
-	if c.PlannerContract != "" || c.ReviewerContract == "json-v1" || plannerContext != nil || recipe != nil && recipe.PromptRecipe != "" {
+	if c.PlannerContract != "" || c.ReviewerContract == "json-v1" || plannerContext != nil || plannerGoContext != nil || recipe != nil && recipe.PromptRecipe != "" {
 		assignment := plannerAssignmentV1
 		var schema json.RawMessage
 		var verificationChecks []config.Check
@@ -106,13 +113,14 @@ func plannerInvocationWithContextAndRecipe(c config.Config, objective string, pl
 			assignment += " Prefer direct mode for localized changes with known scope. Use graph mode for substantial or dependent work; independent read-only tasks may run concurrently, and research/design tasks are not mandatory for every small change."
 		}
 		wrapped, err := promptRecipeBytes(recipe, struct {
-			OutputSchema       json.RawMessage       `json:"output_schema,omitempty"`
-			Role               string                `json:"role"`
-			Instruction        string                `json:"instruction"`
-			Objective          string                `json:"objective"`
-			VerificationChecks []config.Check        `json:"verification_checks,omitempty"`
-			PlannerContext     *PlannerContextRecord `json:"planner_context,omitempty"`
-		}{schema, "planner", assignment, objective, verificationChecks, plannerContext})
+			OutputSchema       json.RawMessage         `json:"output_schema,omitempty"`
+			Role               string                  `json:"role"`
+			Instruction        string                  `json:"instruction"`
+			Objective          string                  `json:"objective"`
+			VerificationChecks []config.Check          `json:"verification_checks,omitempty"`
+			PlannerContext     *PlannerContextRecord   `json:"planner_context,omitempty"`
+			PlannerGoContext   *plannerGoContextPrompt `json:"planner_go_context,omitempty"`
+		}{schema, "planner", assignment, objective, verificationChecks, plannerContext, plannerGoContextPromptFor(plannerGoContext)})
 		if err != nil {
 			return runtime.Invocation{}, err
 		}

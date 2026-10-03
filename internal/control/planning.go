@@ -144,6 +144,15 @@ func ResumePlanning(ctx context.Context, path string) (snapshot Snapshot, err er
 			return s, err
 		}
 	}
+	if s.State == "OBJECTIVE" && plannerGoContextEnabled(s) && s.PlannerGoContext == nil {
+		if _, err := AdmitPlannerGoContext(ctx, path); err != nil {
+			return s, err
+		}
+		s, err = Inspect(path)
+		if err != nil {
+			return s, err
+		}
+	}
 	if s.State == "OBJECTIVE" {
 		if err := Append(path, "planning.started", struct{}{}); err != nil {
 			return s, err
