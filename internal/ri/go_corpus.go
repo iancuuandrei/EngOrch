@@ -52,10 +52,12 @@ type GoCommittedCorpus struct {
 	ModuleInventory  *GoModuleInventory     `json:"module_inventory,omitempty"`
 }
 
-// GoCorpusOptions opts into committed module declarations. Nil preserves the
-// original source-local collection recipe and graph identities.
+// GoCorpusOptions opts into committed module declarations and parser-cache
+// reuse. Disabled cache behavior preserves the existing collection recipe.
 type GoCorpusOptions struct {
 	ModuleInventory *GoModuleInventory
+	// EnableParseCache permits reuse of validated GoFileFacts entries under cacheDir.
+	EnableParseCache bool
 }
 
 type goCorpusCandidate struct {
@@ -98,8 +100,9 @@ func (s *goCorpusSink) Close() error { return nil }
 
 // CollectCommittedGoCorpus inventories the exact Git tree, chooses a bounded
 // deterministic Go corpus, copies only selected objects through one cat-file
-// batch process, and parses their facts through one pinned RI stream. cacheDir
-// is intentionally required to be empty for the controller's first recipe.
+// batch process, and parses their facts through one pinned RI stream using the
+// legacy no-cache options. It rejects a nonempty cacheDir. Call
+// CollectCommittedGoCorpusWithOptions with EnableParseCache to opt in.
 func CollectCommittedGoCorpus(ctx context.Context, identity repository.Identity, client Client, cacheDir, objective string) (GoCommittedCorpus, error) {
 	return CollectCommittedGoCorpusWithOptions(ctx, identity, client, cacheDir, objective, GoCorpusOptions{})
 }
@@ -115,8 +118,16 @@ func CollectCommittedGoCorpusWithOptions(ctx context.Context, identity repositor
 		}
 		corpus.ModuleInventory = options.ModuleInventory
 	}
-	if cacheDir != "" {
-		return corpus, errors.New("committed Go corpus controller path does not permit an RI cache")
+	if options.EnableParseCache {
+		if cacheDir == "" {
+			return corpus, errors.New("Go corpus parse-cache opt-in requires a cache directory")
+		}
+		volumeRoot := filepath.VolumeName(cacheDir) + string(filepath.Separator)
+		if !filepath.IsAbs(cacheDir) || filepath.Clean(cacheDir) != cacheDir || filepath.Clean(cacheDir) == volumeRoot {
+			return corpus, errors.New("Go corpus parse-cache directory must be absolute, clean, and non-root")
+		}
+	} else if cacheDir != "" {
+		return corpus, errors.New("Go corpus parse-cache directory requires explicit EnableParseCache opt-in")
 	}
 	if len(objective) == 0 || len(objective) > 16<<10 || !utf8.ValidString(objective) {
 		return corpus, errors.New("Go corpus objective is empty, oversized, or invalid UTF-8")
@@ -267,7 +278,7 @@ func CollectCommittedGoCorpusWithOptions(ctx context.Context, identity repositor
 		if err := ctx.Err(); err != nil {
 			return GoCommittedCorpus{}, err
 		}
-		request, _, requestErr := goFileFactsRequest(sourceFile.entry.Path, sourceFile.content, "", stream.producerHash)
+		request, _, requestErr := goFileFactsRequest(sourceFile.entry.Path, sourceFile.content, cacheDir, stream.producerHash)
 		if requestErr != nil {
 			return GoCommittedCorpus{}, fmt.Errorf("committed Go facts request failed for %q: %w", sourceFile.entry.Path, requestErr)
 		}
@@ -275,7 +286,7 @@ func CollectCommittedGoCorpusWithOptions(ctx context.Context, identity repositor
 			appendOmission(sourceFile.entry.Path, "facts_request_byte_limit")
 			continue
 		}
-		facts, factsErr := stream.GoFileFacts(ctx, sourceFile.entry.Path, sourceFile.content, "")
+		facts, factsErr := stream.GoFileFacts(ctx, sourceFile.entry.Path, sourceFile.content, cacheDir)
 		if factsErr != nil {
 			return GoCommittedCorpus{}, fmt.Errorf("committed Go facts failed for %q: %w", sourceFile.entry.Path, factsErr)
 		}

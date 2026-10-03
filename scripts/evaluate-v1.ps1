@@ -498,7 +498,7 @@ function Invoke-GoTest([string]$WorkDir, [string[]]$TestArgs) {
     }
 }
 
-function Set-TaskVerificationConfig([string]$TaskPath, [object]$Entry) {
+function Set-TaskVerificationConfig([string]$TaskPath, [object]$Entry, [string]$ControllerStateRoot = '') {
     # init defaults required checks to `go test ./...`; the task policy
     # requires the explicit manifest native_argv BEFORE any run is created
     # (Creation.Config binds required checks). Rewrites and hashes harness.toml.
@@ -518,11 +518,34 @@ function Set-TaskVerificationConfig([string]$TaskPath, [object]$Entry) {
     if (-not $argvMatch.Success) { throw "no verification argv line in harness.toml for $($entry.id); refusing to guess config shape" }
     $tomlArgv = 'argv = [' + (($native.Argv | ForEach-Object { '"' + ($_ -replace '"', '\"') + '"' }) -join ', ') + ']'
     $text = $text.Substring(0, $argvMatch.Index) + $tomlArgv + $text.Substring($argvMatch.Index + $argvMatch.Length)
+    if (-not [string]::IsNullOrWhiteSpace($ControllerStateRoot)) {
+        $repositoryRoot = [IO.Path]::GetFullPath($TaskPath)
+        $stateRoot = [IO.Path]::GetFullPath($ControllerStateRoot)
+        if (-not [IO.Path]::IsPathRooted($ControllerStateRoot) -or $stateRoot -cne $ControllerStateRoot) {
+            throw 'Isolated controller state root must be an absolute clean path.'
+        }
+        $within = {
+            param([string]$Parent, [string]$Child)
+            $relative = [IO.Path]::GetRelativePath($Parent, $Child)
+            return $relative -eq '.' -or (-not [IO.Path]::IsPathRooted($relative) -and $relative -ne '..' -and -not $relative.StartsWith('..' + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -and -not $relative.StartsWith('..' + [IO.Path]::AltDirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase))
+        }
+        $stateWithinRepository = & $within $repositoryRoot $stateRoot
+        $repositoryWithinState = & $within $stateRoot $repositoryRoot
+        if ($stateWithinRepository -or $repositoryWithinState) {
+            throw 'Isolated controller state root must be separate from the task checkout.'
+        }
+        if ([regex]::IsMatch($text, '(?m)^controller_state_root\s*=')) {
+            throw 'Fresh isolated task config unexpectedly already contains controller_state_root.'
+        }
+        $quotedStateRoot = ConvertTo-Json -InputObject $stateRoot -Compress
+        $text = 'controller_state_root = ' + $quotedStateRoot + "`n" + $text
+    }
     Set-Content -NoNewline -Encoding utf8 -LiteralPath $configPath $text
     return [ordered]@{
         Argv        = @($native.Argv)
         ArgvText    = ($native.Argv -join ' ')
         Scope       = $native.Scope
+        ControllerStateRoot = if ([string]::IsNullOrWhiteSpace($ControllerStateRoot)) { $null } else { $stateRoot }
         ConfigSha   = (Get-FileSha256 $configPath).ToLowerInvariant()
     }
 }
@@ -1051,7 +1074,8 @@ foreach ($entry in $entries) {
                 if ($LASTEXITCODE -ne 0) { throw "fabric init failed for $($entry.id); see fabric-init.*.log" }
             }
             $result.effort = $Effort
-            $verPolicy = Set-TaskVerificationConfig $taskPath $entry
+            $controllerStateRoot = if ($IsolatedWriters) { [IO.Path]::GetFullPath((Join-Path $taskOutDir 'controller-state')) } else { '' }
+            $verPolicy = Set-TaskVerificationConfig $taskPath $entry $controllerStateRoot
             $result.verification_argv = $verPolicy.ArgvText
             $result.verification_config_sha256 = $verPolicy.ConfigSha
             $result.native_test_scope = $verPolicy.Scope
@@ -1102,6 +1126,11 @@ foreach ($entry in $entries) {
             $result.prompt_recipe_observed = $observedPromptRecipe
             if ($observedPromptRecipe -ne $PromptRecipe) { throw 'Inspected run prompt_recipe does not match the requested treatment.' }
             if ($IsolatedWriters) {
+                $expectedStateRoot = [IO.Path]::GetFullPath((Join-Path $taskOutDir 'controller-state'))
+                if ([string]$snap.creation.config.controller_state_root -cne $expectedStateRoot) {
+                    throw 'Inspected isolated run controller_state_root does not match its external per-task evaluation path.'
+                }
+                $result.controller_state_root_configured = $true
                 $isolationObserved = Assert-IsolationPolicyObserved $snap $isolationPolicyBinding $MaxParallel
                 $result.isolated_implementation_version_observed = $isolationObserved.isolated_implementation_version
                 $result.isolation_capacity_observed = $isolationObserved.isolation_capacity

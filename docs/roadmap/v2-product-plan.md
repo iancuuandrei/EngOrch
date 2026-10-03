@@ -205,3 +205,35 @@ integrated increment, without resurrecting a G0 promotion ladder.
   inventory re-collection. The next increment is ready to freeze for a clean
   full-suite run. The separate graph-only semantic adapter is reviewed, but is
   retained for the following increment and does not change this freeze.
+
+## Checkpoint — v1.0.6 frozen; v1.0.5 evaluation complete
+
+- Module inventory/CLI increment `v1.0.6` is frozen at
+  `a315e42acd6c2b4d401426c6be485a8b6e969b09`. Both Git identities are
+  automation. Its full clean suite runs in a separate detached clone; current
+  semantic-query/cache/preflight edits cannot change that candidate.
+- Serial v1.0.5 evaluation completed 6/8 PASS: fixed-six 5/6, godotenv PASS,
+  difflib held-out FAIL, numeric BLOCKED with two exhausted repairs and final
+  changes-requested review. Journals and frozen results remain unchanged.
+  [Measured categories and failed-arm diagnosis](../evaluation/v1.0.5-generation-and-isolation.md)
+  distinguish model tokens, runtime receipts, unknown billing and failed tasks.
+- No context default or model allocation is adopted from these outcomes.
+  A fresh two-task single-variable model comparison is prepared with the same
+  clean v1.0.5 binary, objectives and gates, using GPT 6 Sol High. It is a
+  Fabric evaluation runtime, not a development subagent. Development subagents
+  remain GPT 6 Luna High. No success or calibration is claimed before evidence.
+- The next independent increment exposes graph-only semantic queries, explicit
+  trusted-local parse-cache reuse and preflight rejection of isolated runs
+  without an external state root. Final review/qualification/integration remain
+  required. The complete v2 goal remains active.
+- Clean v1.0.6 full-suite PASS: control 871.592 s, CLI 85.858 s, RI 30.544 s.
+  Public dev now contains the exact candidate, and hosted run `37148085280`
+  passed publish-draft, Sonar and security checks. Unresolved PR #16 Sonar
+  issues were zero at the check. Public main still retains v1.0.2.
+- Independent review approves the semantic adapter/CLI, isolated preflight
+  and parse-cache slice under its explicit trusted-local cache assumption.
+  Final combined focused regressions passed (CLI 10.869 s, RI 1.372 s), the
+  NativeRunArgs PowerShell harness passed, and unfiltered doccheck passed
+  (0.308 s). The cache benchmark excludes priming and setup: 24 cold misses
+  versus 24 warm hits, similar allocation, and only a small fixture timing
+  improvement. CPU and RSS are not yet measured; no general speedup is claimed.

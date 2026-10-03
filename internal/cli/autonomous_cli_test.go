@@ -15,6 +15,8 @@ import (
 
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/control"
+	"harness.local/engorch/internal/controllerstate"
+	"harness.local/engorch/internal/repository"
 )
 
 func cliGit(t *testing.T, dir string, args ...string) {
@@ -513,6 +515,76 @@ func isolatedWriterPolicyJSON() string {
 	return `{"version":1,"capacity":{"cpu_milli":2000,"memory_mib":2048,"verification_slots":1,"total_runtime_slots":2,"provider_slots":2,"model_slots":2,"runtime_slots":2},"estimate":{"cpu_milli":500,"memory_mib":512,"verification_slots":0,"runtime_slots":1}}`
 }
 
+func configureIsolatedCLIRoutes(t *testing.T, root, controllerStateRoot string) string {
+	t.Helper()
+	configPath := filepath.Join(root, "harness.toml")
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Replace(string(content), "\n[planner]", "\nwriter_contract = \"anchored-edits-v1\"\nexplorer_contract = \"json-v2\"\n\n[planner]", 1)
+	text += `
+
+[writer]
+runtime = "fake"
+provider = "deterministic"
+model = "fixture-v1"
+effort = "none"
+role = "writer"
+
+[explorer]
+runtime = "fake"
+provider = "deterministic"
+model = "fixture-v1"
+effort = "none"
+role = "explorer"
+`
+	if controllerStateRoot != "" {
+		quoted, err := json.Marshal(controllerStateRoot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text = "controller_state_root = " + string(quoted) + "\n" + text
+	}
+	if err := os.WriteFile(configPath, []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return configPath
+}
+
+func TestIsolatedWritersRequireExternalControllerStateBeforeRunCreation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		root func(string) string
+	}{
+		{name: "missing", root: func(string) string { return "" }},
+		{name: "inside checkout", root: func(root string) string { return filepath.Join(root, "controller-state") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := autonomousCLIFixture(t)
+			configuredRoot := tc.root(root)
+			configureIsolatedCLIRoutes(t, root, configuredRoot)
+			policyPath := filepath.Join(root, "isolation-policy.json")
+			if err := os.WriteFile(policyPath, []byte(isolatedWriterPolicyJSON()), 0600); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			err := Execute(context.Background(), []string{"run", "--autonomous", "--isolated-writers", "--isolation-policy", policyPath, "A fixture objective"}, root, &out)
+			if err == nil || !strings.Contains(err.Error(), "controller_state_root") {
+				t.Fatalf("isolated mode did not reject its invalid external state root: %v", err)
+			}
+			if entries, globErr := filepath.Glob(filepath.Join(root, ".harness", "runs", "*.jsonl")); globErr != nil || len(entries) != 0 {
+				t.Fatalf("invalid isolated state root created a run or provider intent: %v, %v", entries, globErr)
+			}
+			if configuredRoot != "" {
+				if _, statErr := os.Stat(configuredRoot); !os.IsNotExist(statErr) {
+					t.Fatalf("state-root validation created a directory: %v", statErr)
+				}
+			}
+		})
+	}
+}
+
 func TestReadIsolatedWriterPolicyStrictVersionedBounds(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "isolation-policy.json")
 	if err := os.WriteFile(path, []byte(isolatedWriterPolicyJSON()), 0600); err != nil {
@@ -584,31 +656,9 @@ func TestIsolatedWritersRequirePolicyAndRejectParallelWritersCombination(t *test
 
 func TestAutonomousIsolatedWritersBindExplicitCapacityAndDerivedWriterRoute(t *testing.T) {
 	root := autonomousCLIFixture(t)
-	configPath := filepath.Join(root, "harness.toml")
-	content, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := strings.Replace(string(content), "\n[planner]", "\nwriter_contract = \"anchored-edits-v1\"\nexplorer_contract = \"json-v2\"\n\n[planner]", 1)
-	text += `
-
-[writer]
-runtime = "fake"
-provider = "deterministic"
-model = "fixture-v1"
-effort = "none"
-role = "writer"
-
-[explorer]
-runtime = "fake"
-provider = "deterministic"
-model = "fixture-v1"
-effort = "none"
-role = "explorer"
-`
-	if err := os.WriteFile(configPath, []byte(text), 0600); err != nil {
-		t.Fatal(err)
-	}
+	controllerStateRoot := filepath.Join(filepath.Dir(root), filepath.Base(root)+"-controller-state")
+	configureIsolatedCLIRoutes(t, root, controllerStateRoot)
+	var err error
 	policyPath := filepath.Join(root, "isolation-policy.json")
 	if err := os.WriteFile(policyPath, []byte(isolatedWriterPolicyJSON()), 0600); err != nil {
 		t.Fatal(err)
@@ -622,9 +672,34 @@ role = "explorer"
 	if decodeErr := json.Unmarshal(out.Bytes(), &failure); decodeErr != nil || failure.RunID == "" {
 		t.Fatalf("isolated run failure omitted durable run identity: output=%s decode=%v execute=%v", out.String(), decodeErr, err)
 	}
-	s, err := control.Inspect(filepath.Join(root, ".harness", "runs", failure.RunID+".jsonl"))
+	cfg, err := configuration(root)
 	if err != nil {
 		t.Fatal(err)
+	}
+	identity, err := repository.Discover(context.Background(), root, cfg.Repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statePaths, err := controllerstate.Resolve(controllerStateRoot, identity)
+	if err != nil || !statePaths.External || !strings.HasPrefix(statePaths.Root, controllerStateRoot) {
+		t.Fatalf("external controller namespace did not resolve: %#v %v", statePaths, err)
+	}
+	runPath, err := statePaths.Run(failure.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := control.Inspect(runPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Creation.Config.ControllerStateRoot != controllerStateRoot {
+		t.Fatalf("external controller root was not bound in immutable creation config: %q", s.Creation.Config.ControllerStateRoot)
+	}
+	if _, statErr := os.Stat(filepath.Join(statePaths.Root, "repository.json")); statErr != nil {
+		t.Fatalf("external controller namespace was not initialized: %v", statErr)
+	}
+	if entries, globErr := filepath.Glob(filepath.Join(root, ".harness", "runs", "*.jsonl")); globErr != nil || len(entries) != 0 {
+		t.Fatalf("isolated run unexpectedly used repository-local run storage: %v, %v", entries, globErr)
 	}
 	execution := s.Creation.Execution
 	if execution == nil || execution.IsolatedImplementationVersion != 1 || execution.ParallelImplementationVersion != 0 || execution.MaxParallel != 2 || execution.IsolationCapacity == nil || execution.IsolationEstimate == nil {

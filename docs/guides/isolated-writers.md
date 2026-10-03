@@ -9,6 +9,13 @@ planning, an explicit writer route, an anchored-edits writer contract, and a
 JSON v2 explorer contract. The CLI binds the plan-graph-v7 contract for this
 mode.
 
+Before creating an isolated run, `harness.toml` must set `controller_state_root`
+to an absolute external directory separate from the repository and its Git
+control paths. The CLI validates it with the repository-bound controller-state
+resolver before writing a run journal or dispatching the planner. This
+namespace owns durable child-worktree state; it is not inferred from the task
+checkout.
+
 The policy file is strict JSON, version 1, and limited to 32 KiB. It must
 contain every field shown below; duplicate, unknown, missing, or null fields
 are rejected. Capacity CPU and memory are in millicores and MiB. Slot values
@@ -54,6 +61,24 @@ verification is not charged as writer runtime. Separate worktrees isolate the
 writers' proposals, while parent-candidate integration remains a distinct
 controller step.
 
+The Windows evaluation runner configures one external namespace per task under
+that task's evaluation output directory before invoking `fabric run`. The
+absolute setting is included in the task configuration hash and checked again
+against the inspected run creation record. Ordinary evaluations do not add
+this setting.
+
 This is an opt-in scheduling and isolation policy. It does not infer host
 capacity from environment data, measure actual CPU or memory use, qualify a
 provider route, or authorize unrestricted operating-system sandboxing.
+
+## Fresh-run failure note
+
+A frozen v5 isolated-writer evaluation ended `BLOCKED` before any writer
+proposal in both arms. The Humanize arm reached graph/isolation preparation but
+had no external `controller_state_root`, so child-worktree admission stopped
+before its intent was recorded. The atomic-numeric-text arm's planner graph
+omitted required native verification and review gates and was rejected before
+graph admission. Both parent workspaces were confirmed; neither journal
+contains a child isolation intent or file intent. The runs were not resumed or
+retried, and provider-call counts remain unknown. These outcomes are setup and
+invalid-proposal evidence, not a performance result for isolated writers.

@@ -100,6 +100,40 @@ context selector limits the prompt view to 12 files and 48 KiB.
 derived-cache meaning as above. The cache remains outside graph identity and
 does not turn partial syntax into semantic resolution.
 
+## Bounded graph query
+
+`fabric ri query EXE EXE_SHA256 SPEC_JSON QUERY_JSON [CACHE_DIR]` builds the
+same committed graph, then runs one strict JSON query against its observed
+facts. `QUERY_JSON` must be a regular UTF-8 JSON file no larger than 32 KiB;
+duplicate and unknown members are rejected. Every query requires an integer
+`limit` from 1 to 1000. The result wraps the repository identity and source
+observations with a `result` bound to the source ID, graph digest, and pinned
+parser digest. Coverage remains `PARTIAL`, even for an empty result.
+
+Supported `vocabulary` values are `symbol`, `imports`, `calls`, `tests`,
+`generators`, `module`, `path`, and `impact`. A query uses the matching selector
+fields: `path` for one exact Go file, `name_prefix` and/or `kind` for symbols,
+`import_path` for an exact relation target, or `paths` plus optional
+`max_depth` for impact. Impact accepts at most 64 exact paths and depth at most
+16. Calls always carry `resolution: UNRESOLVED`; module results represent
+declared ownership only. `references` and `implementations` are unsupported by
+this graph-only query. Use the existing SCIP-backed `ri definition` and
+`ri references` commands when querying a semantic snapshot.
+
+Example query file and invocation:
+
+```json
+{"vocabulary":"calls","path":"internal/cli/ri_graph.go","limit":50}
+```
+
+```powershell
+fabric --root D:\src\project ri query D:\tools\engorch-ri.exe <exe-sha256> go-graph-spec.json semantic-query.json
+```
+
+This command is read-only and deterministic for the committed source, graph
+spec, parser binary, and query. Partial graph input or omitted items do not
+prove that declarations, references, callers, or impacts are absent.
+
 ## Advisory topology query
 
 `fabric ri topology EXE EXE_SHA256 SPEC_JSON CHANGED_PATHS_JSON MAX_GROUP_FILES [CACHE_DIR]`

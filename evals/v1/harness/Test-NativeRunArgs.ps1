@@ -16,7 +16,11 @@ $policyBinding = $ast.Find({ param($node) $node -is [System.Management.Automatio
 $preparedBinding = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-IsolationPolicyPreparedBinding' }, $true)
 $observedPolicy = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-IsolationPolicyObserved' }, $true)
 $currentBinding = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-CurrentIsolationPolicyBinding' }, $true)
+$taskConfig = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Set-TaskVerificationConfig' }, $true)
+$nativeGoArgs = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-NativeGoArgs' }, $true)
+$fileHash = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-FileSha256' }, $true)
 if ($null -eq $fileHash -or $null -eq $policyBinding -or $null -eq $preparedBinding -or $null -eq $observedPolicy -or $null -eq $currentBinding) { throw 'Isolation policy binding helpers missing.' }
+if ($null -eq $taskConfig -or $null -eq $nativeGoArgs) { throw 'Task verification configuration helper missing.' }
 $contextValidator = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-PlannerContextBindingShape' }, $true)
 if ($null -eq $contextValidator) { throw 'Planner context binding validator missing.' }
 . ([scriptblock]::Create($goMode.Extent.Text))
@@ -26,8 +30,12 @@ if ($null -eq $contextValidator) { throw 'Planner context binding validator miss
 . ([scriptblock]::Create($preparedBinding.Extent.Text))
 . ([scriptblock]::Create($observedPolicy.Extent.Text))
 . ([scriptblock]::Create($currentBinding.Extent.Text))
+. ([scriptblock]::Create($taskConfig.Extent.Text))
+. ([scriptblock]::Create($nativeGoArgs.Extent.Text))
 . ([scriptblock]::Create($runnerOptions.Extent.Text))
 . ([scriptblock]::Create($builder.Extent.Text))
+$tomlPolicy = Join-Path $PSScriptRoot 'Toml-ArgvPolicy.ps1'
+. $tomlPolicy
 if (-not (Test-GoSourceContextMode 'go-source-context-v1') -or
     -not (Test-GoSourceContextMode 'go-source-context-v2') -or
     (Test-GoSourceContextMode 'source-bounded-v1') -or
@@ -141,6 +149,38 @@ try {
     Remove-Item -LiteralPath (Join-Path $policyRoot 'policy.json') -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $policyRoot -ErrorAction SilentlyContinue
 }
+
+$configTestRoot = Join-Path $env:TEMP ('isolated-state-root-' + [Guid]::NewGuid().ToString('N'))
+$taskRepo = Join-Path $configTestRoot 'repo'
+$taskOutput = Join-Path $configTestRoot 'eval-task'
+New-Item -ItemType Directory -Path $taskRepo, $taskOutput | Out-Null
+try {
+    $configPath = Join-Path $taskRepo 'harness.toml'
+    $entry = [pscustomobject]@{ id = 'fixture'; native_argv = @('go', 'test', './...') }
+    $baselineConfig = "version = 1`nrepository = 'fixture'`nbase_branch = 'main'`n`n[verification]`nname = 'native'`nargv = ['go', 'test', './...']`ntimeout_seconds = 60`n"
+    [IO.File]::WriteAllText($configPath, $baselineConfig, (New-Object System.Text.UTF8Encoding($false)))
+    $externalStateRoot = Join-Path $taskOutput 'controller-state'
+    $bound = Set-TaskVerificationConfig $taskRepo $entry $externalStateRoot
+    $configured = Get-Content -Raw -LiteralPath $configPath
+    if ($configured -notmatch '(?m)^controller_state_root\s*=\s*"') { throw 'Isolated task config omitted its external controller state root.' }
+    $quotedRoot = [regex]::Match($configured, '(?m)^controller_state_root\s*=\s*(?<value>"(?:[^"\\]|\\.)*")').Groups['value'].Value
+    if ([string]::IsNullOrWhiteSpace($quotedRoot) -or (ConvertFrom-Json $quotedRoot) -cne $externalStateRoot) { throw 'TOML controller state root does not bind the exact external path.' }
+    if ($bound.ControllerStateRoot -cne $externalStateRoot -or $bound.ConfigSha -cne (Get-FileSha256 $configPath)) { throw 'Task config hash/metadata omitted the external root binding.' }
+
+    [IO.File]::WriteAllText($configPath, $baselineConfig, (New-Object System.Text.UTF8Encoding($false)))
+    $beforeRejected = Get-FileSha256 $configPath
+    $insideRejected = $false
+    try { Set-TaskVerificationConfig $taskRepo $entry (Join-Path $taskRepo 'controller-state') | Out-Null } catch { $insideRejected = $true }
+    if (-not $insideRejected -or (Get-FileSha256 $configPath) -cne $beforeRejected) { throw 'Inside-checkout state root was not rejected without changing config.' }
+
+    [IO.File]::WriteAllText($configPath, $baselineConfig, (New-Object System.Text.UTF8Encoding($false)))
+    $legacy = Set-TaskVerificationConfig $taskRepo $entry
+    $legacyConfig = Get-Content -Raw -LiteralPath $configPath
+    if ($legacyConfig -match '(?m)^controller_state_root\s*=') { throw 'Default task config acquired an isolated controller-state field.' }
+    if ($null -ne $legacy.ControllerStateRoot) { throw 'Default task config metadata acquired isolated state provenance.' }
+} finally {
+    Remove-Item -LiteralPath $configTestRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
 $invalidBindings = @(
     @{ Mode='go-source-context-v1'; Path=''; Hash='' },
     @{ Mode='go-source-context-v1'; Path=$parserPath; Hash='' },
@@ -165,4 +205,4 @@ foreach ($invalid in @(-1, 9)) {
     try { Get-NativeRunArgs $taskPath $objective $true $invalid | Out-Null } catch { $rejected = $true }
     if (-not $rejected) { throw "Invalid limit $invalid was admitted." }
 }
-Write-Output 'PASS: legacy argv is byte-order stable; v1/v2 Go planner treatments bind exact parser provenance; isolated mode binds exact policy path/hash and observed capacity; invalid combinations and mutations reject; objectives stay one argument; no provider calls.'
+Write-Output 'PASS: legacy argv is byte-order stable; v1/v2 Go planner treatments bind exact parser provenance; isolated mode binds policy and a validated external controller state root into the task config hash; inside-checkout roots reject; invalid combinations and mutations reject; objectives stay one argument; no provider calls.'

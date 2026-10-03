@@ -15,6 +15,7 @@ import (
 
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/control"
+	"harness.local/engorch/internal/controllerstate"
 	"harness.local/engorch/internal/engineeringplan"
 	"harness.local/engorch/internal/repository"
 )
@@ -296,6 +297,16 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 	if isolationPolicy != nil {
 		if cfg.Writer == nil {
 			return errors.New("isolated-writers requires an explicitly configured writer route")
+		}
+		if cfg.ControllerStateRoot == "" {
+			return errors.New("isolated-writers requires an external controller_state_root in harness.toml")
+		}
+		statePaths, err := controllerstate.Resolve(cfg.ControllerStateRoot, identity)
+		if err != nil {
+			return fmt.Errorf("isolated-writers requires a valid external controller_state_root: %w", err)
+		}
+		if !statePaths.External {
+			return errors.New("isolated-writers requires an external controller_state_root in harness.toml")
 		}
 		cfg.PlannerContract = "plan-graph-v7"
 		if err := cfg.Validate(); err != nil {
