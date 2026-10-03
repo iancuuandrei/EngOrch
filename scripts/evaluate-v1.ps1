@@ -57,6 +57,8 @@ param(
     [string]$Model,
     [ValidateSet('Native', 'PR5Matched')][string]$EvalMode = 'Native',
     [string]$Effort = 'high',
+    [string]$PlannerContext = '',
+    [ValidateSet('', 'cache-prefix-v1')][string]$PromptRecipe = '',
     [switch]$ParallelWriters,
     [switch]$ValidateWriterEdits,
     [ValidateRange(0, 8)][int]$MaxParallel = 0,
@@ -72,6 +74,15 @@ param(
 $ErrorActionPreference = 'Stop'
 if ($Action -eq 'Evaluate' -and $EvalMode -eq 'PR5Matched' -and ($ParallelWriters -or $ValidateWriterEdits -or $MaxParallel -ne 0)) {
     throw 'Writer and scheduler overrides require Native mode; PR5Matched retains its original invocation.'
+}
+if ($PlannerContext -notin @('', 'source-bounded-v1')) {
+    throw 'PlannerContext must be empty or source-bounded-v1.'
+}
+if ($Action -eq 'Evaluate' -and $EvalMode -eq 'PR5Matched' -and $PlannerContext -ne '') {
+    throw 'PlannerContext requires Native mode; PR5Matched retains its original invocation.'
+}
+if ($Action -eq 'Evaluate' -and $EvalMode -eq 'PR5Matched' -and $PromptRecipe -ne '') {
+    throw 'PromptRecipe requires Native mode; PR5Matched retains its original invocation.'
 }
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $manifestPath = Join-Path $repoRoot 'evals\v1\manifest.json'
@@ -96,9 +107,12 @@ function Get-NativeInitArgs([string]$TaskPath, [string]$RuntimePath, [string]$Wr
     return $nativeArgs
 }
 
-function Get-NativeRunArgs([string]$TaskPath, [string]$Objective, [bool]$EnableParallelWriters, [int]$ParallelLimit) {
+function Get-NativeRunArgs([string]$TaskPath, [string]$Objective, [bool]$EnableParallelWriters, [int]$ParallelLimit, [string]$PlannerContext, [string]$PromptRecipe) {
     if ($ParallelLimit -lt 0 -or $ParallelLimit -gt 8) { throw 'Scheduler override must be 0 (default) or 1..8.' }
+    if ($PromptRecipe -notin @('', 'cache-prefix-v1')) { throw 'Unsupported prompt recipe.' }
     $nativeArgs = @('--root', $TaskPath, 'run', '--autonomous')
+    if ($PlannerContext -ne '') { $nativeArgs += @('--planner-context', $PlannerContext) }
+    if ($PromptRecipe -ne '') { $nativeArgs += @('--prompt-recipe', $PromptRecipe) }
     if ($EnableParallelWriters) { $nativeArgs += '--parallel-writers' }
     if ($ParallelLimit -ne 0) { $nativeArgs += @('--max-parallel', [string]$ParallelLimit) }
     $nativeArgs += $Objective
@@ -345,6 +359,7 @@ function Get-UsageMetrics([object]$Usage) {
     # NOT a provider call count: provider_calls stays null (no actual count
     # exists in the contracts). Unknown metrics stay null, never zero.
     $inSum = 0; $outSum = 0; $inSeen = $false; $outSeen = $false
+    $cachedSum = 0; $reasoningSum = 0; $typedSeen = 0
     $total = $null; $matched = $null
     if ($null -ne $Usage -and $null -ne $Usage.invocations) {
         $total = 0; $matched = 0
@@ -355,6 +370,18 @@ function Get-UsageMetrics([object]$Usage) {
             if ($null -ne $pu) {
                 if ($null -ne $pu.input_tokens) { $inSum += [int64]$pu.input_tokens; $inSeen = $true }
                 if ($null -ne $pu.output_tokens) { $outSum += [int64]$pu.output_tokens; $outSeen = $true }
+                $delta = $pu.accounting.delta
+                if ($pu.accounting.coverage -eq 'OBSERVED' -and
+                    $null -ne $pu.input_tokens -and $null -ne $pu.output_tokens -and
+                    $null -ne $delta.inputTokens -and $null -ne $delta.outputTokens -and
+                    $null -ne $delta.cachedInputTokens -and $null -ne $delta.reasoningOutputTokens -and
+                    $delta.inputTokens -eq $pu.input_tokens -and $delta.outputTokens -eq $pu.output_tokens -and
+                    $delta.cachedInputTokens -ge 0 -and $delta.cachedInputTokens -le $delta.inputTokens -and
+                    $delta.reasoningOutputTokens -ge 0 -and $delta.reasoningOutputTokens -le $delta.outputTokens) {
+                    $cachedSum += [int64]$delta.cachedInputTokens
+                    $reasoningSum += [int64]$delta.reasoningOutputTokens
+                    $typedSeen++
+                }
             }
         }
     }
@@ -364,6 +391,10 @@ function Get-UsageMetrics([object]$Usage) {
         ProviderCalls               = $null
         InputTokens                 = if ($inSeen) { $inSum } else { $null }
         OutputTokens                = if ($outSeen) { $outSum } else { $null }
+        CachedInputTokens           = if ($total -gt 0 -and $typedSeen -eq $total -and $matched -eq $total) { $cachedSum } else { $null }
+        UncachedInputTokens         = if ($total -gt 0 -and $typedSeen -eq $total -and $matched -eq $total) { $inSum - $cachedSum } else { $null }
+        ReasoningOutputTokens       = if ($total -gt 0 -and $typedSeen -eq $total -and $matched -eq $total) { $reasoningSum } else { $null }
+        TokenTypeCoverage           = if ($total -gt 0 -and $typedSeen -eq $total -and $matched -eq $total) { 'observed' } elseif ($typedSeen -gt 0) { 'partial' } else { 'unknown' }
     }
 }
 
@@ -438,6 +469,8 @@ function Get-RunnerSourceHashes() {
         'evals/v1/harness/Test-ArgvPolicy.ps1',
         'evals/v1/harness/Test-CopyFixtures.ps1',
         'evals/v1/harness/Test-TomlArgvPolicy.ps1',
+        'evals/v1/harness/Test-NativeRunArgs.ps1',
+        'evals/v1/harness/Test-UsageMetrics.ps1',
         'evals/v1/manifest.json'
     )
     $out = [ordered]@{}
@@ -642,6 +675,8 @@ if ($Action -eq 'Prepare') {
             native_test_scope      = $native.Scope
             windows_exclusion      = if ($native.Scope -eq 'windows-scoped') { '^TestNocmpIntegration$ (Windows-only atomic tasks; rationale in manifest native_verification)' } else { $null }
             task_completion        = 'NOT RUN'
+            planner_context_requested = $PlannerContext
+            prompt_recipe_requested = $PromptRecipe
             provider_calls         = 0
             input_tokens           = $null
             output_tokens          = $null
@@ -663,6 +698,8 @@ if ($Action -eq 'Prepare') {
         suite_id                      = $manifest.suite_id
         run_id                        = $RunId
         mode                          = 'prepare'
+        planner_context_requested  = $PlannerContext
+        prompt_recipe_requested  = $PromptRecipe
         created_utc                   = [DateTime]::UtcNow.ToString('o')
         product_head                  = $productHead
         product_tree_dirty_at_prepare = $productDirty
@@ -726,6 +763,14 @@ $runJsonPath = Join-Path $runPath 'run.json'
 if (-not (Test-Path -LiteralPath $runJsonPath)) { throw "Prepared run not found: $runJsonPath. Prepare first with a new run nonce." }
 $priorRunJsonSha = (Get-FileSha256 $runJsonPath).ToLowerInvariant()
 $prior = Get-Content -Raw -LiteralPath $runJsonPath | ConvertFrom-Json
+$preparedPlannerContext = [string]$prior.planner_context_requested
+if ($preparedPlannerContext -ne $PlannerContext) {
+    throw 'PlannerContext must match the treatment recorded by the prepared run.'
+}
+$preparedPromptRecipe = [string]$prior.prompt_recipe_requested
+if ($preparedPromptRecipe -ne $PromptRecipe) {
+    throw 'PromptRecipe must match the treatment recorded by the prepared run.'
+}
 $taskPins = @($entries | ForEach-Object { [ordered]@{ task_id = $_.id; source_sha = $_.sha; url = $_.url } })
 # Optional known external build receipt: validate binary hash when present,
 # never blindly trust stamped source.
@@ -770,6 +815,8 @@ foreach ($entry in $entries) {
     $result = [ordered]@{
         task_id = $entry.id; eval_mode = $EvalMode; terminal_state = 'BLOCKED'
         blocked_reason = $null; fail_reason = $null
+        planner_context_requested = $PlannerContext
+        prompt_recipe_requested = $PromptRecipe
     }
     try {
         if (-not (Test-Path -LiteralPath $taskPath)) { throw "Task checkout missing for $($entry.id): $taskPath" }
@@ -796,7 +843,7 @@ foreach ($entry in $entries) {
             $result.verification_config_sha256 = $verPolicy.ConfigSha
             $result.native_test_scope = $verPolicy.Scope
             Set-Content -NoNewline -Encoding utf8 (Join-Path $taskOutDir 'verification-argv.log') $verPolicy.ArgvText
-            $runArgs = @(Get-NativeRunArgs $taskPath $entry.task ([bool]$ParallelWriters) $MaxParallel)
+            $runArgs = @(Get-NativeRunArgs $taskPath $entry.task ([bool]$ParallelWriters) $MaxParallel $PlannerContext $PromptRecipe)
             $result.parallel_writers_requested = [bool]$ParallelWriters
             $result.writer_edit_validation_requested = [bool]$ValidateWriterEdits
             $result.max_parallel_requested = if ($MaxParallel -eq 0) { $null } else { $MaxParallel }
@@ -824,6 +871,12 @@ foreach ($entry in $entries) {
                 if ($LASTEXITCODE -ne 0) { throw "fabric diff failed for $($entry.id); see fabric-diff.*.log" }
             }
             $snap = (Get-Content -Raw -LiteralPath (Join-Path $taskOutDir 'fabric-inspect.stdout.log') | ConvertFrom-Json)
+            $observedPlannerContext = [string]$snap.creation.execution.planner_context
+            $result.planner_context_observed = $observedPlannerContext
+            if ($observedPlannerContext -ne $PlannerContext) { throw 'Inspected run planner_context does not match the requested treatment.' }
+            $observedPromptRecipe = [string]$snap.creation.execution.prompt_recipe
+            $result.prompt_recipe_observed = $observedPromptRecipe
+            if ($observedPromptRecipe -ne $PromptRecipe) { throw 'Inspected run prompt_recipe does not match the requested treatment.' }
             $usage = (Get-Content -Raw -LiteralPath (Join-Path $taskOutDir 'fabric-usage.stdout.log') | ConvertFrom-Json)
             $diffOut = (Get-Content -Raw -LiteralPath (Join-Path $taskOutDir 'fabric-diff.stdout.log') | ConvertFrom-Json)
             $diffCandidateId = $diffOut.candidate_id
@@ -840,6 +893,10 @@ foreach ($entry in $entries) {
             $result.provider_calls = $metrics.ProviderCalls
             $result.input_tokens = $metrics.InputTokens
             $result.output_tokens = $metrics.OutputTokens
+            $result.cached_input_tokens = $metrics.CachedInputTokens
+            $result.uncached_input_tokens = $metrics.UncachedInputTokens
+            $result.reasoning_output_tokens = $metrics.ReasoningOutputTokens
+            $result.token_type_coverage = $metrics.TokenTypeCoverage
         } else {
             # PR5 matched evaluation: explicit supplied old script; init with
             # the baseline exe/model first, same verification policy and
@@ -925,6 +982,10 @@ foreach ($entry in $entries) {
             $result.provider_calls = $metrics.ProviderCalls
             $result.input_tokens = $metrics.InputTokens
             $result.output_tokens = $metrics.OutputTokens
+            $result.cached_input_tokens = $metrics.CachedInputTokens
+            $result.uncached_input_tokens = $metrics.UncachedInputTokens
+            $result.reasoning_output_tokens = $metrics.ReasoningOutputTokens
+            $result.token_type_coverage = $metrics.TokenTypeCoverage
         }
 
         # Workspace: exact contract path snap.workspace.request.path, bound to
@@ -1112,6 +1173,8 @@ $evalRecord = [ordered]@{
     eval_mode              = $EvalMode
     model                  = $Model
     effort                 = $Effort
+    planner_context_requested = $PlannerContext
+    prompt_recipe_requested = $PromptRecipe
     parallel_writers_requested = [bool]$ParallelWriters
     writer_edit_validation_requested = [bool]$ValidateWriterEdits
     max_parallel_requested = if ($MaxParallel -eq 0) { $null } else { $MaxParallel }

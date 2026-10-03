@@ -185,8 +185,16 @@ func TestExecutionPolicyGraphValidationAndLegacyIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(legacyRaw), "graph_version") || strings.Contains(string(legacyRaw), "max_parallel") || strings.Contains(string(legacyRaw), "repair_planning_version") {
+	if strings.Contains(string(legacyRaw), "graph_version") || strings.Contains(string(legacyRaw), "max_parallel") || strings.Contains(string(legacyRaw), "repair_planning_version") || strings.Contains(string(legacyRaw), "prompt_recipe") {
 		t.Fatal("empty graph policy changed legacy serialization")
+	}
+	cachePrefix := legacy
+	cachePrefix.PromptRecipe = promptRecipeCachePrefixV1
+	if err := cachePrefix.Validate(); err != nil {
+		t.Fatalf("cache-prefix-v1 policy rejected: %v", err)
+	}
+	if strings.Contains(string(legacyRaw), promptRecipeCachePrefixV1) {
+		t.Fatal("legacy policy unexpectedly binds the new prompt recipe")
 	}
 	graph := ExecutionPolicy{Mode: "autonomous-v1", MaxRepairs: 2, Context: taskContextBoundedV1, GraphVersion: 1, MaxParallel: 3}
 	if err := graph.Validate(); err != nil {
@@ -207,6 +215,7 @@ func TestExecutionPolicyGraphValidationAndLegacyIdentity(t *testing.T) {
 		{Mode: "autonomous-v1", MaxRepairs: 2, GraphVersion: 0, MaxParallel: 3},
 		{Mode: "autonomous-v1", MaxRepairs: 2, GraphVersion: 0, RepairPlanningVersion: 1},
 		{Mode: "autonomous-v1", MaxRepairs: 2, GraphVersion: 1, MaxParallel: 3, RepairPlanningVersion: 2},
+		{Mode: "autonomous-v1", MaxRepairs: 2, PromptRecipe: "unknown"},
 	} {
 		if err := bad.Validate(); err == nil {
 			t.Fatalf("invalid graph policy admitted: %+v", bad)

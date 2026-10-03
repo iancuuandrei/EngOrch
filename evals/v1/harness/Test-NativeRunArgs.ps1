@@ -21,6 +21,12 @@ foreach ($limit in @(1, 2, 8)) {
 }
 $serial = @(Get-NativeRunArgs $taskPath $objective $false 1)
 if ($serial -contains '--parallel-writers' -or $serial[-1] -ne $objective -or $serial[-2] -ne '1') { throw 'Serial override unexpectedly enables parallel writers or splits the objective.' }
+$recipe = @(Get-NativeRunArgs $taskPath $objective $false 0 '' 'cache-prefix-v1')
+$expectedRecipe = @('--root', $taskPath, 'run', '--autonomous', '--prompt-recipe', 'cache-prefix-v1', $objective)
+if (($recipe | ConvertTo-Json -Compress) -ne ($expectedRecipe | ConvertTo-Json -Compress)) { throw 'Prompt recipe argument differs.' }
+$rejectedRecipe = $false
+try { Get-NativeRunArgs $taskPath $objective $false 0 '' 'unknown' | Out-Null } catch { $rejectedRecipe = $true }
+if (-not $rejectedRecipe) { throw 'Unknown prompt recipe admitted.' }
 foreach ($invalid in @(-1, 9)) {
     $rejected = $false
     try { Get-NativeRunArgs $taskPath $objective $true $invalid | Out-Null } catch { $rejected = $true }

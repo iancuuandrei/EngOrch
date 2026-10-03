@@ -81,7 +81,7 @@ func (a *Adapter) Execute(ctx context.Context, i runtime.Invocation) (executionR
 			}
 		}
 	}()
-	if err := appendEvent(a.JournalPath, "runtime.intent", Intent{i, a.Directory}); err != nil {
+	if err := appendEvent(a.JournalPath, "runtime.intent", Intent{Invocation: i, Directory: a.Directory, ToolOutputVersion: ToolOutputVersionUTF8First}); err != nil {
 		return runtime.Result{}, err
 	}
 	if a.Source != nil {

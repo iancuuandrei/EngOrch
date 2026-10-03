@@ -12,10 +12,16 @@ import (
 	"harness.local/engorch/internal/runtime"
 )
 
+// ToolOutputVersionUTF8First selects the compact read-page representation for
+// threads started with the current source/candidate tool descriptions.
+const ToolOutputVersionUTF8First = 1
+
 // Intent binds the invocation and workspace before any provider thread creation.
 type Intent struct {
 	Invocation runtime.Invocation `json:"invocation"`
 	Directory  string             `json:"directory"`
+	// Omitted is the v1 legacy result shape, preserving already-started threads.
+	ToolOutputVersion int `json:"tool_output_version,omitempty"`
 }
 
 // State is derived exclusively from validated durable events.
@@ -188,6 +194,9 @@ func replay(events []journal.Event) (State, error) {
 			}
 			if intent.Invocation.Version != 1 || i.ID != intent.Invocation.ID || i.Profile.Runtime != "codex-app-server" || !filepath.IsAbs(intent.Directory) {
 				return s, errors.New("invalid runtime intent")
+			}
+			if intent.ToolOutputVersion != 0 && intent.ToolOutputVersion != ToolOutputVersionUTF8First {
+				return s, errors.New("unsupported runtime tool output version")
 			}
 			s.Intent = &intent
 		case "runtime.thread":

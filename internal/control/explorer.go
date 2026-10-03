@@ -62,7 +62,8 @@ func explorerInvocation(s Snapshot, question string) (runtime.Invocation, error)
 		}
 		instruction += " candidate_id MUST exactly match the supplied candidate_id. summary MUST be a single nonempty string, never an object or array. paths MUST be an array of sorted unique relative-path strings."
 	}
-	input, err := canonical.Bytes(struct {
+	instruction = promptRecipeInstruction(s.Creation.Execution, "explorer", s.Creation.Config.ExplorerContract, instruction)
+	input, err := promptRecipeBytes(s.Creation.Execution, struct {
 		OutputSchema json.RawMessage     `json:"output_schema,omitempty"`
 		Instruction  string              `json:"instruction"`
 		RunID        string              `json:"run_id"`

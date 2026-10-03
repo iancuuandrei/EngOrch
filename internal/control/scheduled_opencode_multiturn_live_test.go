@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,6 +37,7 @@ import (
 	"harness.local/engorch/internal/providertransport"
 	"harness.local/engorch/internal/repository"
 	"harness.local/engorch/internal/runtime"
+	"harness.local/engorch/internal/sourcetools"
 	"harness.local/engorch/internal/taskpool"
 	"harness.local/engorch/internal/taskscheduler"
 	"harness.local/engorch/internal/toolreceipts"
@@ -411,13 +411,12 @@ func testPinnedOpenCodeScheduledExplorerCompositeTools(t *testing.T, parallel bo
 	if brokerErr != nil || receiptsErr != nil || broker.Binding == nil || broker.Calls != 1 || len(broker.Responses) != 1 || !broker.Closed || len(receipts.Calls) != 2 || owners[toolreceipts.OwnerContext] != 1 || owners[toolreceipts.OwnerAgent] != 1 || tools["source_read"] != 1 || tools["list_agents"] != 1 {
 		t.Fatal("composite backend journals differ", brokerErr, receiptsErr, broker, receipts, owners, tools)
 	}
-	var chunk repository.SourceChunk
+	var chunk sourcetools.ReadResult
 	if err := canonical.Decode(broker.Responses[0].Content, &chunk); err != nil {
 		t.Fatal(err)
 	}
-	content, decodeErr := base64.StdEncoding.DecodeString(chunk.ContentBase64)
-	if decodeErr != nil || string(content) != "base\n" || chunk.Commit != prepared.snapshot.Creation.Repository.Commit {
-		t.Fatal("composite source backend differs", string(content), chunk, decodeErr)
+	if chunk.ContentBase64 != "" || chunk.ContentUTF8 == nil || *chunk.ContentUTF8 != "base\n" || chunk.Commit != prepared.snapshot.Creation.Repository.Commit {
+		t.Fatal("composite source backend differs", chunk)
 	}
 	receiptBytes, err := os.ReadFile(runtimePath + ".tool-receipts")
 	if err != nil || bytes.Contains(receiptBytes, []byte("file.txt")) || bytes.Contains(receiptBytes, []byte(`{"limit":8}`)) {
@@ -1109,13 +1108,12 @@ func TestPinnedOpenCodeScheduledExplorerMultiTurn(t *testing.T) {
 		if inspectErr != nil || gatewayErr != nil || brokerErr != nil || headErr != nil || gatewayHeadErr != nil || runtimeState.Intent == nil || runtimeState.Result == nil || runtimeState.Intent.Invocation.ID != turn.Task.InvocationID || receipt.InvocationID != turn.Task.InvocationID || receipt.RuntimeJournalHead != runtimeHead || receipt.GatewayJournalHead != gatewayHead || runtimeState.Result.GatewayHead != gatewayHead || len(gatewayState.Calls) != 2 || !gatewayState.Finished || gatewayState.Exhausted || brokerState.Calls != 1 || len(brokerState.Responses) != 1 || !brokerState.Closed {
 			t.Fatal("per-turn runtime receipt is incomplete", turn.TurnSequence, inspectErr, gatewayErr, brokerErr, headErr, gatewayHeadErr, receipt, runtimeState, gatewayState, brokerState)
 		}
-		var chunk repository.SourceChunk
+		var chunk sourcetools.ReadResult
 		if err := canonical.Decode(brokerState.Responses[0].Content, &chunk); err != nil {
 			t.Fatal(err)
 		}
-		content, decodeErr := base64.StdEncoding.DecodeString(chunk.ContentBase64)
-		if decodeErr != nil || string(content) != "base\n" || chunk.Commit != snapshot.Creation.Repository.Commit {
-			t.Fatal("turn source receipt differs from committed bytes", turn.TurnSequence, string(content), chunk, decodeErr)
+		if chunk.ContentBase64 != "" || chunk.ContentUTF8 == nil || *chunk.ContentUTF8 != "base\n" || chunk.Commit != snapshot.Creation.Repository.Commit {
+			t.Fatal("turn source receipt differs from committed bytes", turn.TurnSequence, chunk)
 		}
 		if runtimeHeads[runtimeHead] || gatewayHeads[gatewayHead] {
 			t.Fatal("turn journals share a terminal head", turn.TurnSequence, runtimeHead, gatewayHead)

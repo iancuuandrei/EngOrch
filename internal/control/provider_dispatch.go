@@ -415,7 +415,7 @@ func replayPlannerProvider(s *Snapshot, event journal.Event) error {
 	if err := canonical.Decode(event.Payload, &receipt); err != nil {
 		return err
 	}
-	invocation, err := plannerInvocation(s.Creation.Config, s.Creation.Objective)
+	invocation, err := plannerInvocationForSnapshot(*s)
 	if err != nil || receipt.Version != 1 || receipt.Role != "planner" || receipt.InvocationID != invocation.ID || safepath.RequireDigest(receipt.AccessInvocationID) != nil || safepath.RequireDigest(receipt.RuntimeJournalHead) != nil || safepath.RequireDigest(receipt.GatewayJournalHead) != nil || safepath.RequireDigest(receipt.ResultHash) != nil {
 		return errors.New("invalid direct planner receipt identity")
 	}

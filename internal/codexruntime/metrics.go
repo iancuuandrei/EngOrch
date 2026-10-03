@@ -35,7 +35,8 @@ type ContextUsage struct {
 }
 
 // MeasureContext computes reproducible accounting from one validated journal read.
-// Content bytes include structured tool result wrappers and base64 representations.
+// Content bytes count exact journaled tool-result JSON, including UTF-8-first
+// text pages for current intents and Base64 for binary or legacy text pages.
 // They exclude provider-added prompts, hidden context, tokenizer effects and cost.
 func MeasureContext(path string) (ContextUsage, error) {
 	events, err := journal.Read(path)

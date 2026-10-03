@@ -99,7 +99,7 @@ var commands = []Command{
 	{"inspect", "[RUN] [--export-jsonl]", "Replay one run and show its bound inputs and state, or export its validated canonical event history."},
 	{"resume", "[RUN] [ACTOR NONCE] or --autonomous [RUN]", "Resume planning, explicitly reopen a settled pause with ACTOR and NONCE, or continue one bounded autonomous run without resending uncertain work."},
 	{"approve", "RUN PLAN ACTOR", "Approve one exact plan with an explicit human actor."},
-	{"run", "RUN or --autonomous [--prepare-only] [--max-repairs N] [--max-parallel N] [--parallel-writers] OBJECTIVE or --file PATH", "Create or validate an approved run's isolated writer worktree, or create and advance a bounded autonomous coding run; parallel-writers opts into up to two independent initial implementation tasks; prepare-only returns after graph and workspace confirmation."},
+	{"run", "RUN or --autonomous [--prepare-only] [--max-repairs N] [--max-parallel N] [--parallel-writers] [--prompt-recipe cache-prefix-v1] OBJECTIVE or --file PATH", "Create or validate an approved run's isolated writer worktree, or create and advance a bounded autonomous coding run; prompt-recipe opts into cache-prefix-v1 request ordering; parallel-writers opts into up to two independent initial implementation tasks; prepare-only returns after graph and workspace confirmation."},
 	{"reconcile", "RUN", "Observe unknown local commit, RI import/publication, workspace or file effects without retrying writes."},
 	{"ri prepare-import", "RUN PLAN_JSON", "Validate an import plan and return its exact effect approval target."},
 	{"ri import", "RUN PLAN_JSON INTENT_ID ACTOR", "Execute an exactly authorized, journaled local SCIP import."},
@@ -494,7 +494,7 @@ func Execute(ctx context.Context, args []string, cwd string, out io.Writer) (res
 		} else if command == "resume" {
 			s, err = resume(ctx, p)
 		} else {
-			s, err = control.Inspect(p)
+			s, err = snapshotForCommand(command, bound, p)
 		}
 		if err != nil {
 			return err
@@ -554,6 +554,16 @@ func Execute(ctx context.Context, args []string, cwd string, out io.Writer) (res
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}
+}
+
+// snapshotForCommand reuses the already validated snapshot for a read-only
+// inspect. Other commands reach this fallback only after any command-specific
+// mutation or reconciliation and must load their resulting state again.
+func snapshotForCommand(command string, bound control.Snapshot, path string) (control.Snapshot, error) {
+	if command == "inspect" {
+		return bound, nil
+	}
+	return control.Inspect(path)
 }
 
 func resume(ctx context.Context, p string) (control.Snapshot, error) {

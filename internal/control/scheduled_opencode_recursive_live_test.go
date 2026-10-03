@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,7 +27,7 @@ import (
 	"harness.local/engorch/internal/opencoderuntime"
 	"harness.local/engorch/internal/providergateway"
 	"harness.local/engorch/internal/providertransport"
-	"harness.local/engorch/internal/repository"
+	"harness.local/engorch/internal/sourcetools"
 	"harness.local/engorch/internal/taskpool"
 	"harness.local/engorch/internal/taskscheduler"
 	"harness.local/engorch/internal/toolreceipts"
@@ -244,12 +243,11 @@ func (p *scheduledRecursiveProvider) responseLocked(body []byte, request schedul
 		if err := canonical.Decode([]byte(latest.Output), &response); err != nil || !response.Success || response.CallID == "" || response.InvocationID == "" || len(response.Content) == 0 {
 			return nil, false, errors.New("recursive child source receipt envelope changed")
 		}
-		var chunk repository.SourceChunk
+		var chunk sourcetools.ReadResult
 		if err := canonical.Decode(response.Content, &chunk); err != nil || chunk.Commit != p.expectedCommit {
 			return nil, false, errors.New("recursive child source result identity changed")
 		}
-		content, decodeErr := base64.StdEncoding.DecodeString(chunk.ContentBase64)
-		if decodeErr != nil || string(content) != "base\n" {
+		if chunk.ContentBase64 != "" || chunk.ContentUTF8 == nil || *chunk.ContentUTF8 != "base\n" {
 			return nil, false, errors.New("recursive child source content changed")
 		}
 		return scheduledOpenCodeTextSSE(42, p.childOutput), false, nil

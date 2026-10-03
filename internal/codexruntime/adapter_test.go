@@ -192,7 +192,7 @@ func TestResumeOnlyReadsRecordedTurn(t *testing.T) {
 		kind    string
 		payload any
 	}{
-		{"runtime.intent", Intent{i, root}}, {"runtime.thread", settings},
+		{"runtime.intent", Intent{Invocation: i, Directory: root}}, {"runtime.thread", settings},
 		{"runtime.turn-intent", struct {
 			InvocationID string `json:"invocation_id"`
 		}{i.ID}},

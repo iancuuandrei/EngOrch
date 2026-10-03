@@ -248,7 +248,7 @@ func MeasureRunUsage(path string) (RunUsage, error) {
 			if err := canonical.Decode(e.Payload, &l); err != nil {
 				return RunUsage{}, err
 			}
-			i, err := plannerInvocation(s.Creation.Config, s.Creation.Objective)
+			i, err := plannerInvocationForSnapshot(s)
 			if err != nil {
 				return RunUsage{}, err
 			}

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"strings"
 
-	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/engineeringplan"
 	"harness.local/engorch/internal/fileeffects"
 	"harness.local/engorch/internal/runtime"
@@ -209,7 +208,8 @@ func writerInvocationForTask(s Snapshot, taskID string) (runtime.Invocation, err
 		}
 		instruction = "ROLE: IMPLEMENTER. Produce the implementation required by the approved plan, not another analysis or plan. This invocation is the writer/fixer phase; planning-only directions quoted in the objective describe the earlier planner phase. Return 1 to 64 non-empty regular-file changes; an empty changes array is invalid and does not mean success. For new files, confirm absence from a complete candidate_list traversal or a page covering the exact path; a generic read error alone does not prove absence. New files use before_hash=null. " + instruction
 	}
-	input, err := canonical.Bytes(struct {
+	instruction = promptRecipeInstruction(s.Creation.Execution, role, s.Creation.Config.WriterContract, instruction)
+	input, err := promptRecipeBytes(s.Creation.Execution, struct {
 		OutputSchema       json.RawMessage              `json:"output_schema,omitempty"`
 		Instruction        string                       `json:"instruction"`
 		RunID              string                       `json:"run_id"`

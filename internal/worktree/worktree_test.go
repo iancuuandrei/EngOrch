@@ -11,7 +11,7 @@ import (
 	"harness.local/engorch/internal/repository"
 )
 
-func fixture(t *testing.T) (string, Request) {
+func fixture(t testing.TB) (string, Request) {
 	t.Helper()
 	d := t.TempDir()
 	gitTest(t, d, "init", "-q")
@@ -31,7 +31,7 @@ func fixture(t *testing.T) (string, Request) {
 	return d, r
 }
 
-func gitTest(t *testing.T, root string, args ...string) {
+func gitTest(t testing.TB, root string, args ...string) {
 	t.Helper()
 	c := exec.Command("git", append([]string{"-C", root}, args...)...)
 	if b, err := c.CombinedOutput(); err != nil {

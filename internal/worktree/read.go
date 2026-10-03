@@ -22,6 +22,19 @@ type SourceChunk struct {
 	NextOffset    *int64  `json:"next_offset"`
 }
 
+// SourceFile is one bounded raw-byte read from an admitted candidate. It is
+// intended for trusted in-process consumers that already hold a workspace
+// read lease; unlike SourceChunk it does not base64-encode the bytes.
+type SourceFile struct {
+	CandidateID string
+	Path        string
+	SHA256      string
+	Size        int64
+	Content     []byte
+	NextOffset  *int64
+	Err         error
+}
+
 type pageSink struct {
 	offset, position int64
 	limit            int
@@ -103,4 +116,98 @@ func ReadSource(ctx context.Context, binding Binding, expected Candidate, path s
 		chunk.NextOffset = &next
 	}
 	return chunk, nil
+}
+
+// ReadSources reads a bounded set of candidate files while doing only one
+// whole-candidate observation before and after the batch. Each successful
+// selected-file read is still hashed and compared with the captured manifest.
+// The caller must hold the workspace read lease, as with ReadSource.
+//
+// Per-file observation errors are returned in the matching SourceFile.Err;
+// candidate drift or invalid batch arguments fail the entire call.
+func ReadSources(ctx context.Context, binding Binding, expected Candidate, paths []string, limit int) ([]SourceFile, error) {
+	const maxBatchFiles = 24
+	if len(paths) < 1 || len(paths) > maxBatchFiles || limit < 1 || limit > 32768 {
+		return nil, errors.New("invalid candidate source batch bounds")
+	}
+	if err := expected.ValidateBinding(binding); err != nil {
+		return nil, err
+	}
+	id, err := expected.ID()
+	if err != nil {
+		return nil, err
+	}
+	before, states, err := Capture(ctx, binding)
+	if err != nil {
+		return nil, err
+	}
+	if before != expected {
+		return nil, errors.New("candidate changed before batch read")
+	}
+	stateByPath := make(map[string]FileState, len(states))
+	for _, state := range states {
+		stateByPath[state.Path] = state
+	}
+	seen := make(map[string]bool, len(paths))
+	selected := make([]FileState, len(paths))
+	for i, path := range paths {
+		if err := safepath.Writable(path); err != nil {
+			return nil, err
+		}
+		if seen[path] {
+			return nil, errors.New("duplicate candidate source batch path")
+		}
+		seen[path] = true
+		state, ok := stateByPath[path]
+		if !ok {
+			return nil, errors.New("path absent from candidate")
+		}
+		selected[i] = state
+	}
+	root, err := os.OpenRoot(binding.Request.Path)
+	if err != nil {
+		return nil, err
+	}
+	rootOpen := true
+	defer func() {
+		if rootOpen {
+			_ = root.Close()
+		}
+	}()
+	results := make([]SourceFile, len(paths))
+	for i, state := range selected {
+		if err := ctx.Err(); err != nil {
+			rootOpen = false
+			return nil, errors.Join(err, root.Close())
+		}
+		result := SourceFile{CandidateID: id, Path: state.Path}
+		sink := &pageSink{offset: 0, limit: limit}
+		hash, size, executable, exists, readErr := safepath.CopyRegular(root, state.Path, 64<<20, sink)
+		if readErr != nil {
+			result.Err = readErr
+		} else if !exists || hash != state.Hash || executable != state.Executable {
+			result.Err = errors.New("candidate file observation mismatch")
+		} else {
+			result.SHA256 = hash
+			result.Size = size
+			result.Content = sink.bytes
+			if next := int64(len(sink.bytes)); next < size {
+				result.NextOffset = &next
+			}
+		}
+		results[i] = result
+	}
+	closeErr := root.Close()
+	rootOpen = false
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	after, err := Fingerprint(ctx, binding)
+	if err != nil {
+		return nil, err
+	}
+	if after != expected {
+		return nil, errors.New("candidate changed during batch read")
+	}
+	return results, nil
 }

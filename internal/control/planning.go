@@ -90,7 +90,7 @@ func replayPlanner(s *Snapshot, e journal.Event) error {
 		if err := canonical.Decode(e.Payload, &receipt); err != nil {
 			return err
 		}
-		i, err := plannerInvocation(s.Creation.Config, s.Creation.Objective)
+		i, err := plannerInvocationForSnapshot(*s)
 		if err != nil {
 			return err
 		}
@@ -135,6 +135,15 @@ func ResumePlanning(ctx context.Context, path string) (snapshot Snapshot, err er
 	if err != nil {
 		return s, err
 	}
+	if s.State == "OBJECTIVE" && plannerContextEnabled(s) && s.PlannerContext == nil {
+		if _, err := AdmitPlannerContext(ctx, path); err != nil {
+			return s, err
+		}
+		s, err = Inspect(path)
+		if err != nil {
+			return s, err
+		}
+	}
 	if s.State == "OBJECTIVE" {
 		if err := Append(path, "planning.started", struct{}{}); err != nil {
 			return s, err
@@ -147,7 +156,7 @@ func ResumePlanning(ctx context.Context, path string) (snapshot Snapshot, err er
 	if s.State != "PLANNING" {
 		return s, nil
 	}
-	i, err := plannerInvocation(s.Creation.Config, s.Creation.Objective)
+	i, err := plannerInvocationForSnapshot(s)
 	if err != nil {
 		return s, err
 	}

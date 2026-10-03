@@ -123,7 +123,7 @@ func validateModelAccessLedger(s Snapshot) error {
 func currentModelInvocation(s Snapshot, id string) (runtime.Invocation, error) {
 	candidates := []runtime.Invocation{}
 	if s.State == "PLANNING" && s.Creation.Config.Planner.Runtime == "codex-app-server" {
-		invocation, err := plannerInvocation(s.Creation.Config, s.Creation.Objective)
+		invocation, err := plannerInvocationForSnapshot(s)
 		if err != nil {
 			return runtime.Invocation{}, err
 		}

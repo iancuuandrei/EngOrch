@@ -3,7 +3,6 @@ package control
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"sort"
@@ -274,6 +273,7 @@ func AdmitTaskContext(ctx context.Context, path, role, question string) (TaskCon
 	preOmissions := []taskcontext.Omission{}
 	total := 0
 	attempts := 0
+	readStates := []worktree.FileState{}
 	// Lexical provenance binds any candidate-overlay search evidence below.
 	var lexicalBuild, lexicalOverlay string
 	if lex, lexErr := roleLexical(s); lexErr != nil {
@@ -303,9 +303,37 @@ func AdmitTaskContext(ctx context.Context, path, role, question string) (TaskCon
 			}
 			continue
 		}
+		// ReadSources enforces the same protected-path floor as writer inputs.
+		// Do not let one intentionally unreadable path (for example a GitHub
+		// workflow) abort the entire bounded context batch; retain it as an
+		// explicit omission and continue with eligible source files.
+		if err := safepath.Writable(fs.Path); err != nil {
+			appendTaskOmission(&preOmissions, 64, fs.Path, "unreadable")
+			continue
+		}
 		attempts++
-		chunk, readErr := worktree.ReadSource(ctx, *s.Workspace, captured, fs.Path, 0, taskContextMaxFileBytes)
+		readStates = append(readStates, fs)
+	}
+	readPaths := make([]string, len(readStates))
+	for i, fs := range readStates {
+		readPaths[i] = fs.Path
+	}
+	chunks := []worktree.SourceFile{}
+	if len(readPaths) > 0 {
+		var readErr error
+		chunks, readErr = worktree.ReadSources(ctx, *s.Workspace, captured, readPaths, taskContextMaxFileBytes)
 		if readErr != nil {
+			_ = lease.Close()
+			return TaskContextRecord{}, readErr
+		}
+	}
+	if len(chunks) != len(readStates) {
+		_ = lease.Close()
+		return TaskContextRecord{}, errors.New("task context batch read count mismatch")
+	}
+	for i, fs := range readStates {
+		chunk := chunks[i]
+		if chunk.Err != nil {
 			// Absent or changed file: record explicitly, never claim complete.
 			appendTaskOmission(&preOmissions, 64, fs.Path, "unreadable")
 			continue
@@ -318,11 +346,7 @@ func AdmitTaskContext(ctx context.Context, path, role, question string) (TaskCon
 			appendTaskOmission(&preOmissions, 64, fs.Path, "file_too_large")
 			continue
 		}
-		raw, decodeErr := base64.StdEncoding.DecodeString(chunk.ContentBase64)
-		if decodeErr != nil {
-			_ = lease.Close()
-			return TaskContextRecord{}, errors.New("task context chunk decode failed")
-		}
+		raw := chunk.Content
 		if int64(len(raw)) != chunk.Size {
 			_ = lease.Close()
 			return TaskContextRecord{}, errors.New("task context chunk size mismatch")

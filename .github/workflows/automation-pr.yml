@@ -1,0 +1,50 @@
+name: automation:fabric-v1-sol-supervisor
+
+# Trusted maintainer pushes only; this workflow never executes pull-request code.
+# Author checks enforce attribution, not authentication or approval authority.
+
+on:
+  push:
+    branches: [dev]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: fabric-dev-pull-request
+  cancel-in-progress: false
+
+jobs:
+  publish-draft:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Verify automation authors and publish draft
+        shell: bash
+        run: |
+          set -euo pipefail
+          comparison=$(gh api "repos/$GH_REPO/compare/main...dev")
+          if [ "$(jq -r '.ahead_by' <<< "$comparison")" = 0 ]; then
+            exit 0
+          fi
+          jq -e '
+            (.ahead_by == (.commits | length)) and
+            (.commits | length > 0 and all(.[];
+              .commit.author.name == "automation:fabric-v1-sol-supervisor" and
+              .commit.author.email == "automation@fabric.invalid" and
+              .commit.committer.name == "automation:fabric-v1-sol-supervisor" and
+              .commit.committer.email == "automation@fabric.invalid" and
+              (.commit.message | test("(?im)^Co-authored-by:") | not)))
+          ' <<< "$comparison" > /dev/null
+          existing=$(gh api "repos/$GH_REPO/pulls?state=open&base=main&head=${GH_REPO%/*}:dev")
+          if [ "$(jq 'length' <<< "$existing")" != 0 ]; then
+            jq -e 'all(.[]; .user.login == "github-actions[bot]")' <<< "$existing" > /dev/null
+            exit 0
+          fi
+          gh pr create --base main --head dev --draft \
+            --title 'automation: develop Fabric capabilities' \
+            --body 'Created by automation:fabric-v1-sol-supervisor. This draft requires completed verification, independent review, and current Sonar checks before integration. Consult the dev commit and docs/evaluation for the exact capability changes, evidence and remaining limits.'

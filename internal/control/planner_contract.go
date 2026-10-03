@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/config"
 	"harness.local/engorch/internal/engineeringplan"
 	"harness.local/engorch/internal/runtime"
@@ -33,8 +32,31 @@ const plannerGraphAssignmentV4 = "As planner, produce a bounded engineering task
 // hashes the exact planner result as the PlanID; no extra approval authority
 // is introduced.
 func plannerInvocation(c config.Config, objective string) (runtime.Invocation, error) {
+	return plannerInvocationWithContext(c, objective, nil)
+}
+
+// plannerInvocationForSnapshot binds an admitted planner context only for the
+// explicit opt-in. Empty policy retains the historic builder byte-for-byte.
+func plannerInvocationForSnapshot(s Snapshot) (runtime.Invocation, error) {
+	if !plannerContextEnabled(s) {
+		if s.PlannerContext != nil {
+			return runtime.Invocation{}, errors.New("planner context present without policy")
+		}
+		return plannerInvocationWithContextAndRecipe(s.Creation.Config, s.Creation.Objective, nil, s.Creation.Execution)
+	}
+	if s.PlannerContext == nil {
+		return runtime.Invocation{}, errors.New("planner context admission missing")
+	}
+	return plannerInvocationWithContextAndRecipe(s.Creation.Config, s.Creation.Objective, s.PlannerContext, s.Creation.Execution)
+}
+
+func plannerInvocationWithContext(c config.Config, objective string, plannerContext *PlannerContextRecord) (runtime.Invocation, error) {
+	return plannerInvocationWithContextAndRecipe(c, objective, plannerContext, nil)
+}
+
+func plannerInvocationWithContextAndRecipe(c config.Config, objective string, plannerContext *PlannerContextRecord, recipe *ExecutionPolicy) (runtime.Invocation, error) {
 	input := objective
-	if c.PlannerContract != "" || c.ReviewerContract == "json-v1" {
+	if c.PlannerContract != "" || c.ReviewerContract == "json-v1" || plannerContext != nil || recipe != nil && recipe.PromptRecipe != "" {
 		assignment := plannerAssignmentV1
 		var schema json.RawMessage
 		var verificationChecks []config.Check
@@ -83,13 +105,14 @@ func plannerInvocation(c config.Config, objective string) (runtime.Invocation, e
 			assignment += " The verification gate may claim only the configured verification checks supplied in verification_checks. Treat additional checks as planned recommendations only; never imply they ran or passed without recorded observations."
 			assignment += " Prefer direct mode for localized changes with known scope. Use graph mode for substantial or dependent work; independent read-only tasks may run concurrently, and research/design tasks are not mandatory for every small change."
 		}
-		wrapped, err := canonical.Bytes(struct {
-			OutputSchema       json.RawMessage `json:"output_schema,omitempty"`
-			Role               string          `json:"role"`
-			Instruction        string          `json:"instruction"`
-			Objective          string          `json:"objective"`
-			VerificationChecks []config.Check  `json:"verification_checks,omitempty"`
-		}{schema, "planner", assignment, objective, verificationChecks})
+		wrapped, err := promptRecipeBytes(recipe, struct {
+			OutputSchema       json.RawMessage       `json:"output_schema,omitempty"`
+			Role               string                `json:"role"`
+			Instruction        string                `json:"instruction"`
+			Objective          string                `json:"objective"`
+			VerificationChecks []config.Check        `json:"verification_checks,omitempty"`
+			PlannerContext     *PlannerContextRecord `json:"planner_context,omitempty"`
+		}{schema, "planner", assignment, objective, verificationChecks, plannerContext})
 		if err != nil {
 			return runtime.Invocation{}, err
 		}

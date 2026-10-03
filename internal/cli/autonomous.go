@@ -22,6 +22,8 @@ const defaultAutonomousMaxRepairs = 2
 
 const defaultAutonomousMaxParallel = 3
 
+const autonomousPlannerContextSourceBoundedV1 = "source-bounded-v1"
+
 // runCommand retains the original `run RUN` operation and adds the explicit
 // autonomous objective form. The latter creates the immutable execution policy
 // before any provider dispatch is considered by the controller.
@@ -60,6 +62,8 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	maxRepairs := fs.Int("max-repairs", defaultAutonomousMaxRepairs, "maximum bounded repair attempts")
 	maxParallel := fs.Int("max-parallel", defaultAutonomousMaxParallel, "maximum bounded parallel task workers (1 sequential, 2..8 parallel)")
 	parallelWriters := fs.Bool("parallel-writers", false, "allow two independent initial implementation tasks when justified")
+	plannerContext := fs.String("planner-context", "", "opt in to source-bounded planner evidence")
+	promptRecipe := fs.String("prompt-recipe", "", "opt in to cache-prefix-v1 prompt ordering")
 	prepareOnly := fs.Bool("prepare-only", false, "accept the graph and confirm its workspace, then return before explorer or writer dispatch")
 	goalFile := fs.String("file", "", "read objective from file")
 	if err := fs.Parse(args); err != nil {
@@ -70,6 +74,12 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	}
 	if *maxParallel < 1 || *maxParallel > 8 {
 		return errors.New("max-parallel must be between 1 and 8")
+	}
+	if *plannerContext != "" && *plannerContext != autonomousPlannerContextSourceBoundedV1 {
+		return errors.New("planner-context must be empty or source-bounded-v1")
+	}
+	if *promptRecipe != "" && *promptRecipe != "cache-prefix-v1" {
+		return errors.New("prompt-recipe must be empty or cache-prefix-v1")
 	}
 	if *goalFile != "" {
 		if fs.NArg() != 0 {
@@ -82,7 +92,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 		if err := validateAutonomousObjective(objective); err != nil {
 			return err
 		}
-		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *parallelWriters, *prepareOnly, out)
+		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *parallelWriters, *plannerContext, *promptRecipe, *prepareOnly, out)
 	}
 	if fs.NArg() != 1 || fs.Arg(0) == "" {
 		return errors.New("run --autonomous requires one objective or --file PATH")
@@ -90,7 +100,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	if err := validateAutonomousObjective(fs.Arg(0)); err != nil {
 		return err
 	}
-	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *parallelWriters, *prepareOnly, out)
+	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *parallelWriters, *plannerContext, *promptRecipe, *prepareOnly, out)
 }
 
 // validateAutonomousObjective rejects whitespace-only, invalid UTF-8 and
@@ -109,9 +119,15 @@ func validateAutonomousObjective(objective string) error {
 	return nil
 }
 
-func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, parallelWriters, prepareOnly bool, out io.Writer) error {
+func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, parallelWriters bool, plannerContext, promptRecipe string, prepareOnly bool, out io.Writer) error {
 	if err := validateAutonomousObjective(objective); err != nil {
 		return err
+	}
+	if plannerContext != "" && plannerContext != autonomousPlannerContextSourceBoundedV1 {
+		return errors.New("planner-context must be empty or source-bounded-v1")
+	}
+	if promptRecipe != "" && promptRecipe != "cache-prefix-v1" {
+		return errors.New("prompt-recipe must be empty or cache-prefix-v1")
 	}
 	cfg, err := configuration(root)
 	if err != nil {
@@ -153,7 +169,7 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 		Repository: identity,
 		Objective:  objective,
 		Config:     cfg,
-		Execution:  &control.ExecutionPolicy{Mode: "autonomous-v1", MaxRepairs: maxRepairs, Context: "bounded-v1", GraphVersion: 1, MaxParallel: maxParallel, RepairPlanningVersion: 1, ParallelImplementationVersion: parallelImplementationVersion},
+		Execution:  &control.ExecutionPolicy{Mode: "autonomous-v1", MaxRepairs: maxRepairs, PromptRecipe: promptRecipe, Context: "bounded-v1", PlannerContext: plannerContext, GraphVersion: 1, MaxParallel: maxParallel, RepairPlanningVersion: 1, ParallelImplementationVersion: parallelImplementationVersion},
 	}
 	creation, err = bindCurrentHost(ctx, creation)
 	if err != nil {

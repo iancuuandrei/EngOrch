@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -20,6 +19,7 @@ import (
 	"time"
 
 	"harness.local/engorch/internal/access"
+	"harness.local/engorch/internal/candidatetools"
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/config"
 	"harness.local/engorch/internal/contextbroker"
@@ -32,7 +32,6 @@ import (
 	"harness.local/engorch/internal/providertransport"
 	"harness.local/engorch/internal/repository"
 	"harness.local/engorch/internal/runtime"
-	"harness.local/engorch/internal/worktree"
 )
 
 type scheduledWorkflowRole struct {
@@ -124,12 +123,11 @@ func (p *scheduledWorkflowProvider) responseLocked(body []byte, envelope schedul
 	if canonical.Decode([]byte(outputs[len(outputs)-1].Output), &receipt) != nil || !receipt.Success || receipt.InvocationID == "" {
 		return nil, errors.New("workflow candidate_read receipt invalid")
 	}
-	var chunk worktree.SourceChunk
+	var chunk candidatetools.ReadResult
 	if canonical.Decode(receipt.Content, &chunk) != nil || chunk.CandidateID != role.candidateID || chunk.Path != "workflow.go" {
 		return nil, errors.New("workflow candidate_read identity changed")
 	}
-	content, decodeErr := base64.StdEncoding.DecodeString(chunk.ContentBase64)
-	if decodeErr != nil || string(content) != role.expectedBytes {
+	if chunk.ContentBase64 != "" || chunk.ContentUTF8 == nil || *chunk.ContentUTF8 != role.expectedBytes {
 		return nil, errors.New("workflow candidate_read content changed")
 	}
 	p.phase = 0

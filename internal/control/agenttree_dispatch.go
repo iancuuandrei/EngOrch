@@ -275,7 +275,7 @@ func bootstrapAgentTreeRoot(journalPath string, snapshot Snapshot) (agenttree.Sn
 	if snapshot.Plan == nil {
 		return agenttree.Snapshot{}, errors.New("agent tree planner root unavailable")
 	}
-	planner, err := plannerInvocation(snapshot.Creation.Config, snapshot.Creation.Objective)
+	planner, err := plannerInvocationForSnapshot(snapshot)
 	if err != nil {
 		return agenttree.Snapshot{}, err
 	}

@@ -46,11 +46,17 @@ type Creation struct {
 // explorer concurrency between 1 and 8 inclusive; zero preserves legacy
 // identity and means sequential (1) for old runs.
 type ExecutionPolicy struct {
-	Mode         string `json:"mode"`
-	MaxRepairs   int    `json:"max_repairs"`
+	Mode       string `json:"mode"`
+	MaxRepairs int    `json:"max_repairs"`
+	// PromptRecipe selects a versioned serialization recipe for new model
+	// invocations. Empty preserves every historical prompt byte.
+	PromptRecipe string `json:"prompt_recipe,omitempty"`
 	Context      string `json:"context,omitempty"`
-	GraphVersion int    `json:"graph_version,omitempty"`
-	MaxParallel  int    `json:"max_parallel,omitempty"`
+	// PlannerContext opts planning into a bounded committed-source manifest.
+	// Empty retains historic planner input identity exactly.
+	PlannerContext string `json:"planner_context,omitempty"`
+	GraphVersion   int    `json:"graph_version,omitempty"`
+	MaxParallel    int    `json:"max_parallel,omitempty"`
 	// RepairPlanningVersion opts new graph runs into candidate-bound design
 	// tasks that refine never-started repair write paths within original scope.
 	RepairPlanningVersion int `json:"repair_planning_version,omitempty"`
@@ -71,8 +77,14 @@ func (p ExecutionPolicy) Validate() error {
 	if p.Mode != "autonomous-v1" || p.MaxRepairs < 0 || p.MaxRepairs > 8 {
 		return errors.New("invalid execution policy")
 	}
+	if p.PromptRecipe != "" && p.PromptRecipe != promptRecipeCachePrefixV1 {
+		return errors.New("invalid execution prompt recipe")
+	}
 	if p.Context != "" && p.Context != taskContextBoundedV1 {
 		return errors.New("invalid execution task context")
+	}
+	if p.PlannerContext != "" && p.PlannerContext != plannerContextSourceBoundedV1 {
+		return errors.New("invalid execution planner context")
 	}
 	if p.GraphVersion != 0 && p.GraphVersion != 1 {
 		return errors.New("invalid execution graph version")
@@ -184,6 +196,7 @@ type Snapshot struct {
 	ProviderRuntime    map[string]providerDispatchReceipt `json:"provider_runtime,omitempty"`
 	AgentDispatch      map[string]AgentDispatchState      `json:"agent_dispatch,omitempty"`
 	TaskContexts       []TaskContextRecord                `json:"task_contexts,omitempty"`
+	PlannerContext     *PlannerContextRecord              `json:"planner_context,omitempty"`
 	Graph              *GraphState                        `json:"graph,omitempty"`
 	Lifecycle          LifecycleState                     `json:"lifecycle"`
 }
@@ -440,7 +453,7 @@ func Replay(events []journal.Event) (Snapshot, error) {
 			if err := canonical.Decode(e.Payload, &r); err != nil {
 				return s, err
 			}
-			i, err := plannerInvocation(s.Creation.Config, s.Creation.Objective)
+			i, err := plannerInvocationForSnapshot(s)
 			if err != nil {
 				return s, err
 			}
@@ -689,6 +702,14 @@ func Replay(events []journal.Event) (Snapshot, error) {
 			}
 		case "task.context-admitted":
 			if err := replayTaskContext(&s, e); err != nil {
+				return s, err
+			}
+		case "planner.context-admitted":
+			var record PlannerContextRecord
+			if err := canonical.Decode(e.Payload, &record); err != nil {
+				return s, err
+			}
+			if err := replayPlannerContext(&s, record); err != nil {
 				return s, err
 			}
 		case "graph.recorded", "graph.progress", "graph.revised":
