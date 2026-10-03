@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "purpose": "Sanitized harder-task attempt on verified public main; separate from the original six-task comparison.",
+  "task_id": "godotenv",
+  "source_sha": "ddf83eb33bbb136f62617a409142b74b91dbcff3",
+  "product_revision": "10fee6bafa4ecc28ae8a56f52c08a4001ecd8b28",
+  "binary_sha256": "78a66bb365375472aba1c11a247eecc4069a7e4b25b98d0358e41b1ecd2a0cd9",
+  "model": "gpt-6-luna",
+  "effort": "high",
+  "runtime_sha256": "1722907aa64401bcc9b34467ef5c2af43f6aef9a5045ef04d11d19dfae4589fb",
+  "runner_sha256": "b728394de68030ee31db1025cdd6b62e71d9bcd4ac9771175bbe0a0dbf6cdc19",
+  "retained_eval_sha256": "ddf057db30f3ae8869295573690059c6d52cecc2ecc53d318930339be8425f69",
+  "diagnostic_receipt_sha256": "aad51a58c563aab58cb57c29abe7824d00ace13261c54266f8df684b6264618c",
+  "fabric_run_id": "745c198df86e192fb54e2f35ad441552ac72bb3e80fc19bdd6dfe8918e4add8c",
+  "outcome": "BLOCKED",
+  "phase": "implementation",
+  "native_verification": "NOT RUN",
+  "reviewer_verdict": "NOT RUN",
+  "candidate_worktree_status": "clean",
+  "candidate_files_hash": "5da6bc1a46fefe3a8d993adf4a3069938503f6f1a7fe7724c577010f587769a0",
+  "diagnosis": "The godotenv.go before anchor occurs zero times in the current candidate. Anchored edits require exactly one occurrence; the proposal was not admitted.",
+  "proposed_changes": [
+    {
+      "path": "godotenv.go",
+      "within_write_paths": true,
+      "before_hash_matches": true,
+      "before_anchor_bytes": 635,
+      "before_anchor_occurrences": 0
+    },
+    {
+      "path": "godotenv_test.go",
+      "within_write_paths": true,
+      "before_hash_matches": true,
+      "before_anchor_bytes": 40,
+      "before_anchor_occurrences": 1
+    },
+    {
+      "path": "README.md",
+      "within_write_paths": true,
+      "before_hash_matches": true,
+      "before_anchor_bytes": 18,
+      "before_anchor_occurrences": 1
+    }
+  ],
+  "runtime_result_hash": "75bdf335130e6a45825ade1d043aa1dccda9078e2c65caffee81776914d50927",
+  "nested_turn_status": "completed",
+  "outer_finish_reason_metadata": "UNKNOWN",
+  "writer_tool_requests": 0,
+  "writer_tool_responses": 0,
+  "recorded_metrics": {
+    "provider_calls": null,
+    "input_tokens": null,
+    "output_tokens": null
+  },
+  "limitations": [
+    "No successful implementation, verification, or review outcome is claimed.",
+    "The outer UNKNOWN metadata remains UNKNOWN; exact anchor mismatch is the concrete diagnosed admission defect.",
+    "Original evaluation and candidate were not edited or resumed.",
+    "No candidate bytes, raw transcripts, errors, credentials, or local paths are published.",
+    "This is neither a controlled parallel-speed comparison nor release acceptance."
+  ]
+}

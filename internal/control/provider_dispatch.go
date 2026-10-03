@@ -144,7 +144,7 @@ func replayRoleProvider(s *Snapshot, event journal.Event) error {
 	if err != nil || hash != receipt.ResultHash {
 		return errors.New("provider role result hash mismatch")
 	}
-	resolved, _, err := ConfiguredProviderExpectation(s.Creation.Config, receipt.Role)
+	resolved, _, err := ConfiguredProviderExpectation(s.Creation.Config, receipt.Role, invocation.Profile)
 	if err != nil || receipt.ObservedProvider != resolved.Model.Provider || !providergateway.AcceptsObservedModel(resolved.Model, receipt.ObservedModel) {
 		return errors.New("provider role observation substituted")
 	}
@@ -152,7 +152,7 @@ func replayRoleProvider(s *Snapshot, event journal.Event) error {
 	if err != nil {
 		return err
 	}
-	selected, err := ResolveProviderRouting(s.Creation.Config, s.RunID, receipt.Role, inputHash, 1)
+	selected, err := ResolveProviderRouting(s.Creation.Config, s.RunID, receipt.Role, inputHash, 1, invocation.Profile)
 	if err != nil || selected.Intent.Reservation.InvocationID != receipt.AccessInvocationID {
 		return errors.New("provider role access identity mismatch")
 	}
@@ -176,7 +176,7 @@ func executeOpenCodeProviderRuntime(ctx context.Context, controllerPath string, 
 	if err != nil {
 		return runtime.Result{}, providerDispatchReceipt{}, err
 	}
-	selected, err := ResolveProviderRouting(s.Creation.Config, s.RunID, invocation.Profile.Role, inputHash, 1)
+	selected, err := ResolveProviderRouting(s.Creation.Config, s.RunID, invocation.Profile.Role, inputHash, 1, invocation.Profile)
 	if err != nil || selected.Profile != invocation.Profile {
 		return runtime.Result{}, providerDispatchReceipt{}, errors.Join(errors.New("OpenCode provider selection changed"), err)
 	}
@@ -426,7 +426,7 @@ func replayPlannerProvider(s *Snapshot, event journal.Event) error {
 	if err != nil || hash != receipt.ResultHash {
 		return errors.New("direct planner result hash mismatch")
 	}
-	resolved, expectation, err := ConfiguredProviderExpectation(s.Creation.Config, "planner")
+	resolved, expectation, err := ConfiguredProviderExpectation(s.Creation.Config, "planner", invocation.Profile)
 	if err != nil || receipt.ObservedProvider != resolved.Model.Provider || !providergateway.AcceptsObservedModel(resolved.Model, receipt.ObservedModel) {
 		return errors.New("direct planner provider observation substituted")
 	}
@@ -440,7 +440,7 @@ func replayPlannerProvider(s *Snapshot, event journal.Event) error {
 	if err != nil {
 		return err
 	}
-	selected, err := ResolveProviderRouting(s.Creation.Config, s.RunID, "planner", inputHash, 1)
+	selected, err := ResolveProviderRouting(s.Creation.Config, s.RunID, "planner", inputHash, 1, invocation.Profile)
 	if err != nil || selected.Intent.Reservation.InvocationID != receipt.AccessInvocationID {
 		return errors.New("direct planner access identity mismatch")
 	}
@@ -529,7 +529,7 @@ func executeDirectProviderRuntime(ctx context.Context, controllerPath string, c 
 	if invocation.Profile.Runtime != "provider-api" {
 		return runtime.Result{}, providerDispatchReceipt{}, errors.New("direct provider runtime required")
 	}
-	configured, expectation, err := ConfiguredProviderExpectation(c, invocation.Profile.Role)
+	configured, expectation, err := ConfiguredProviderExpectation(c, invocation.Profile.Role, invocation.Profile)
 	if err != nil {
 		return runtime.Result{}, providerDispatchReceipt{}, err
 	}
@@ -538,7 +538,7 @@ func executeDirectProviderRuntime(ctx context.Context, controllerPath string, c 
 	if err != nil {
 		return runtime.Result{}, providerDispatchReceipt{}, err
 	}
-	selected, err := ResolveProviderRouting(c, runID, invocation.Profile.Role, inputHash, 1)
+	selected, err := ResolveProviderRouting(c, runID, invocation.Profile.Role, inputHash, 1, invocation.Profile)
 	if err != nil || selected.Profile != invocation.Profile || !reflect.DeepEqual(selected.ProviderRole, configured) || !reflect.DeepEqual(selected.RequestExpectation, expectation) {
 		return runtime.Result{}, providerDispatchReceipt{}, errors.Join(errors.New("direct provider selection changed"), err)
 	}

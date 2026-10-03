@@ -14,6 +14,7 @@ import (
 	"harness.local/engorch/internal/config"
 	"harness.local/engorch/internal/effects"
 	"harness.local/engorch/internal/fileeffects"
+	"harness.local/engorch/internal/modelpolicy"
 	"harness.local/engorch/internal/repository"
 	"harness.local/engorch/internal/runtime"
 )
@@ -122,6 +123,34 @@ func TestExplorationAdmissionAndWriterContext(t *testing.T) {
 	}
 	if _, err := RecordExploration(path, makeRecord(observation)); err == nil {
 		t.Fatal("old candidate exploration re-admitted")
+	}
+}
+
+func TestExplorerInvocationSelectsBoundedEconomyProfile(t *testing.T) {
+	c := creation(t)
+	base := runtime.Profile{Runtime: "fake", Provider: "deterministic", Model: "explorer-standard", Effort: "medium", Role: "explorer"}
+	c.Config.Explorer = &base
+	c.Config.ModelPolicy = &modelpolicy.Policy{
+		Version: 1,
+		Profiles: []modelpolicy.Profile{
+			{Name: "standard", Runtime: base.Runtime, Provider: base.Provider, Model: base.Model, Effort: base.Effort},
+			{Name: "economy", Runtime: base.Runtime, Provider: base.Provider, Model: "explorer-economy", Effort: "low"},
+			{Name: "strong", Runtime: base.Runtime, Provider: base.Provider, Model: "explorer-strong", Effort: "high"},
+		},
+		Rules: map[string]modelpolicy.Rule{
+			"explorer": {DefaultProfile: "standard", CheapProfile: "economy", CheapContextBytes: modelpolicy.MaxContextBytes, EscalatedProfile: "strong", ContextEscalationTokens: modelpolicy.MaxContextTokens, ContextEscalationBytes: modelpolicy.MaxContextBytes, FailureEscalationCount: 1},
+		},
+	}
+	path, _ := approvedRepositoryCreation(t, c)
+	if _, err := StartWorkspace(context.Background(), path); err != nil {
+		t.Fatal(err)
+	}
+	i, err := PrepareExplorerInvocation(path, "Read file.txt and summarize the current candidate.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i.Profile.Model != "explorer-economy" || i.Profile.Effort != "low" {
+		t.Fatalf("small read-only explorer input did not select configured economy profile: %+v", i.Profile)
 	}
 }
 

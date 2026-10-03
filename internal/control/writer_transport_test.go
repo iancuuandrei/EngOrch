@@ -89,6 +89,38 @@ func TestUTF8WriterTransportLargeExactBytes(t *testing.T) {
 	}
 }
 
+func TestUTF8ReplaceV3UsesStrictUTF8WireDecoder(t *testing.T) {
+	text := "preserve unrelated API\n"
+	raw := `{"candidate_id":"` + strings.Repeat("a", 64) + `","changes":[{"path":"internal/example.go","before_hash":null,"content_utf8":"preserve unrelated API\n","executable":false}]}`
+	p, err := decodeWriterProposal(writercontract.ContractUTF8ReplaceV3, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(*p.Changes[0].ContentBase64)
+	if err != nil || string(decoded) != text {
+		t.Fatalf("v3 UTF-8 bytes changed: %v", err)
+	}
+	if _, err := decodeWriterProposal(writercontract.ContractUTF8ReplaceV3, `{"candidate_id":"`+strings.Repeat("a", 64)+`","changes_json":"[]"}`); err == nil {
+		t.Fatal("v3 admitted the changes-json representation")
+	}
+}
+
+func TestUTF8ScopedV4UsesStrictUTF8WireDecoder(t *testing.T) {
+	text := "preserve unrelated API\n"
+	raw := `{"candidate_id":"` + strings.Repeat("a", 64) + `","changes":[{"path":"internal/example.go","before_hash":null,"content_utf8":"preserve unrelated API\n","executable":false}]}`
+	p, err := decodeWriterProposal(writercontract.ContractUTF8ScopedV4, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(*p.Changes[0].ContentBase64)
+	if err != nil || string(decoded) != text {
+		t.Fatalf("v4 UTF-8 bytes changed: %v", err)
+	}
+	if _, err := decodeWriterProposal(writercontract.ContractUTF8ScopedV4, `{"candidate_id":"`+strings.Repeat("a", 64)+`","changes_json":"[]"}`); err == nil {
+		t.Fatal("v4 admitted the changes-json representation")
+	}
+}
+
 func TestUTF8WriterTransportRejectsAmbiguity(t *testing.T) {
 	for _, raw := range []string{
 		`{"candidate_id":"x","changes":[]}`,

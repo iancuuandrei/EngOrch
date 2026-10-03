@@ -1,6 +1,7 @@
 package control
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -114,5 +115,41 @@ func TestConfiguredReviewGatesReadiness(t *testing.T) {
 				t.Fatal("review replayed outside review phase")
 			}
 		})
+	}
+}
+
+func TestReviewerJSONContractBindsOutputSchemaToInvocation(t *testing.T) {
+	c := creation(t)
+	c.Config.Reviewer = &runtime.Profile{Runtime: "fake", Provider: "deterministic", Model: "explicit-reviewer", Effort: "high", Role: "reviewer"}
+	c.Config.ReviewerContract = "json-v1"
+	c.Config.Verification = []config.Check{{Name: "configured-unit", Argv: []string{"git", "--version"}, TimeoutSeconds: 10}}
+	path, _ := approvedRepositoryCreation(t, c)
+	if _, err := StartWorkspace(context.Background(), path); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := Verify(context.Background(), path); err != nil || s.State != "REVIEWING" {
+		t.Fatal("verification did not reach reviewer fixture", err)
+	}
+	i, err := PrepareReviewInvocation(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		OutputSchema json.RawMessage `json:"output_schema"`
+		Instruction  string          `json:"instruction"`
+	}
+	if err := json.Unmarshal([]byte(i.Input), &payload); err != nil {
+		t.Fatal(err)
+	}
+	wantSchema, err := canonical.Normalize(runtime.ReviewOutputSchema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotSchema, err := canonical.Normalize(payload.OutputSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotSchema, wantSchema) || !strings.Contains(payload.Instruction, "plan recommendation is not evidence") || !strings.Contains(payload.Instruction, "cross-cutting concern") {
+		t.Fatalf("reviewer JSON contract or verification scope was not invocation-bound: schema=%t instruction=%q", bytes.Equal(gotSchema, wantSchema), payload.Instruction)
 	}
 }

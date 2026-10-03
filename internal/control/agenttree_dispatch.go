@@ -245,7 +245,7 @@ func ensureOpenCodeDispatchCapacity(snapshot Snapshot, invocation runtime.Invoca
 	if err != nil {
 		return err
 	}
-	selected, err := ResolveProviderRouting(snapshot.Creation.Config, snapshot.RunID, invocation.Profile.Role, inputHash, 1)
+	selected, err := ResolveProviderRouting(snapshot.Creation.Config, snapshot.RunID, invocation.Profile.Role, inputHash, 1, invocation.Profile)
 	if err != nil || selected.Profile != invocation.Profile {
 		return errors.Join(errors.New("OpenCode provider selection changed"), err)
 	}
@@ -254,7 +254,7 @@ func ensureOpenCodeDispatchCapacity(snapshot Snapshot, invocation runtime.Invoca
 }
 
 func ensureDirectDispatchCapacity(configuration config.Config, runID string, invocation runtime.Invocation) error {
-	_, expectation, err := ConfiguredProviderExpectation(configuration, invocation.Profile.Role)
+	_, expectation, err := ConfiguredProviderExpectation(configuration, invocation.Profile.Role, invocation.Profile)
 	if err != nil {
 		return err
 	}
@@ -263,7 +263,7 @@ func ensureDirectDispatchCapacity(configuration config.Config, runID string, inv
 	if err != nil {
 		return err
 	}
-	selected, err := ResolveProviderRouting(configuration, runID, invocation.Profile.Role, inputHash, 1)
+	selected, err := ResolveProviderRouting(configuration, runID, invocation.Profile.Role, inputHash, 1, invocation.Profile)
 	if err != nil || selected.Profile != invocation.Profile {
 		return errors.Join(errors.New("direct provider selection changed"), err)
 	}

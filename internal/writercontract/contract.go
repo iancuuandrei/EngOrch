@@ -2,12 +2,14 @@
 package writercontract
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 )
 
+// MaxChanges bounds the number of changes in one proposal.
 const MaxChanges = 64
 
 // ContractChangesJSONV1 is the R59 writer/fixer wire contract: the provider
@@ -18,6 +20,14 @@ const MaxChanges = 64
 // representation: v1 outputs are invalid under v2 and vice versa.
 const ContractChangesJSONV1 = "changes-json-v1"
 
+// ContractUTF8ReplaceV3 adds explicit complete-file replacement instructions
+// while retaining the strict UTF-8 wire schema and decoder.
+const ContractUTF8ReplaceV3 = "utf8-replace-v3"
+
+// ContractUTF8ScopedV4 adds the current ready graph implementation task and
+// exact declared paths to the writer input while retaining v3's wire shape.
+const ContractUTF8ScopedV4 = "utf8-scoped-v4"
+
 // ChangesJSONMaxLength bounds the outer string payload. The structured-output
 // value bound (256 KiB) still governs the complete terminal value.
 const ChangesJSONMaxLength = 500000
@@ -27,9 +37,24 @@ func UTF8Schema() json.RawMessage {
 	return json.RawMessage(strings.ReplaceAll(string(Schema()), "content_base64", "content_utf8"))
 }
 
+// UTF8SchemaForCandidate additionally constrains candidate_id to the exact
+// invocation candidate. Controller validation remains authoritative.
+func UTF8SchemaForCandidate(candidateID string) (json.RawMessage, error) {
+	return schemaForCandidate(UTF8Schema(), candidateID)
+}
+
+func validCandidateID(candidateID string) bool {
+	decoded, err := hex.DecodeString(candidateID)
+	return err == nil && len(decoded) == 32 && strings.ToLower(candidateID) == candidateID
+}
+
+// ErrEmptyChangeset reports a proposal with no changes.
 var ErrEmptyChangeset = errors.New("WRITER_PROPOSAL_INVALID: EMPTY_CHANGESET")
+
+// ErrTooManyChanges reports a proposal exceeding MaxChanges.
 var ErrTooManyChanges = errors.New("WRITER_PROPOSAL_INVALID: TOO_MANY_CHANGES")
 
+// ValidateCount validates that n is within one to MaxChanges.
 func ValidateCount(n int) error {
 	if n == 0 {
 		return fmt.Errorf("%w: one to 64 changes required", ErrEmptyChangeset)

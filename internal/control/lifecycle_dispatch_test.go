@@ -16,6 +16,27 @@ import (
 	"harness.local/engorch/internal/taskpool"
 )
 
+func TestLifecycleUnresolvedIncludesGraphWriterHost(t *testing.T) {
+	profile := runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "fixture", Effort: "high", Role: "writer"}
+	invocation, err := runtime.NewInvocation(profile, "task-bound writer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := Snapshot{GraphWriterHosts: map[string]WriterHostState{
+		"impl-a": {Intent: WriterHostIntent{Invocation: invocation}},
+	}}
+	want := "graph-writer:impl-a:" + invocation.ID
+	if got := lifecycleUnresolved(s); len(got) != 1 || got[0] != want {
+		t.Fatalf("unresolved graph writer omitted from lifecycle settlement: got=%v want=%q", got, want)
+	}
+	host := s.GraphWriterHosts["impl-a"]
+	host.RuntimeReceipt = &WriterRuntimeReceipt{InvocationID: invocation.ID}
+	s.GraphWriterHosts["impl-a"] = host
+	if got := lifecycleUnresolved(s); len(got) != 0 {
+		t.Fatalf("completed graph writer remained unresolved: %v", got)
+	}
+}
+
 func TestLifecycleCrashAfterAdmissionBeforeRunningRemainsSameStage(t *testing.T) {
 	controllerPath, snapshot, invocation := agentDispatchFixture(t)
 	contextHash, err := access.InputID(invocation.Input)

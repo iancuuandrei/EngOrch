@@ -1,0 +1,74 @@
+{
+  "task_id": "go-humanize-feature-performance",
+  "check_id": "humanize-feature-performance",
+  "source_repository": "https://github.com/dustin/go-humanize.git",
+  "source_sha": "a1b4e66b9a6d890e9e15e7091cf16c8032367d6e",
+  "source_tree_origin": "https://github.com/dustin/go-humanize.git",
+  "source_tree_head": "a1b4e66b9a6d890e9e15e7091cf16c8032367d6e",
+  "source_tree_clean": true,
+  "disposable_baseline_native": {
+    "exit_code": 0,
+    "stdout_sha256": "9b7b7b54775bd6b093de70f80cc3509bec23881fd954d5c94e1c63424fa32e42",
+    "argv": [
+      "go",
+      "test",
+      "-count=1",
+      "./..."
+    ],
+    "status": "PASS"
+  },
+  "combined_heldout_baseline": {
+    "exit_code": 1,
+    "stdout_sha256": "96f84c2fe2ee261753e7421ef1889568961c6262db26ad3d16d713a5263c5825",
+    "targeted_failures": [
+      "ParseBytes valid underscore cases rejected by baseline",
+      "Commaf allocation budget: 4 allocs/op ordinary/fraction/negative/negative-zero; 11 allocs/op MaxFloat64; 9 allocs/op SmallestNonzeroFloat64"
+    ],
+    "fixture_compiled": true,
+    "output_equivalence": "PASS (no assertion failure in CommafOutputEquivalence)",
+    "status": "EXPECTED_FAIL",
+    "argv": [
+      "go",
+      "test",
+      "-count=1",
+      "-run",
+      "^TestFabricV1Heldout$",
+      "."
+    ]
+  },
+  "toolchain": {
+    "sha256": "d3ccdb604eafa6031133aefe1a3db24f0bb7362b857bc2125ac4e4c178b4b490",
+    "version": "go1.27.1"
+  },
+  "fixture": {
+    "sha256": "9619d26a06906d53f9a3d73535d13c462119fed4feddb5cdea34353496839770",
+    "path": "evals/v1/heldout/humanize_feature_performance.heldout_test.go"
+  },
+  "runner_binding": {
+    "task_id": "go-humanize-feature-performance",
+    "fixture_file": "humanize_feature_performance.heldout_test.go",
+    "mapping_harness": "evals/v1/harness/Test-NativeTaskPolicy.ps1",
+    "mapping_harness_sha256": "9cdad33fb9c1bd0dc6e3d5ae1ed762504e661a665a70dbdafa5e76664ff55739",
+    "manifest_sha256": "905b65d65e111517a2c07e4a316bae505e972d49eef7e59defea5f98d2e18bc3",
+    "check_id": "humanize-feature-performance",
+    "runner_sha256": "596f5b8e9865939320b949ea2af31d26bf631df0a166899dc5d7a85083ef81fd"
+  },
+  "upstream_file_ownership": [
+    "bytes.go",
+    "bytes_test.go",
+    "comma.go",
+    "comma_test.go"
+  ],
+  "legacy_fixtures_unchanged": {
+    "commaf_performance_sha256": "e7788794290324db9f276b1c95ae1afd2cec4da70ad1da084f639b7661d3fd6a",
+    "humanize_sha256": "8402e2584a029fcca0a1751be2445d476947ae4e773a2e6a81b0ece058a480ff"
+  },
+  "note": "Additive task preflight; the two existing Humanize manifest tasks and their held-out fixtures were preserved. The numeric task objective was corrected to require shared generator/template ownership. Original preflight receipts and evaluation runs were not modified. External pristine-baseline only; no candidate workspace or provider was used.",
+  "coexists_with_manifest_task_ids": [
+    "go-humanize",
+    "go-humanize-commaf-performance"
+  ],
+  "provider_calls": 0,
+  "fabric_task": "NOT RUN",
+  "release_qualified": false
+}

@@ -35,17 +35,24 @@ func validateStructuredOutputIntent(intent Intent) error {
 	if err != nil {
 		return err
 	}
-	if !bytes.Equal(wantUTF8, intent.StructuredOutput.Schema) && !bytes.Equal(wantJSON, intent.StructuredOutput.Schema) {
-		return errors.New("native structured output schema differs from admitted writer contract")
-	}
 	var request struct {
 		OutputSchema json.RawMessage `json:"output_schema"`
+		CandidateID  string          `json:"candidate_id"`
 	}
 	if err := json.Unmarshal([]byte(intent.Invocation.Input), &request); err != nil || len(request.OutputSchema) == 0 || bytes.Equal(request.OutputSchema, []byte("null")) {
 		return errors.New("native structured output schema missing from invocation")
 	}
 	got, err := canonical.Normalize(request.OutputSchema)
-	if err != nil || !bytes.Equal(got, intent.StructuredOutput.Schema) || !bytes.Equal(got, wantUTF8) && !bytes.Equal(got, wantJSON) {
+	allowed := bytes.Equal(got, wantUTF8) || bytes.Equal(got, wantJSON)
+	if candidateSchema, schemaErr := writercontract.UTF8SchemaForCandidate(request.CandidateID); schemaErr == nil {
+		wantCandidate, normalizeErr := canonical.Normalize(candidateSchema)
+		allowed = allowed || normalizeErr == nil && bytes.Equal(got, wantCandidate)
+	}
+	if candidateSchema, schemaErr := writercontract.AnchoredEditsSchemaForCandidate(request.CandidateID); schemaErr == nil {
+		wantCandidate, normalizeErr := canonical.Normalize(candidateSchema)
+		allowed = allowed || normalizeErr == nil && bytes.Equal(got, wantCandidate)
+	}
+	if err != nil || !bytes.Equal(got, intent.StructuredOutput.Schema) || !allowed {
 		return errors.New("native structured output invocation schema differs from contract")
 	}
 	return nil

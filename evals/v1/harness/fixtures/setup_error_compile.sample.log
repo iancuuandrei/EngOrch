@@ -1,0 +1,3 @@
+# github.com/dustin/go-humanize [github.com/dustin/go-humanize.test]
+./fabric_v1_heldout_test.go:6:9: undefined: ParseBytez (should be ParseBytes)
+FAIL	github.com/dustin/go-humanize [build failed]

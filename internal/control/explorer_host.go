@@ -53,7 +53,46 @@ func expectedExplorerHost(s Snapshot, question string) (ExplorerHostIntent, erro
 	return ExplorerHostIntent{question, i, l}, err
 }
 
+func explorerRunForInvocation(s Snapshot, invocationID string) (*ExplorerHostState, bool) {
+	if s.ExplorerRuns != nil {
+		if run, ok := s.ExplorerRuns[invocationID]; ok {
+			copy := run
+			return &copy, true
+		}
+	}
+	if s.ExplorerHost != nil && s.ExplorerHost.Intent.Invocation.ID == invocationID {
+		copy := *s.ExplorerHost
+		return &copy, true
+	}
+	return nil, false
+}
+
+func putExplorerRun(s *Snapshot, state ExplorerHostState) {
+	id := state.Intent.Invocation.ID
+	if s.ExplorerRuns == nil {
+		s.ExplorerRuns = map[string]ExplorerHostState{}
+	}
+	s.ExplorerRuns[id] = state
+	// Retain legacy singleton for backward compatibility: first run mirrors
+	// the singleton so old journals and single-explorer flows replay
+	// identically. Parallel graph runs keep every invocation in the map;
+	// the singleton remains the first intent and is never substituted by a
+	// sibling cohort invocation.
+	if s.ExplorerHost == nil {
+		copy := state
+		s.ExplorerHost = &copy
+	} else if s.ExplorerHost.Intent.Invocation.ID == id {
+		copy := state
+		s.ExplorerHost = &copy
+	}
+}
+
 func replayExplorerHost(s *Snapshot, e journal.Event) error {
+	// Graph-bound parallel runs keep per-invocation state in ExplorerRuns.
+	// Legacy sequential runs retain the singleton behavior byte-for-byte.
+	if s.Creation.Execution != nil && s.Creation.Execution.GraphEnabled() {
+		return replayExplorerHostParallel(s, e)
+	}
 	question := ""
 	if e.Kind == "explorer.host-intent" {
 		var proposed ExplorerHostIntent
@@ -86,6 +125,7 @@ func replayExplorerHost(s *Snapshot, e journal.Event) error {
 			}
 		}
 		s.ExplorerHost.RuntimeReceipt = &receipt
+		putExplorerRun(s, *s.ExplorerHost)
 	case "explorer.host-intent":
 		var intent ExplorerHostIntent
 		if err := canonical.Decode(e.Payload, &intent); err != nil {
@@ -95,6 +135,7 @@ func replayExplorerHost(s *Snapshot, e journal.Event) error {
 			return errors.New("explorer host intent substitution or duplication")
 		}
 		s.ExplorerHost = &ExplorerHostState{Intent: intent}
+		putExplorerRun(s, *s.ExplorerHost)
 	case "explorer.host-ready":
 		var intent ExplorerHostIntent
 		if err := canonical.Decode(e.Payload, &intent); err != nil {
@@ -104,6 +145,7 @@ func replayExplorerHost(s *Snapshot, e journal.Event) error {
 			return errors.New("explorer host preparation transition rejected")
 		}
 		s.ExplorerHost.Ready = true
+		putExplorerRun(s, *s.ExplorerHost)
 	case "explorer.host-observed":
 		if s.ExplorerHost == nil || !s.ExplorerHost.Ready || s.ExplorerHost.Intent != expected {
 			return errors.New("explorer host observation transition rejected")
@@ -116,6 +158,101 @@ func replayExplorerHost(s *Snapshot, e journal.Event) error {
 			return err
 		}
 		s.ExplorerHost.Receipt = &receipt
+		putExplorerRun(s, *s.ExplorerHost)
+	}
+	return nil
+}
+
+func replayExplorerHostParallel(s *Snapshot, e journal.Event) error {
+	switch e.Kind {
+	case "explorer.host-intent":
+		var intent ExplorerHostIntent
+		if err := canonical.Decode(e.Payload, &intent); err != nil {
+			return err
+		}
+		expected, err := expectedExplorerHost(*s, intent.Question)
+		if err != nil {
+			return err
+		}
+		if intent != expected {
+			return errors.New("explorer host intent substitution or duplication")
+		}
+		if _, exists := explorerRunForInvocation(*s, intent.Invocation.ID); exists {
+			return errors.New("explorer host intent substitution or duplication")
+		}
+		putExplorerRun(s, ExplorerHostState{Intent: intent})
+	case "explorer.host-ready":
+		var intent ExplorerHostIntent
+		if err := canonical.Decode(e.Payload, &intent); err != nil {
+			return err
+		}
+		run, ok := explorerRunForInvocation(*s, intent.Invocation.ID)
+		if !ok || run.Ready {
+			return errors.New("explorer host preparation transition rejected")
+		}
+		expected, err := expectedExplorerHost(*s, intent.Question)
+		if err != nil || intent != expected || run.Intent != expected {
+			return errors.New("explorer host preparation transition rejected")
+		}
+		run.Ready = true
+		putExplorerRun(s, *run)
+	case "explorer.host-observed":
+		var receipt codexhost.Receipt
+		if err := canonical.Decode(e.Payload, &receipt); err != nil {
+			return err
+		}
+		// Bind exact invocation via launch identity; no sibling substituted.
+		matched := ""
+		for id, run := range s.ExplorerRuns {
+			if run.Intent.Launch.Root != "" {
+				wantID, err := run.Intent.Launch.BindingID()
+				if err == nil && wantID == receipt.LaunchID && run.Ready && run.Receipt == nil {
+					matched = id
+					break
+				}
+			}
+		}
+		if matched == "" && s.ExplorerHost != nil && s.ExplorerHost.Ready && s.ExplorerHost.Receipt == nil {
+			if wantID, err := s.ExplorerHost.Intent.Launch.BindingID(); err == nil && wantID == receipt.LaunchID {
+				matched = s.ExplorerHost.Intent.Invocation.ID
+			}
+		}
+		if matched == "" {
+			return errors.New("explorer host observation transition rejected")
+		}
+		run, _ := explorerRunForInvocation(*s, matched)
+		expected, err := expectedExplorerHost(*s, run.Intent.Question)
+		if err != nil || run.Intent != expected {
+			return errors.New("explorer host observation transition rejected")
+		}
+		if err := validateCodexHostReceipt(receipt, expected.Launch, s.Creation.Config.Codex); err != nil {
+			return err
+		}
+		run.Receipt = &receipt
+		putExplorerRun(s, *run)
+	case "explorer.runtime-observed":
+		var receipt ExplorerRuntimeReceipt
+		if err := canonical.Decode(e.Payload, &receipt); err != nil {
+			return err
+		}
+		run, ok := explorerRunForInvocation(*s, receipt.InvocationID)
+		if !ok || !run.Ready || run.Receipt == nil || run.RuntimeReceipt != nil {
+			return errors.New("explorer runtime receipt transition rejected")
+		}
+		expected, err := expectedExplorerHost(*s, run.Intent.Question)
+		if err != nil || run.Intent != expected {
+			return errors.New("explorer runtime receipt transition rejected")
+		}
+		if receipt.InvocationID != expected.Invocation.ID || strings.TrimSpace(receipt.ThreadID) == "" || len(receipt.ThreadID) > 256 || strings.TrimSpace(receipt.TurnID) == "" || len(receipt.TurnID) > 256 {
+			return errors.New("explorer runtime receipt identity mismatch")
+		}
+		for _, digest := range []string{receipt.JournalHead, receipt.ResultHash} {
+			if err := safepath.RequireDigest(digest); err != nil {
+				return err
+			}
+		}
+		run.RuntimeReceipt = &receipt
+		putExplorerRun(s, *run)
 	}
 	return nil
 }

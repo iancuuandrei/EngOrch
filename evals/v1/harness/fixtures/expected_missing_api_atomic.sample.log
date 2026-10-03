@@ -1,0 +1,4 @@
+# go.uber.org/atomic [go.uber.org/atomic.test]
+./fabric_v1_heldout_test.go:9:22: (*Bool does not implement encoding.TextMarshaler (missing method MarshalText))
+./fabric_v1_heldout_test.go:10:24: (*Bool does not implement encoding.TextUnmarshaler (missing method UnmarshalText))
+FAIL	go.uber.org/atomic [build failed]

@@ -1,0 +1,24 @@
+version = 1
+repository = 'go-humanize'
+base_branch = 'HEAD'
+writer_contract = 'utf8-v2'
+planner_contract = 'plan-v1'
+explorer_contract = 'json-v1'
+
+[planner]
+runtime = 'codex-app-server'
+provider = 'openai'
+model = 'gpt-6.1-sol'
+effort = 'high'
+role = 'planner'
+
+[codex]
+executable = 'C:\tools\codex.exe'
+executable_hash = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+state_root = 'C:\state\fabric'
+auth_source = 'C:\Users\eval\.codex\auth.json'
+
+[[verification]]
+name = 'unit'
+argv = ['go', 'test', './...']
+timeout_seconds = 120

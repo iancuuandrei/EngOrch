@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"harness.local/engorch/internal/canonical"
+	"harness.local/engorch/internal/engineeringplan"
 	"harness.local/engorch/internal/runtime"
 	"harness.local/engorch/internal/writercontract"
 )
@@ -46,8 +47,10 @@ type RerouteError struct {
 	Continuation bool
 }
 
+// Error returns the reroute rejection message.
 func (*RerouteError) Error() string { return "provider model rerouting is not authorized" }
 
+// Unwrap returns ErrContinuationRouteMismatch for continuations and ErrRouteIdentityContradiction otherwise.
 func (e *RerouteError) Unwrap() error {
 	if e.Continuation {
 		return ErrContinuationRouteMismatch
@@ -284,14 +287,69 @@ func (c *Client) StartTurn(ctx context.Context, thread ThreadSettings, i runtime
 	if i.Profile.Role == "writer" || i.Profile.Role == "fixer" {
 		var envelope struct {
 			OutputSchema json.RawMessage `json:"output_schema"`
+			CandidateID  string          `json:"candidate_id"`
 		}
 		if json.Unmarshal([]byte(i.Input), &envelope) == nil && len(envelope.OutputSchema) > 0 {
 			got, e := canonical.Hash("writer-output-schema", envelope.OutputSchema)
 			want, _ := canonical.Hash("writer-output-schema", writercontract.Schema())
 			utf8, _ := canonical.Hash("writer-output-schema", writercontract.UTF8Schema())
 			v2, _ := canonical.Hash("writer-output-schema", writercontract.ChangesJSONSchema())
-			if e != nil || (got != want && got != utf8 && got != v2) {
+			allowed := got == want || got == utf8 || got == v2
+			if candidateSchema, schemaErr := writercontract.UTF8SchemaForCandidate(envelope.CandidateID); schemaErr == nil {
+				candidateHash, hashErr := canonical.Hash("writer-output-schema", candidateSchema)
+				allowed = allowed || hashErr == nil && got == candidateHash
+			}
+			if candidateSchema, schemaErr := writercontract.AnchoredEditsSchemaForCandidate(envelope.CandidateID); schemaErr == nil {
+				candidateHash, hashErr := canonical.Hash("writer-output-schema", candidateSchema)
+				allowed = allowed || hashErr == nil && got == candidateHash
+			}
+			if e != nil || !allowed {
 				return wire.Turn, nil, errors.New("writer output schema substitution")
+			}
+			params["outputSchema"] = envelope.OutputSchema
+		}
+	}
+	if i.Profile.Role == "planner" {
+		var envelope struct {
+			OutputSchema json.RawMessage `json:"output_schema"`
+		}
+		if json.Unmarshal([]byte(i.Input), &envelope) == nil && len(envelope.OutputSchema) > 0 {
+			got, err := canonical.Hash("planner-output-schema", envelope.OutputSchema)
+			want, _ := canonical.Hash("planner-output-schema", engineeringplan.PlannerJSONSchema())
+			if err != nil || got != want {
+				return wire.Turn, nil, errors.New("planner output schema substitution")
+			}
+			params["outputSchema"] = envelope.OutputSchema
+		}
+	}
+	if i.Profile.Role == "explorer" {
+		var envelope struct {
+			OutputSchema json.RawMessage `json:"output_schema"`
+			CandidateID  string          `json:"candidate_id"`
+		}
+		if json.Unmarshal([]byte(i.Input), &envelope) == nil && len(envelope.OutputSchema) > 0 {
+			got, err := canonical.Hash("explorer-output-schema", envelope.OutputSchema)
+			want, _ := canonical.Hash("explorer-output-schema", runtime.ExplorerOutputSchema())
+			allowed := err == nil && got == want
+			if candidateSchema, schemaErr := runtime.ExplorerOutputSchemaForCandidate(envelope.CandidateID); schemaErr == nil {
+				candidateHash, hashErr := canonical.Hash("explorer-output-schema", candidateSchema)
+				allowed = allowed || hashErr == nil && got == candidateHash
+			}
+			if err != nil || !allowed {
+				return wire.Turn, nil, errors.New("explorer output schema substitution")
+			}
+			params["outputSchema"] = envelope.OutputSchema
+		}
+	}
+	if i.Profile.Role == "reviewer" {
+		var envelope struct {
+			OutputSchema json.RawMessage `json:"output_schema"`
+		}
+		if json.Unmarshal([]byte(i.Input), &envelope) == nil && len(envelope.OutputSchema) > 0 {
+			got, err := canonical.Hash("review-output-schema", envelope.OutputSchema)
+			want, _ := canonical.Hash("review-output-schema", runtime.ReviewOutputSchema())
+			if err != nil || got != want {
+				return wire.Turn, nil, errors.New("review output schema substitution")
 			}
 			params["outputSchema"] = envelope.OutputSchema
 		}

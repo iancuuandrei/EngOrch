@@ -87,11 +87,14 @@ lexical artifacts before dispatch and record the complete binding in the runtime
 journal. Their invocation identities include the selected lexical scope. The
 `ri_search` tool accepts only query options and pagination, with at most 100 hits;
 models cannot supply artifact paths. Runtime responses are journaled before return.
-If an overlay exists but no longer matches the admitted candidate, prepare and
-materialize a fresh overlay before another role invocation. The controller refuses
-to reuse the stale overlay. Base-only scope remains explicit when no overlay was
-selected. Local fixtures exercised the real Rust broker and role selection;
-actual provider/model execution with lexical tools remains unqualified.
+If an overlay exists but no longer matches the admitted candidate, the controller
+never reuses it as current-candidate evidence. During review, an exact confirmed
+writer Before-to-After transition may instead select the immutable base index;
+the invocation explicitly says that this lexical scope excludes candidate edits.
+Other phases require a fresh matching overlay. Unresolved overlays continue to
+block role dispatch. Local fixtures exercised the real Rust broker and role
+selection. A real-model writer development trial also consumed candidate-bound
+Rust search results in its task context; final release acceptance remains pending.
 
 Current qualification limits: reference and receipt transport retain a 1 MiB
 canonical message boundary; recovery accepts shard files up to 1 GiB. Large-repository transport and

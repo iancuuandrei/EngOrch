@@ -69,6 +69,24 @@ func filesAllowed(s Snapshot) error {
 	return nil
 }
 
+// validateFileAuthorization keeps ordinary operator approvals separate from
+// the narrowly scoped machine approval. The latter can exist only after the
+// immutable execution policy admitted the exact plan.
+func validateFileAuthorization(s Snapshot, a effects.Authorization, intent effects.Intent) error {
+	if a.Authority == "" && a.PolicyID == "" {
+		return a.Validate(intent)
+	}
+	if a.Authority != "autonomous-v1" || a.Actor != "fabric:autonomous" ||
+		s.Creation.Execution == nil || s.MachineApproval == nil {
+		return errors.New("invalid machine file authorization")
+	}
+	policyID, err := canonical.Hash("harness.execution-policy.v1", *s.Creation.Execution)
+	if err != nil || a.PolicyID != policyID || s.MachineApproval.PolicyID != policyID {
+		return errors.New("machine file authorization policy mismatch")
+	}
+	return a.Validate(intent)
+}
+
 // PrepareFiles captures a leased candidate and predicts exact file changes. It
 // returns an approval target without changing source or recording an intent.
 func PrepareFiles(ctx context.Context, journalPath string, changes []fileeffects.Change) (prepared PreparedFiles, err error) {
@@ -138,7 +156,7 @@ func ApplyFiles(ctx context.Context, journalPath string, p PreparedFiles, a effe
 	if expected.Intent != p.Intent {
 		return s, errors.New("file intent substitution")
 	}
-	if err = a.Validate(p.Intent); err != nil {
+	if err = validateFileAuthorization(s, a, p.Intent); err != nil {
 		return s, err
 	}
 	if s.Creation.Config.CandidateIdentity == "semantic-index-v2" {

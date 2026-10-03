@@ -1,0 +1,2 @@
+imports github.com/spf13/afero: import cycle not allowed in test
+FAIL	github.com/spf13/afero [setup failed]

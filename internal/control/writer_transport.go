@@ -9,8 +9,8 @@ import (
 	"harness.local/engorch/internal/writercontract"
 )
 
-// utf8WireChange is one validated UTF-8 wire item shared by the utf8-v2 and
-// changes-json-v1 decoders. The deterministic UTF-8 to Base64 conversion
+// utf8WireChange is one validated UTF-8 wire item shared by the utf8-v2,
+// utf8-replace-v3, utf8-scoped-v4 and changes-json-v1 decoders. The deterministic UTF-8 to Base64 conversion
 // happens once here, after all schema checks.
 type utf8WireChange struct {
 	Path       string          `json:"path"`
@@ -41,7 +41,7 @@ func appendUTF8Change(proposal *WriterProposal, c utf8WireChange) error {
 
 // decodeWriterProposal preserves the observed model output. Only the approval
 // target uses Base64, generated deterministically from validated JSON text.
-// Contracts are disjoint: utf8-v2 accepts only candidate_id+changes array,
+// Contracts are disjoint: utf8-v2, utf8-replace-v3 and utf8-scoped-v4 accept only candidate_id+changes array,
 // changes-json-v1 accepts only candidate_id+changes_json string. Neither
 // decoder falls back to the other representation.
 func decodeWriterProposal(contract, output string) (WriterProposal, error) {
@@ -49,7 +49,7 @@ func decodeWriterProposal(contract, output string) (WriterProposal, error) {
 	if contract == writercontract.ContractChangesJSONV1 {
 		return decodeChangesJSONProposal(output)
 	}
-	if contract != "utf8-v2" {
+	if contract != "utf8-v2" && contract != writercontract.ContractUTF8ReplaceV3 && contract != writercontract.ContractUTF8ScopedV4 {
 		err := canonical.Decode([]byte(output), &proposal)
 		return proposal, err
 	}

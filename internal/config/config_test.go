@@ -10,6 +10,7 @@ import (
 	"harness.local/engorch/internal/access"
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/hostenvironment"
+	"harness.local/engorch/internal/modelpolicy"
 	"harness.local/engorch/internal/providergateway"
 	"harness.local/engorch/internal/runtime"
 	"harness.local/engorch/internal/taskpool"
@@ -152,6 +153,144 @@ func TestConfigurationBindingAndStrictness(t *testing.T) {
 	}
 }
 
+func TestUTF8ReplaceV3IsAnExplicitFrozenWriterContract(t *testing.T) {
+	c, err := Parse([]byte(Example))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyID, err := c.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.WriterContract = writercontract.ContractUTF8ReplaceV3
+	if err := c.Validate(); err != nil {
+		t.Fatal("v3 writer contract rejected", err)
+	}
+	v3ID, err := c.ID()
+	if err != nil || legacyID == v3ID {
+		t.Fatal("v3 contract was not bound into config identity", err)
+	}
+	c.WriterContract = "unknown-v3"
+	if err := c.Validate(); err == nil {
+		t.Fatal("unknown writer contract admitted")
+	}
+}
+
+func TestUTF8ScopedV4IsAnExplicitWriterContract(t *testing.T) {
+	c, err := Parse([]byte(Example))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyID, err := c.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.WriterContract = writercontract.ContractUTF8ScopedV4
+	if err := c.Validate(); err != nil {
+		t.Fatal("v4 writer contract rejected", err)
+	}
+	v4ID, err := c.ID()
+	if err != nil || v4ID == legacyID {
+		t.Fatal("v4 contract was not configuration-identity-bound", err)
+	}
+	c.WriterContract = "utf8-scoped-v5"
+	if err := c.Validate(); err == nil {
+		t.Fatal("unknown writer contract admitted")
+	}
+}
+
+func TestAnchoredEditsV1IsAnExplicitWriterContract(t *testing.T) {
+	c, err := Parse([]byte(Example))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyID, err := c.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.WriterContract = writercontract.ContractAnchoredEditsV1
+	if err := c.Validate(); err != nil {
+		t.Fatal("anchored-edits-v1 rejected", err)
+	}
+	newID, err := c.ID()
+	if err != nil || newID == legacyID {
+		t.Fatal("anchored contract was not configuration-identity-bound", err)
+	}
+	c.WriterContract = "unknown-anchor-v1"
+	if err := c.Validate(); err == nil {
+		t.Fatal("unknown writer contract admitted")
+	}
+}
+
+func TestAnchoredEditsV2IsCodexOnlyAndIdentityBound(t *testing.T) {
+	c, err := Parse([]byte(Example))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Writer = &runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "writer", Effort: "high", Role: "writer"}
+	root := t.TempDir()
+	c.Codex = &Codex{Executable: filepath.Join(root, "codex.exe"), ExecutableHash: strings.Repeat("a", 64), StateRoot: filepath.Join(root, "state"), AuthSource: filepath.Join(root, "auth.json")}
+	c.WriterContract = writercontract.ContractAnchoredEditsV2
+	if err := c.Validate(); err != nil {
+		t.Fatal("anchored-edits-v2 Codex route rejected", err)
+	}
+	v2ID, err := c.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.WriterContract = writercontract.ContractAnchoredEditsV1
+	v1ID, err := c.ID()
+	if err != nil || v1ID == v2ID {
+		t.Fatal("v2 validation opt-in was not configuration-identity-bound", err)
+	}
+
+	for _, runtimeName := range []string{"fake", "provider-api", "opencode-http"} {
+		unsupported := c
+		unsupported.WriterContract = writercontract.ContractAnchoredEditsV2
+		unsupported.Writer = &runtime.Profile{Runtime: runtimeName, Provider: "deterministic", Model: "fixture", Effort: "none", Role: "writer"}
+		if runtimeName == "provider-api" || runtimeName == "opencode-http" {
+			unsupported.Version = 2
+			unsupported.Access = &Access{}
+			unsupported.Provider = &Provider{}
+		}
+		if err := unsupported.Validate(); err == nil || !strings.Contains(err.Error(), "anchored-edits-v2 requires a Codex writer runtime") {
+			t.Fatalf("anchored-edits-v2 admitted unsupported runtime %q: %v", runtimeName, err)
+		}
+	}
+
+	graph := c
+	graph.WriterContract = writercontract.ContractAnchoredEditsV2
+	graph.PlannerContract = "plan-graph-v4"
+	graph.ExplorerContract = "json-v2"
+	graph.Explorer = &runtime.Profile{Runtime: "fake", Provider: "deterministic", Model: "fixture", Effort: "none", Role: "explorer"}
+	if err := graph.Validate(); err != nil {
+		t.Fatal("plan-graph-v4 rejected anchored-edits-v2", err)
+	}
+}
+
+func TestExplorerJSONV2ContractIsExplicitAndIdentityBound(t *testing.T) {
+	c, err := Parse([]byte(Example))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyID, err := c.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.ExplorerContract = "json-v2"
+	if err := c.Validate(); err != nil {
+		t.Fatal("json-v2 explorer contract rejected", err)
+	}
+	v2ID, err := c.ID()
+	if err != nil || v2ID == legacyID {
+		t.Fatal("json-v2 was not configuration-identity-bound", err)
+	}
+	c.ExplorerContract = "json-v3"
+	if err := c.Validate(); err == nil {
+		t.Fatal("unknown explorer contract admitted")
+	}
+}
+
 func TestTopLevelProviderAndOpenCodeSelection(t *testing.T) {
 	direct := providerBackedConfig("provider-api", "openai")
 	if err := direct.Validate(); err != nil {
@@ -227,6 +366,140 @@ func TestNativeWriterOutputIsExplicitAndSchemaBound(t *testing.T) {
 	c.Provider.Roles["writer"] = role
 	if err := c.validateNativeWriterOutput(); err == nil {
 		t.Fatal("native writer configuration with a forbidden terminal choice was admitted")
+	}
+}
+
+func TestNativeWriterOutputAcceptsUTF8ReplaceV3Schema(t *testing.T) {
+	c := nativeWriterOutputConfig(t)
+	c.WriterContract = writercontract.ContractUTF8ReplaceV3
+	if err := c.validateNativeWriterOutput(); err != nil {
+		t.Fatal("native writer v3 configuration rejected", err)
+	}
+	in := `{"output_schema":` + string(writercontract.UTF8Schema()) + `,"instruction":"replace complete files"}`
+	invocation, err := runtime.NewInvocation(*c.Writer, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expectation, err := c.OpenCodeWriterOutputExpectation(invocation); err != nil || expectation == nil {
+		t.Fatal("v3 schema was not admitted for native writer output", err)
+	}
+}
+
+func TestNativeWriterOutputAcceptsCandidateBoundV4Schema(t *testing.T) {
+	c := nativeWriterOutputConfig(t)
+	c.WriterContract = writercontract.ContractUTF8ScopedV4
+	if err := c.validateNativeWriterOutput(); err != nil {
+		t.Fatal("native writer v4 configuration rejected", err)
+	}
+	candidate := strings.Repeat("a", 64)
+	schema, err := writercontract.UTF8SchemaForCandidate(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := canonical.Bytes(map[string]any{"candidate_id": candidate, "output_schema": schema, "instruction": "implement"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation, err := runtime.NewInvocation(*c.Writer, string(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expectation, err := c.OpenCodeWriterOutputExpectation(invocation); err != nil || expectation == nil {
+		t.Fatal("candidate-bound v4 schema rejected", err)
+	}
+	other, _ := writercontract.UTF8SchemaForCandidate(strings.Repeat("b", 64))
+	input, _ = canonical.Bytes(map[string]any{"candidate_id": candidate, "output_schema": other, "instruction": "implement"})
+	invocation, err = runtime.NewInvocation(*c.Writer, string(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.OpenCodeWriterOutputExpectation(invocation); err == nil {
+		t.Fatal("native schema candidate substitution admitted")
+	}
+	for _, wrongSchema := range [][]byte{writercontract.UTF8Schema(), writercontract.ChangesJSONSchema()} {
+		input, _ := canonical.Bytes(map[string]any{"candidate_id": candidate, "output_schema": wrongSchema, "instruction": "implement"})
+		wrongShape, err := runtime.NewInvocation(*c.Writer, string(input))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.OpenCodeWriterOutputExpectation(wrongShape); err == nil {
+			t.Fatal("native v4 writer accepted a different contract schema")
+		}
+	}
+}
+
+func TestNativeWriterOutputAcceptsCandidateBoundAnchoredSchema(t *testing.T) {
+	c := nativeWriterOutputConfig(t)
+	c.WriterContract = writercontract.ContractAnchoredEditsV1
+	if err := c.validateNativeWriterOutput(); err != nil {
+		t.Fatal("native anchored writer configuration rejected", err)
+	}
+	candidate := strings.Repeat("a", 64)
+	schema, err := writercontract.AnchoredEditsSchemaForCandidate(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := canonical.Bytes(map[string]any{"candidate_id": candidate, "output_schema": schema, "instruction": "edit anchors"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation, err := runtime.NewInvocation(*c.Writer, string(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expectation, err := c.OpenCodeWriterOutputExpectation(invocation); err != nil || expectation == nil {
+		t.Fatal("candidate-bound anchored schema rejected", err)
+	}
+	other, _ := writercontract.AnchoredEditsSchemaForCandidate(strings.Repeat("b", 64))
+	wrongInput, _ := canonical.Bytes(map[string]any{"candidate_id": candidate, "output_schema": other, "instruction": "edit anchors"})
+	wrong, err := runtime.NewInvocation(*c.Writer, string(wrongInput))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.OpenCodeWriterOutputExpectation(wrong); err == nil {
+		t.Fatal("anchored schema candidate substitution admitted")
+	}
+	for _, wrongSchema := range [][]byte{writercontract.UTF8Schema(), writercontract.ChangesJSONSchema()} {
+		wrongInput, _ := canonical.Bytes(map[string]any{"candidate_id": candidate, "output_schema": wrongSchema, "instruction": "edit anchors"})
+		wrongShape, err := runtime.NewInvocation(*c.Writer, string(wrongInput))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.OpenCodeWriterOutputExpectation(wrongShape); err == nil {
+			t.Fatal("native anchored writer accepted a different contract schema")
+		}
+	}
+}
+
+func TestNativeWriterOutputUsesOnlyChangesJSONContractSchema(t *testing.T) {
+	c := nativeWriterOutputConfig(t)
+	c.WriterContract = writercontract.ContractChangesJSONV1
+	if err := c.validateNativeWriterOutput(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		schema json.RawMessage
+		valid  bool
+	}{
+		{name: "changes-json", schema: writercontract.ChangesJSONSchema(), valid: true},
+		{name: "utf8", schema: writercontract.UTF8Schema()},
+		{name: "anchored", schema: writercontract.AnchoredEditsSchema()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input, err := canonical.Bytes(map[string]any{"candidate_id": strings.Repeat("a", 64), "output_schema": tc.schema, "instruction": "write"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			invocation, err := runtime.NewInvocation(*c.Writer, string(input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = c.OpenCodeWriterOutputExpectation(invocation)
+			if (err == nil) != tc.valid {
+				t.Fatalf("contract schema admission mismatch: %v", err)
+			}
+		})
 	}
 }
 
@@ -515,5 +788,92 @@ func providerBackedConfig(selectedRuntime, providerID string) Config {
 			Models:      []ProviderModel{{Name: "planner-model", Version: 2, Provider: providerID, Model: "deployment/opaque-model", AdapterID: providergateway.OpenAIChatCompletionsAdapter, Capabilities: ProviderCapabilities{Tools: true, OutputCap: true, CompleteUsage: true}, AdapterCapabilitiesJSON: "{}", ContextWindowTokens: 100, MaxCalls: 3, MaxRequestBytes: 4096, MaxResponseBytes: 8192, MaxOutputTokens: 10, Pricing: &ProviderPricing{Currency: "USD", Unit: "micro_usd_per_million_tokens", MaxInputMicroUSDPerMillion: 1001, MaxOutputMicroUSDPerMillion: 2001}}},
 			Roles:       map[string]ProviderRole{"planner": {Endpoint: "primary", Model: "planner-model", AdapterControlsJSON: "{}", Variant: ProviderVariant{Effort: "none"}, RequiredCapabilities: &ProviderRequiredCapabilities{StructuredOutput: providergateway.StructuredOutputTextParseRequired}}},
 		},
+	}
+}
+
+func TestModelPolicyTOMLExample(t *testing.T) {
+	raw := Example + `
+[writer]
+runtime = "fake"
+provider = "deterministic"
+model = "writer-standard"
+effort = "medium"
+role = "writer"
+
+[explorer]
+runtime = "fake"
+provider = "deterministic"
+model = "explorer-standard"
+effort = "medium"
+role = "explorer"
+
+[model_policy]
+Version = 1
+
+[[model_policy.Profiles]]
+Name = "writer-standard"
+Runtime = "fake"
+Provider = "deterministic"
+Model = "writer-standard"
+Effort = "medium"
+
+[[model_policy.Profiles]]
+Name = "writer-strong"
+Runtime = "fake"
+Provider = "deterministic"
+Model = "writer-strong"
+Effort = "high"
+
+[[model_policy.Profiles]]
+Name = "explorer-economy"
+Runtime = "fake"
+Provider = "deterministic"
+Model = "explorer-economy"
+Effort = "low"
+
+[[model_policy.Profiles]]
+Name = "explorer-standard"
+Runtime = "fake"
+Provider = "deterministic"
+Model = "explorer-standard"
+Effort = "medium"
+
+[[model_policy.Profiles]]
+Name = "explorer-strong"
+Runtime = "fake"
+Provider = "deterministic"
+Model = "explorer-strong"
+Effort = "high"
+
+[model_policy.Rules.writer]
+DefaultProfile = "writer-standard"
+EscalatedProfile = "writer-strong"
+ContextEscalationTokens = 1000000000
+ContextEscalationBytes = 16384
+FailureEscalationCount = 1
+
+[model_policy.Rules.explorer]
+DefaultProfile = "explorer-standard"
+CheapProfile = "explorer-economy"
+CheapContextBytes = 2048
+EscalatedProfile = "explorer-strong"
+ContextEscalationTokens = 1000000000
+ContextEscalationBytes = 16384
+FailureEscalationCount = 1
+`
+	c, err := Parse([]byte(raw))
+	if err != nil || c.ModelPolicy == nil {
+		t.Fatalf("CamelCase model policy TOML rejected: %v", err)
+	}
+	explorer, err := modelpolicy.Select(*c.ModelPolicy, modelpolicy.Request{Role: "explorer", ReadOnly: true, Complexity: modelpolicy.LevelMedium, Risk: modelpolicy.LevelMedium, Uncertainty: modelpolicy.LevelMedium, ContextBytes: 2048})
+	if err != nil || explorer.Profile.Name != "explorer-economy" {
+		t.Fatalf("bounded explorer economy route differs: %+v %v", explorer, err)
+	}
+	writer, err := modelpolicy.Select(*c.ModelPolicy, modelpolicy.Request{Role: "writer", Complexity: modelpolicy.LevelMedium, Risk: modelpolicy.LevelMedium, Uncertainty: modelpolicy.LevelMedium, ContextBytes: 1, Failures: 1})
+	if err != nil || writer.Profile.Name != "writer-strong" || writer.Reason != "prior-failures" {
+		t.Fatalf("accepted writer failure did not escalate: %+v %v", writer, err)
+	}
+	if _, err := Parse([]byte(strings.Replace(raw, "DefaultProfile", "default_profile", 1))); err == nil {
+		t.Fatal("JSON snake_case policy field was accepted")
 	}
 }

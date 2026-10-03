@@ -1,0 +1,756 @@
+package control
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"sort"
+	"strings"
+	"unicode/utf8"
+
+	"harness.local/engorch/internal/canonical"
+	"harness.local/engorch/internal/journal"
+	"harness.local/engorch/internal/safepath"
+	"harness.local/engorch/internal/taskcontext"
+	"harness.local/engorch/internal/worktree"
+)
+
+// taskContextBoundedV1 is the only task-context mode that enables native role
+// context admission. Empty preserves legacy autonomous behavior byte-for-byte.
+const taskContextBoundedV1 = "bounded-v1"
+
+const (
+	taskContextVersion      = 1
+	taskContextMaxReadFiles = 24
+	taskContextMaxFileBytes = 32768
+	taskContextMaxInput     = 768 << 10
+	taskContextQueryCap     = 16 << 10
+	// taskContextFullQueryMax aligns the full question/objective admission bound
+	// with the CLI 256KiB limit. Selection text stays capped at 16KiB; the full
+	// digest and length remain bound in the record. Serialized role invocation
+	// input remains capped by runtime.NewInvocation (256KiB); builders fail
+	// rather than silently trimming a mandatory objective, and no token
+	// estimates are invented.
+	taskContextFullQueryMax = 256 << 10
+)
+
+// Secret-redaction scope: path filtering prevents reads of common secret files
+// (for example .env, secret/credential directories, private keys) and redacts
+// their names in omissions, but it cannot guarantee that secrets embedded in
+// ordinary source text are absent from selected excerpts. The mode stays
+// opt-in via ExecutionPolicy.Context="bounded-v1" and makes no claim of
+// universal secret redaction.
+
+// TaskContextRecord is durable evidence that a bounded task-relevant text view
+// was admitted for one role, source, candidate and query. Manifest.Selected
+// retains the exact source text shown to the role; ManifestID binds the
+// complete observed selection. Unavailable, when set, marks an explicit
+// unavailable context with no eligible source text rather than a silent
+// whole-repo scan.
+type TaskContextRecord struct {
+	Version           int                        `json:"version"`
+	Role              string                     `json:"role"`
+	SourceID          string                     `json:"source_id"`
+	CandidateID       string                     `json:"candidate_id"`
+	Query             string                     `json:"query"`
+	QueryTruncated    bool                       `json:"query_truncated,omitempty"`
+	QueryHash         string                     `json:"query_hash"`
+	QueryLen          int                        `json:"query_len"`
+	Manifest          taskcontext.Manifest       `json:"manifest"`
+	ManifestID        string                     `json:"manifest_id,omitempty"`
+	LexicalBuildID    string                     `json:"lexical_build_id,omitempty"`
+	LexicalOverlayID  string                     `json:"lexical_overlay_id,omitempty"`
+	LexicalSearches   []TaskContextLexicalSearch `json:"lexical_searches,omitempty"`
+	LexicalSearchesID string                     `json:"lexical_searches_id,omitempty"`
+	Unavailable       string                     `json:"unavailable,omitempty"`
+}
+
+// taskContextValidRole reports whether role is a native task-context consumer.
+func taskContextValidRole(role string) bool {
+	switch role {
+	case "explorer", "writer", "fixer", "reviewer":
+		return true
+	default:
+		return false
+	}
+}
+
+// taskContextQueryHash binds the complete original query bytes.
+func taskContextQueryHash(full string) string {
+	sum := sha256.Sum256([]byte(full))
+	return hex.EncodeToString(sum[:])
+}
+
+// truncateTaskQuery caps selection text to taskContextQueryCap bytes on a UTF-8
+// boundary. It returns the bound text, whether truncation occurred, the full
+// query digest and the original length.
+func truncateTaskQuery(full string) (string, bool, string, int) {
+	hash := taskContextQueryHash(full)
+	orig := len(full)
+	if len(full) <= taskContextQueryCap {
+		return full, false, hash, orig
+	}
+	cut := taskContextQueryCap
+	for cut > 0 && !utf8.RuneStart(full[cut]) {
+		cut--
+	}
+	return full[:cut], true, hash, orig
+}
+
+// taskContextEnabled reports whether snapshot opted into bounded task context.
+// Legacy empty context returns false without performing any reads or events.
+func taskContextEnabled(s Snapshot) bool {
+	return s.Creation.Execution != nil && s.Creation.Execution.Context == taskContextBoundedV1
+}
+
+// taskContextForRole returns the persisted record matching the exact current
+// source, candidate, role and full query. It performs no filesystem reads and
+// no selection; replay reconstructs invocations identically through this path.
+//
+// Disabled legacy (empty context) returns (nil, nil) so role builders omit the
+// payload and retain byte-identical invocations. Bounded-v1 with no matching
+// admission returns an error so Prepare builders fail rather than dispatching
+// a provider with silently missing required context.
+func taskContextForRole(s Snapshot, role, fullQuestion string) (*TaskContextRecord, error) {
+	if !taskContextEnabled(s) {
+		return nil, nil
+	}
+	if !taskContextValidRole(role) {
+		return nil, errors.New("invalid task context role")
+	}
+	if strings.TrimSpace(fullQuestion) == "" || !utf8.ValidString(fullQuestion) || len(fullQuestion) > taskContextFullQueryMax {
+		return nil, errors.New("task context question bound exceeded")
+	}
+	if s.Workspace == nil || s.Candidate == nil {
+		return nil, errors.New("task context admission missing for current candidate")
+	}
+	sourceID, err := s.Creation.Repository.ID()
+	if err != nil {
+		return nil, err
+	}
+	candidateID, err := s.Candidate.ID()
+	if err != nil {
+		return nil, err
+	}
+	want := taskContextQueryHash(fullQuestion)
+	for i := range s.TaskContexts {
+		r := &s.TaskContexts[i]
+		if r.Role == role && r.SourceID == sourceID && r.CandidateID == candidateID && r.QueryHash == want {
+			out := *r
+			return &out, nil
+		}
+	}
+	return nil, errors.New("task context admission missing for current candidate and query")
+}
+
+// writerTaskRole derives the task-context role for writer invocations. Repair
+// state uses the fixer role; all other states use writer.
+func writerTaskRole(s Snapshot) string {
+	if s.Creation.Config.Version == 2 && s.State == "REPAIRING" {
+		return "fixer"
+	}
+	return "writer"
+}
+
+// maybeAdmitTaskContext admits bounded context before a native role dispatch.
+// Legacy empty context performs no reads or events and returns nil.
+func maybeAdmitTaskContext(ctx context.Context, path, role, question string) error {
+	s, err := Inspect(path)
+	if err != nil {
+		return err
+	}
+	if !taskContextEnabled(s) {
+		return nil
+	}
+	if _, err := AdmitTaskContext(ctx, path, role, question); err != nil {
+		return err
+	}
+	return nil
+}
+
+// AdmitTaskContext captures a bounded observable text view for role and
+// question and persists it as a task.context-admitted event before any runtime
+// intent. It requires the immutable bounded-v1 policy and a resolved current
+// workspace/candidate.
+//
+// It acquires the existing shared worktree lease, captures the exact current
+// candidate, builds a small deterministic path inventory from already captured
+// FileStates (path names only), prioritizes exploration and writer proposal
+// paths plus task path terms, then reads at most 24 complete candidate regular
+// files with worktree.ReadSource exact binding. Only complete files of at most
+// 32768 bytes are admitted; larger files are omitted, never misrepresented as
+// complete. Decoded bytes are hash-verified against the admitted FileState.
+// Sensitive paths are never read, reusing the exact selector eligibility
+// rules. Total input is capped at 768KiB; selection returns at most the default
+// 48KiB view. The query bound for selection is capped at 16KiB UTF-8 with
+// explicit truncation evidence while the full query digest remains bound.
+// Omissions and inventory/read-budget limits are recorded; the manifest never
+// claims the repository is complete. Empty eligible selection yields an
+// explicit unavailable record, never a silent whole-repo scan.
+//
+// An already admitted identical context (same role, source, candidate and full
+// query digest) is reused without new effects. Candidate drift requires a new
+// context. The lease is released before appending via normal controller Append.
+// Replay performs no filesystem reads and no selection.
+func AdmitTaskContext(ctx context.Context, path, role, question string) (TaskContextRecord, error) {
+	if !taskContextValidRole(role) {
+		return TaskContextRecord{}, errors.New("invalid task context role")
+	}
+	if strings.TrimSpace(question) == "" || !utf8.ValidString(question) {
+		return TaskContextRecord{}, errors.New("invalid task context question")
+	}
+	if len(question) > taskContextFullQueryMax {
+		return TaskContextRecord{}, errors.New("task context question too large")
+	}
+	s, err := Inspect(path)
+	if err != nil {
+		return TaskContextRecord{}, err
+	}
+	if s.Creation.Execution == nil || s.Creation.Execution.Context != taskContextBoundedV1 {
+		return TaskContextRecord{}, errors.New("task context not enabled for this run")
+	}
+	if err := s.Creation.Execution.Validate(); err != nil {
+		return TaskContextRecord{}, err
+	}
+	if s.Workspace == nil || s.Candidate == nil {
+		return TaskContextRecord{}, errors.New("task context requires a resolved workspace and candidate")
+	}
+	sourceID, err := s.Creation.Repository.ID()
+	if err != nil {
+		return TaskContextRecord{}, err
+	}
+	candidateID, err := s.Candidate.ID()
+	if err != nil {
+		return TaskContextRecord{}, err
+	}
+	boundQuery, truncated, queryHash, queryLen := truncateTaskQuery(question)
+	// Reuse without new effects: same role, source, candidate and full query.
+	for _, existing := range s.TaskContexts {
+		if existing.Role == role && existing.SourceID == sourceID && existing.CandidateID == candidateID && existing.QueryHash == queryHash {
+			return existing, nil
+		}
+	}
+	lease, err := worktree.AcquireRead(s.Workspace.Request)
+	if err != nil {
+		return TaskContextRecord{}, err
+	}
+	// Capture under the shared lease and require the exact current candidate.
+	captured, fileStates, captureErr := worktree.Capture(ctx, *s.Workspace)
+	if captureErr != nil {
+		_ = lease.Close()
+		return TaskContextRecord{}, captureErr
+	}
+	if captured != *s.Candidate {
+		_ = lease.Close()
+		return TaskContextRecord{}, errors.New("task context candidate drift before admission")
+	}
+	fresh, err := Inspect(path)
+	if err != nil {
+		_ = lease.Close()
+		return TaskContextRecord{}, err
+	}
+	if fresh.Workspace == nil || fresh.Candidate == nil || *fresh.Candidate != *s.Candidate {
+		_ = lease.Close()
+		return TaskContextRecord{}, errors.New("task context candidate changed before admission")
+	}
+	// Use the freshest journal metadata for hints without extra dispatch.
+	s = fresh
+	explorationPaths := taskContextExplorationPaths(s)
+	writerPaths := taskContextWriterPaths(s)
+	lexicalSearches, lexicalPaths, err := taskContextCandidateLexicalEvidence(ctx, path, s, boundQuery)
+	if err != nil {
+		_ = lease.Close()
+		return TaskContextRecord{}, err
+	}
+	prioritized := prioritizeTaskPaths(fileStates, explorationPaths, writerPaths, lexicalPaths, boundQuery)
+	type readFile struct {
+		path    string
+		hash    string
+		content []byte
+	}
+	reads := []readFile{}
+	preOmissions := []taskcontext.Omission{}
+	total := 0
+	attempts := 0
+	// Lexical provenance binds any candidate-overlay search evidence below.
+	var lexicalBuild, lexicalOverlay string
+	if lex, lexErr := roleLexical(s); lexErr != nil {
+		_ = lease.Close()
+		return TaskContextRecord{}, lexErr
+	} else if lex != nil {
+		lexicalBuild = lex.BuildID
+		lexicalOverlay = lex.OverlayID
+	}
+	lexicalSearchesID, err := taskContextLexicalSearchesID(lexicalSearches)
+	if err != nil {
+		_ = lease.Close()
+		return TaskContextRecord{}, err
+	}
+	for _, fs := range prioritized {
+		if attempts >= taskContextMaxReadFiles {
+			if taskcontext.EligiblePath(fs.Path) {
+				appendTaskOmission(&preOmissions, 64, fs.Path, "read_budget")
+			} else {
+				appendTaskOmission(&preOmissions, 64, "[redacted]", "sensitive_path")
+			}
+			continue
+		}
+		if !taskcontext.EligiblePath(fs.Path) {
+			if len(preOmissions) < 64 {
+				preOmissions = append(preOmissions, taskcontext.Omission{Path: "[redacted]", Reason: "sensitive_path"})
+			}
+			continue
+		}
+		attempts++
+		chunk, readErr := worktree.ReadSource(ctx, *s.Workspace, captured, fs.Path, 0, taskContextMaxFileBytes)
+		if readErr != nil {
+			// Absent or changed file: record explicitly, never claim complete.
+			appendTaskOmission(&preOmissions, 64, fs.Path, "unreadable")
+			continue
+		}
+		if chunk.CandidateID != candidateID || chunk.Path != fs.Path {
+			_ = lease.Close()
+			return TaskContextRecord{}, errors.New("task context read binding mismatch")
+		}
+		if chunk.Size > taskContextMaxFileBytes || chunk.NextOffset != nil {
+			appendTaskOmission(&preOmissions, 64, fs.Path, "file_too_large")
+			continue
+		}
+		raw, decodeErr := base64.StdEncoding.DecodeString(chunk.ContentBase64)
+		if decodeErr != nil {
+			_ = lease.Close()
+			return TaskContextRecord{}, errors.New("task context chunk decode failed")
+		}
+		if int64(len(raw)) != chunk.Size {
+			_ = lease.Close()
+			return TaskContextRecord{}, errors.New("task context chunk size mismatch")
+		}
+		sum := sha256.Sum256(raw)
+		got := hex.EncodeToString(sum[:])
+		if got != fs.Hash || got != chunk.SHA256 {
+			_ = lease.Close()
+			return TaskContextRecord{}, errors.New("task context content hash mismatch")
+		}
+		if total+len(raw) > taskContextMaxInput {
+			appendTaskOmission(&preOmissions, 64, fs.Path, "input_limit")
+			continue
+		}
+		total += len(raw)
+		reads = append(reads, readFile{fs.Path, fs.Hash, raw})
+	}
+	// Reject drift observed during reads before persisting anything.
+	after, fpErr := worktree.Fingerprint(ctx, *s.Workspace)
+	if fpErr != nil {
+		_ = lease.Close()
+		return TaskContextRecord{}, fpErr
+	}
+	if after != captured {
+		_ = lease.Close()
+		return TaskContextRecord{}, errors.New("task context candidate changed during reads")
+	}
+	if err := lease.Close(); err != nil {
+		return TaskContextRecord{}, err
+	}
+	if len(reads) == 0 {
+		rec := TaskContextRecord{
+			Version:        taskContextVersion,
+			Role:           role,
+			SourceID:       sourceID,
+			CandidateID:    candidateID,
+			Query:          boundQuery,
+			QueryTruncated: truncated,
+			QueryHash:      queryHash,
+			QueryLen:       queryLen,
+			Manifest: taskcontext.Manifest{
+				Version:   1,
+				Scope:     taskcontext.Scope{SourceID: sourceID, CandidateID: candidateID},
+				InputHash: strings.Repeat("0", 64),
+				Selected:  []taskcontext.SelectedFile{},
+				Omissions: []taskcontext.Omission{},
+			},
+			LexicalBuildID:    lexicalBuild,
+			LexicalOverlayID:  lexicalOverlay,
+			LexicalSearches:   lexicalSearches,
+			LexicalSearchesID: lexicalSearchesID,
+			Unavailable:       "no_eligible_files",
+		}
+		if err := Append(path, "task.context-admitted", rec); err != nil {
+			// Reuse on concurrent admission of the identical unavailable context.
+			latest, inspectErr := Inspect(path)
+			if inspectErr != nil {
+				return TaskContextRecord{}, errors.Join(err, inspectErr)
+			}
+			for _, existing := range latest.TaskContexts {
+				if existing.Role == role && existing.SourceID == sourceID && existing.CandidateID == candidateID && existing.QueryHash == queryHash {
+					return existing, nil
+				}
+			}
+			return TaskContextRecord{}, err
+		}
+		return rec, nil
+	}
+	files := make([]taskcontext.File, 0, len(reads))
+	for _, r := range reads {
+		files = append(files, taskcontext.File{Path: r.path, Hash: r.hash, Content: r.content})
+	}
+	changed, hints := taskContextSelectorHints(writerPaths, append(explorationPaths, lexicalPaths...))
+	limits := taskcontext.DefaultLimits()
+	limits.MaxInputBytes = taskContextMaxInput
+	manifest, selErr := taskcontext.Select(taskcontext.Input{
+		Version:      1,
+		Scope:        taskcontext.Scope{SourceID: sourceID, CandidateID: candidateID},
+		Objective:    boundQuery,
+		Files:        files,
+		ChangedPaths: changed,
+		PathHints:    hints,
+		Limits:       limits,
+	})
+	if selErr != nil {
+		return TaskContextRecord{}, selErr
+	}
+	// Record pre-selection omissions (sensitive, too-large, budget limits)
+	// without claiming the repository is complete.
+	for _, o := range preOmissions {
+		if len(manifest.Omissions) < limits.MaxOmissions {
+			manifest.Omissions = append(manifest.Omissions, o)
+		}
+	}
+	manifest.OmittedCount += len(preOmissions)
+	manifest.OmissionsTrimmed = manifest.OmittedCount > len(manifest.Omissions)
+	manifestID, err := manifest.ID()
+	if err != nil {
+		return TaskContextRecord{}, err
+	}
+	rec := TaskContextRecord{
+		Version:           taskContextVersion,
+		Role:              role,
+		SourceID:          sourceID,
+		CandidateID:       candidateID,
+		Query:             boundQuery,
+		QueryTruncated:    truncated,
+		QueryHash:         queryHash,
+		QueryLen:          queryLen,
+		Manifest:          manifest,
+		ManifestID:        manifestID,
+		LexicalBuildID:    lexicalBuild,
+		LexicalOverlayID:  lexicalOverlay,
+		LexicalSearches:   lexicalSearches,
+		LexicalSearchesID: lexicalSearchesID,
+	}
+	if err := Append(path, "task.context-admitted", rec); err != nil {
+		latest, inspectErr := Inspect(path)
+		if inspectErr != nil {
+			return TaskContextRecord{}, errors.Join(err, inspectErr)
+		}
+		for _, existing := range latest.TaskContexts {
+			if existing.Role == role && existing.SourceID == sourceID && existing.CandidateID == candidateID && existing.QueryHash == queryHash && existing.ManifestID == manifestID {
+				return existing, nil
+			}
+		}
+		return TaskContextRecord{}, err
+	}
+	return rec, nil
+}
+
+func appendTaskOmission(out *[]taskcontext.Omission, cap int, path, reason string) {
+	if len(*out) < cap {
+		*out = append(*out, taskcontext.Omission{Path: path, Reason: reason})
+	}
+}
+
+// taskContextExplorationPaths collects advisory exploration paths from journal
+// metadata only. It performs no filesystem reads.
+func taskContextExplorationPaths(s Snapshot) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, rec := range s.Explorations {
+		var obs Exploration
+		if err := canonical.Decode([]byte(rec.Result.Output), &obs); err != nil {
+			continue
+		}
+		for _, p := range obs.Paths {
+			if !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// taskContextWriterPaths collects writer proposal change paths from journal
+// metadata only. It performs no filesystem reads.
+func taskContextWriterPaths(s Snapshot) []string {
+	if s.WriterProposal == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, c := range s.WriterProposal.Prepared.Proposal.Changes {
+		if !seen[c.Path] {
+			seen[c.Path] = true
+			out = append(out, c.Path)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// taskContextSelectorHints bounds selector path evidence without extra reads.
+func taskContextSelectorHints(writerPaths, explorationPaths []string) ([]string, []string) {
+	changed := append([]string(nil), writerPaths...)
+	hints := append([]string(nil), explorationPaths...)
+	if len(changed) > 512 {
+		changed = changed[:512]
+	}
+	if len(hints) > 512 {
+		hints = hints[:512]
+	}
+	return changed, hints
+}
+
+// prioritizeTaskPaths ranks already captured FileState names only. Exploration
+// and writer proposal paths plus task path terms rank first; ties break by
+// path for determinism. It performs no file reads.
+func prioritizeTaskPaths(states []worktree.FileState, explorationPaths, writerPaths, lexicalPaths []string, query string) []worktree.FileState {
+	exploration := map[string]bool{}
+	for _, p := range explorationPaths {
+		exploration[p] = true
+	}
+	writer := map[string]bool{}
+	for _, p := range writerPaths {
+		writer[p] = true
+	}
+	lexical := map[string]bool{}
+	for _, p := range lexicalPaths {
+		lexical[p] = true
+	}
+	terms := taskQueryTerms(query)
+	type scored struct {
+		state worktree.FileState
+		score int
+	}
+	scoredList := make([]scored, 0, len(states))
+	for _, st := range states {
+		score := 0
+		if writer[st.Path] {
+			score += 1000
+		}
+		if exploration[st.Path] {
+			score += 800
+		}
+		if lexical[st.Path] {
+			score += 700
+		}
+		lower := strings.ToLower(st.Path)
+		for _, term := range terms {
+			if strings.Contains(lower, term) {
+				score += 80
+			}
+		}
+		scoredList = append(scoredList, scored{st, score})
+	}
+	sort.Slice(scoredList, func(i, j int) bool {
+		if scoredList[i].score != scoredList[j].score {
+			return scoredList[i].score > scoredList[j].score
+		}
+		return scoredList[i].state.Path < scoredList[j].state.Path
+	})
+	out := make([]worktree.FileState, 0, len(scoredList))
+	for _, sc := range scoredList {
+		out = append(out, sc.state)
+	}
+	return out
+}
+
+// taskQueryTerms extracts bounded lowercase path terms from the bound query.
+func taskQueryTerms(query string) []string {
+	seen := map[string]bool{}
+	lower := strings.ToLower(query)
+	for _, part := range strings.FieldsFunc(lower, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r >= 'A' && r <= 'Z')
+	}) {
+		if len([]rune(part)) >= 2 {
+			seen[part] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for w := range seen {
+		out = append(out, w)
+	}
+	sort.Strings(out)
+	if len(out) > 64 {
+		out = out[:64]
+	}
+	return out
+}
+
+// replayTaskContext validates a persisted task context admission without
+// reading the filesystem or running selection. It rejects duplicate and
+// substituted records and requires exact source, candidate and query binding
+// plus bounded selected bytes/counts, excerpt hashes/UTF-8/ranges and the
+// manifest identity.
+func replayTaskContext(s *Snapshot, e journal.Event) error {
+	var rec TaskContextRecord
+	if err := canonical.Decode(e.Payload, &rec); err != nil {
+		return err
+	}
+	if rec.Version != taskContextVersion || !taskContextValidRole(rec.Role) {
+		return errors.New("invalid task context record")
+	}
+	if err := safepath.RequireDigest(rec.SourceID); err != nil {
+		return errors.New("invalid task context source")
+	}
+	if err := safepath.RequireDigest(rec.CandidateID); err != nil {
+		return errors.New("invalid task context candidate")
+	}
+	if rec.Query == "" || len(rec.Query) > taskContextQueryCap || !utf8.ValidString(rec.Query) {
+		return errors.New("invalid task context query bound")
+	}
+	if err := safepath.RequireDigest(rec.QueryHash); err != nil {
+		return errors.New("invalid task context query digest")
+	}
+	if rec.QueryLen < len(rec.Query) || rec.QueryLen <= 0 || rec.QueryLen > taskContextFullQueryMax {
+		return errors.New("invalid task context query length")
+	}
+	if rec.QueryTruncated {
+		if rec.QueryLen <= len(rec.Query) {
+			return errors.New("task context truncation evidence mismatch")
+		}
+	} else {
+		if rec.QueryLen != len(rec.Query) {
+			return errors.New("task context truncation evidence mismatch")
+		}
+		if taskContextQueryHash(rec.Query) != rec.QueryHash {
+			return errors.New("task context query substitution")
+		}
+	}
+	if s.Creation.Execution == nil || s.Creation.Execution.Context != taskContextBoundedV1 {
+		return errors.New("task context not enabled for this run")
+	}
+	if s.Workspace == nil || s.Candidate == nil {
+		return errors.New("task context requires a resolved candidate")
+	}
+	sourceID, err := s.Creation.Repository.ID()
+	if err != nil || sourceID != rec.SourceID {
+		return errors.New("task context source substitution")
+	}
+	candidateID, err := s.Candidate.ID()
+	if err != nil || candidateID != rec.CandidateID {
+		return errors.New("task context candidate substitution")
+	}
+	if rec.LexicalBuildID != "" {
+		if err := safepath.RequireDigest(rec.LexicalBuildID); err != nil {
+			return errors.New("invalid task context lexical build")
+		}
+	}
+	if rec.LexicalOverlayID != "" {
+		if err := safepath.RequireDigest(rec.LexicalOverlayID); err != nil {
+			return errors.New("invalid task context lexical overlay")
+		}
+	}
+	if err := validateTaskContextLexicalEvidence(*s, rec); err != nil {
+		return err
+	}
+	if rec.Unavailable != "" {
+		if len(rec.Unavailable) > 256 || !utf8.ValidString(rec.Unavailable) {
+			return errors.New("invalid task context unavailable reason")
+		}
+		if len(rec.Manifest.Selected) != 0 || rec.ManifestID != "" {
+			return errors.New("unavailable task context must not carry selected content")
+		}
+		for _, existing := range s.TaskContexts {
+			if existing.Role == rec.Role && existing.QueryHash == rec.QueryHash && existing.CandidateID == rec.CandidateID {
+				return errors.New("duplicate task context")
+			}
+		}
+		s.TaskContexts = append(s.TaskContexts, rec)
+		return nil
+	}
+	if rec.Unavailable == "" && rec.ManifestID == "" {
+		return errors.New("task context manifest identity missing")
+	}
+	m := rec.Manifest
+	if m.Version != 1 {
+		return errors.New("invalid task context manifest version")
+	}
+	if m.Scope.SourceID != rec.SourceID || m.Scope.CandidateID != rec.CandidateID {
+		return errors.New("task context manifest scope mismatch")
+	}
+	if err := safepath.RequireDigest(m.InputHash); err != nil {
+		return errors.New("invalid task context input binding")
+	}
+	if m.InputBytes < 0 || m.InputBytes > taskContextMaxInput || m.SelectedBytes < 0 || m.SelectedBytes > 48<<10 || m.SelectedBytes > m.InputBytes {
+		return errors.New("task context byte bound exceeded")
+	}
+	if len(m.Selected) == 0 || len(m.Selected) > 12 {
+		return errors.New("task context selection count invalid")
+	}
+	if m.OmittedCount < 0 || m.OmittedCount > 4096+64 {
+		return errors.New("invalid task context omission count")
+	}
+	if len(m.Omissions) > 64 {
+		return errors.New("task context omission bound exceeded")
+	}
+	if m.OmissionsTrimmed {
+		if m.OmittedCount <= len(m.Omissions) {
+			return errors.New("task context omission trim mismatch")
+		}
+	} else if m.OmittedCount != len(m.Omissions) {
+		return errors.New("task context omission count mismatch")
+	}
+	seen := map[string]bool{}
+	for _, sel := range m.Selected {
+		if err := safepath.Relative(sel.Path); err != nil {
+			return errors.New("invalid task context excerpt path")
+		}
+		key := strings.ToLower(sel.Path)
+		if seen[key] {
+			return errors.New("task context path alias")
+		}
+		seen[key] = true
+		if err := safepath.RequireDigest(sel.Hash); err != nil {
+			return errors.New("invalid task context file digest")
+		}
+		if err := safepath.RequireDigest(sel.ExcerptHash); err != nil {
+			return errors.New("invalid task context excerpt digest")
+		}
+		if sel.Start < 0 || sel.End <= sel.Start {
+			return errors.New("invalid task context excerpt range")
+		}
+		if int64(len(sel.Content)) != sel.End-sel.Start {
+			return errors.New("task context excerpt range mismatch")
+		}
+		if !utf8.ValidString(sel.Content) {
+			return errors.New("task context excerpt not UTF-8")
+		}
+		sum := sha256.Sum256([]byte(sel.Content))
+		if hex.EncodeToString(sum[:]) != sel.ExcerptHash {
+			return errors.New("task context excerpt substitution")
+		}
+		if strings.TrimSpace(sel.Reason) == "" || len(sel.Reason) > 64 {
+			return errors.New("invalid task context excerpt reason")
+		}
+	}
+	gotID, err := m.ID()
+	if err != nil || gotID != rec.ManifestID {
+		return errors.New("task context manifest substitution")
+	}
+	for _, existing := range s.TaskContexts {
+		// The manifest digest describes selected candidate text and query, not
+		// the consumer role. A writer and reviewer may legitimately admit the
+		// same manifest for the same candidate. Role is part of the full task
+		// context identity, so only treat a same-role digest as a duplicate.
+		if existing.Role == rec.Role && existing.ManifestID != "" && existing.ManifestID == rec.ManifestID {
+			return errors.New("duplicate task context")
+		}
+		if existing.Role == rec.Role && existing.QueryHash == rec.QueryHash && existing.CandidateID == rec.CandidateID {
+			return errors.New("duplicate task context")
+		}
+	}
+	s.TaskContexts = append(s.TaskContexts, rec)
+	return nil
+}

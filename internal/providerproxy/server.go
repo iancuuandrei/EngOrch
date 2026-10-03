@@ -342,10 +342,6 @@ func (r *Running) Wait() error {
 // ServeHTTP admits one exact local provider request and forwards only a
 // transport-validated response whose completion is already durable.
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	if !s.markDispatched() {
-		http.Error(writer, "provider proxy unavailable", http.StatusConflict)
-		return
-	}
 	if err := s.validateHTTP(request); err != nil {
 		http.Error(writer, "provider request rejected", http.StatusBadRequest)
 		return
@@ -398,16 +394,6 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 }
 
-func (s *Server) markDispatched() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closing || s.poisoned || s.terminal {
-		return false
-	}
-	s.dispatched = true
-	return true
-}
-
 func (s *Server) validateHTTP(request *http.Request) error {
 	if request == nil || request.Method != http.MethodPost || request.TLS != nil || request.URL == nil || request.URL.Path != s.binding.RequestPath || request.URL.RawPath != "" || request.URL.RawQuery != "" || request.URL.ForceQuery || request.RequestURI != s.binding.RequestPath || request.Host != s.currentHost() || !loopbackPeer(request.RemoteAddr) {
 		return errors.New("invalid local provider request")
@@ -440,6 +426,7 @@ func (s *Server) beginHandler() bool {
 		return false
 	}
 	s.active = 1
+	s.dispatched = true
 	return true
 }
 

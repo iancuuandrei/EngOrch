@@ -8,12 +8,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"harness.local/engorch/internal/access"
 	"harness.local/engorch/internal/canonical"
@@ -105,10 +107,147 @@ func runFixtureAppServer() int {
 				return 4
 			}
 			var input struct {
-				CandidateID string `json:"candidate_id"`
+				CandidateID        string `json:"candidate_id"`
+				VerificationPlanID string `json:"verification_plan_id"`
+				Instruction        string `json:"instruction"`
+				Objective          string `json:"objective"`
+				Question           string `json:"question"`
+				ImplementationTask *struct {
+					ID string `json:"id"`
+				} `json:"implementation_task"`
 			}
 			if json.Unmarshal([]byte(params.Input[0].Text), &input) != nil || input.CandidateID == "" {
 				return 5
+			}
+			if strings.Contains(input.Instruction, "candidate_validate_anchored_edits") {
+				before := sha256.Sum256([]byte("base\n"))
+				beforeHash := hex.EncodeToString(before[:])
+				emitTool := func(sequence int, callID, toolName string, arguments any) (string, bool) {
+					argumentsJSON, marshalErr := json.Marshal(arguments)
+					if marshalErr != nil {
+						return "", false
+					}
+					requestID := json.RawMessage([]byte(fmt.Sprintf("%d", sequence)))
+					if encoder.Encode(map[string]any{
+						"jsonrpc": "2.0", "id": requestID, "method": "item/tool/call",
+						"params": map[string]any{"threadId": "thread-v2", "turnId": "turn-v2", "callId": callID, "tool": toolName, "arguments": json.RawMessage(argumentsJSON)},
+					}) != nil || !scanner.Scan() {
+						return "", false
+					}
+					var reply struct {
+						ID     json.RawMessage `json:"id"`
+						Result struct {
+							Success      bool `json:"success"`
+							ContentItems []struct {
+								Text string `json:"text"`
+							} `json:"contentItems"`
+						} `json:"result"`
+					}
+					if json.Unmarshal(scanner.Bytes(), &reply) != nil || string(reply.ID) != string(requestID) || !reply.Result.Success || len(reply.Result.ContentItems) != 1 {
+						return "", false
+					}
+					return reply.Result.ContentItems[0].Text, true
+				}
+
+				if encoder.Encode(response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"turn": map[string]any{"id": "turn-v2", "status": "inProgress", "items": []any{}}}}) != nil {
+					return 15
+				}
+				invalidText, invalidOK := emitTool(101, "anchor-invalid", "candidate_validate_anchored_edits", map[string]any{
+					"candidate_id": input.CandidateID, "path": "file.txt", "before_hash": beforeHash,
+					"edits": []any{map[string]any{"before": "not present", "after": "hello"}},
+				})
+				var invalidValidation struct {
+					Valid bool `json:"valid"`
+				}
+				if !invalidOK || json.Unmarshal([]byte(invalidText), &invalidValidation) != nil || invalidValidation.Valid {
+					return 16
+				}
+				readText, readOK := emitTool(102, "anchor-source-read", "candidate_read", map[string]any{"path": "file.txt", "offset": 0, "limit": 64})
+				var sourceRead struct {
+					ContentUTF8 *string `json:"content_utf8"`
+				}
+				if !readOK || json.Unmarshal([]byte(readText), &sourceRead) != nil || sourceRead.ContentUTF8 == nil || *sourceRead.ContentUTF8 != "base\n" {
+					return 18
+				}
+				validText, validOK := emitTool(103, "anchor-corrected", "candidate_validate_anchored_edits", map[string]any{
+					"candidate_id": input.CandidateID, "path": "file.txt", "before_hash": beforeHash,
+					"edits": []any{map[string]any{"before": "base", "after": "hello"}},
+				})
+				var validValidation struct {
+					Valid bool `json:"valid"`
+				}
+				if !validOK || json.Unmarshal([]byte(validText), &validValidation) != nil || !validValidation.Valid {
+					return 19
+				}
+				proposal, _ := json.Marshal(map[string]any{"candidate_id": input.CandidateID, "changes": []any{map[string]any{
+					"path": "file.txt", "before_hash": beforeHash,
+					"edits":            []any{map[string]any{"before": "base", "after": "hello"}},
+					"new_content_utf8": nil, "executable": false,
+				}}})
+				if encoder.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{
+					"threadId": "thread-v2", "turn": map[string]any{"id": "turn-v2", "status": "completed", "itemsView": "full", "error": nil,
+						"items": []any{map[string]any{"type": "agentMessage", "id": "message-v2", "phase": "final_answer", "text": string(proposal)}},
+					},
+				}}) != nil {
+					return 17
+				}
+				continue
+			}
+			if strings.Contains(input.Instruction, "Review the current candidate") {
+				decision := "approve"
+				findings := []ReviewFinding{}
+				if strings.Contains(input.Objective, "parallel repair fixture") {
+					stateRoot := filepath.Dir(filepath.Dir(filepath.Dir(os.Getenv("CODEX_HOME"))))
+					marker, markerErr := os.OpenFile(filepath.Join(stateRoot, "review-changes-requested-once"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+					if markerErr == nil {
+						_ = marker.Close()
+						decision = "changes_requested"
+						findings = []ReviewFinding{{Path: "repair.go", Message: "fixture requires a bounded repair"}}
+					} else if !errors.Is(markerErr, os.ErrExist) {
+						return 14
+					}
+				}
+				output, _ := json.Marshal(ReviewVerdict{CandidateID: input.CandidateID, VerificationPlanID: input.VerificationPlanID, Decision: decision, Findings: findings})
+				result = map[string]any{"turn": map[string]any{"id": "turn-v2", "status": "completed", "itemsView": "full", "error": nil, "items": []any{map[string]any{"type": "agentMessage", "id": "message-v2", "phase": "final_answer", "text": string(output)}}}}
+				break
+			}
+			if strings.Contains(input.Question, "REPAIR DESIGN") {
+				output, _ := json.Marshal(Exploration{CandidateID: input.CandidateID, Summary: "repair fixture path", Paths: []string{"repair.go"}})
+				result = map[string]any{"turn": map[string]any{"id": "turn-v2", "status": "completed", "itemsView": "full", "error": nil, "items": []any{map[string]any{"type": "agentMessage", "id": "message-v2", "phase": "final_answer", "text": string(output)}}}}
+				break
+			}
+			if input.ImplementationTask != nil && input.ImplementationTask.ID != "" {
+				stateRoot := filepath.Dir(filepath.Dir(filepath.Dir(os.Getenv("CODEX_HOME"))))
+				if _, err := os.Stat(filepath.Join(stateRoot, "graph-writer-barrier")); err == nil {
+					marker := filepath.Join(stateRoot, "ready-"+input.ImplementationTask.ID)
+					if err := os.WriteFile(marker, []byte("ready"), 0600); err != nil {
+						return 11
+					}
+					deadline := time.Now().Add(8 * time.Second)
+					for time.Now().Before(deadline) {
+						if _, a := os.Stat(filepath.Join(stateRoot, "ready-impl-alpha")); a == nil {
+							if _, b := os.Stat(filepath.Join(stateRoot, "ready-impl-beta")); b == nil {
+								break
+							}
+						}
+						time.Sleep(10 * time.Millisecond)
+					}
+					if _, err := os.Stat(filepath.Join(stateRoot, "ready-impl-alpha")); err != nil {
+						return 12
+					}
+					if _, err := os.Stat(filepath.Join(stateRoot, "ready-impl-beta")); err != nil {
+						return 13
+					}
+				}
+				path := "alpha.txt"
+				if input.ImplementationTask.ID == "impl-beta" {
+					path = "beta.txt"
+				} else if strings.HasPrefix(input.ImplementationTask.ID, "impl-repair-") {
+					path = "repair.go"
+				}
+				output, _ := json.Marshal(map[string]any{"candidate_id": input.CandidateID, "changes": []any{map[string]any{"path": path, "before_hash": nil, "edits": []any{}, "new_content_utf8": "parallel fixture output\n", "executable": false}}})
+				result = map[string]any{"turn": map[string]any{"id": "turn-v2", "status": "completed", "itemsView": "full", "error": nil, "items": []any{map[string]any{"type": "agentMessage", "id": "message-v2", "phase": "final_answer", "text": string(output)}}}}
+				break
 			}
 			before := sha256.Sum256([]byte("base\n"))
 			change := map[string]any{"path": "file.txt", "before_hash": hex.EncodeToString(before[:]), "content_base64": base64.StdEncoding.EncodeToString([]byte("fixture writer output\n")), "executable": false}

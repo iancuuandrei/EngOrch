@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"harness.local/engorch/internal/effects"
+	"harness.local/engorch/internal/gitexec"
 	"harness.local/engorch/internal/worktree"
 )
 
@@ -19,7 +19,7 @@ func gitInTemporary(ctx context.Context, directory, objects string, args ...stri
 
 func gitInTemporaryCredential(ctx context.Context, directory, objects string, credential *Credential, args ...string) error {
 	base := []string{"--no-optional-locks", "--no-replace-objects", "-c", "protocol.allow=never", "-c", "protocol.file.allow=always", "-c", "protocol.https.allow=always", "-c", "http.followRedirects=false", "-c", "credential.helper=", "-c", "core.askPass=", "-c", "core.hooksPath=" + os.DevNull}
-	command := exec.CommandContext(ctx, "git", append(base, args...)...)
+	command := gitexec.CommandContext(ctx, append(base, args...)...)
 	command.Dir = directory
 	command.Env = credential.environment(isolatedEnvironment(directory))
 	if objects != "" {

@@ -236,6 +236,25 @@ func TestProxyRejectsWrongAuthorityAndForwardingHeadersBeforeTransport(t *testin
 	closeProxy(t, running)
 }
 
+func TestRejectedUnauthenticatedRequestDoesNotPreventResponsesCacheBinding(t *testing.T) {
+	fixture := newResponsesPromptCacheFixture(t, "")
+	running, err := fixture.server.Listen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeProxy(t, running) })
+
+	for _, bearer := range []string{"", proxyBearer + "x"} {
+		status, _ := proxyPost(t, running.URL(), bearer, fixture.body, nil)
+		if status != http.StatusBadRequest {
+			t.Fatalf("unauthenticated request was not rejected: bearer length %d, status %d", len(bearer), status)
+		}
+	}
+	if err := running.BindResponsesPromptCacheKey("ses_after_rejected_requests"); err != nil {
+		t.Fatalf("rejected requests froze provider dispatch before cache binding: %v", err)
+	}
+}
+
 func TestPendingFailurePoisonsProxyWithoutResend(t *testing.T) {
 	fixture := newProxyFixture(t)
 	var calls atomic.Int32

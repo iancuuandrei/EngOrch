@@ -1,0 +1,13 @@
+{
+  "source_commit": "58c6c115e9647f21e9caf9a8a16166c9e52bc5e6",
+  "source_commit_after": "58c6c115e9647f21e9caf9a8a16166c9e52bc5e6",
+  "source_clean_before": true,
+  "source_clean_after": true,
+  "source_stable": true,
+  "command": "go test -p 1 ./... -count=1 -timeout 25m",
+  "started_utc": "2026-10-03T07:01:23.9595715Z",
+  "finished_utc": "2026-10-03T07:16:25.9137632Z",
+  "exit_code": 0,
+  "stdout_sha256": "e5bda732b9d27165861c0d8fc8bedd6e1d50e5b75573faad806d0528fc7123c6",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

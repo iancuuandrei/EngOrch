@@ -492,7 +492,11 @@ func bindingFor(policy access.Policy, intent access.Intent, endpoint EndpointCon
 	if err != nil {
 		return Binding{}, err
 	}
-	if endpoint.Provider != intent.Route.Provider || model.Provider != intent.Route.Provider || model.Model != intent.Route.Model || !matchingContractProtocol(endpoint, model) {
+	wantModel := intent.Route.Model
+	if intent.ModelChoice != nil {
+		wantModel = intent.ModelChoice.Model
+	}
+	if endpoint.Provider != intent.Route.Provider || model.Provider != intent.Route.Provider || model.Model != wantModel || !matchingContractProtocol(endpoint, model) {
 		return Binding{}, errors.New("provider contracts differ from route")
 	}
 	if endpoint.Version == 2 {

@@ -111,8 +111,27 @@ func roleLexical(s Snapshot) (*roleLexicalContext, error) {
 			return nil, err
 		}
 		p := s.RILexicalOverlay.Intent.Prepared.Plan
+		if s.RILexicalOverlay.Observation != nil && s.RILexicalOverlay.Observation.OverlayID != nil && *s.RILexicalOverlay.Observation.OverlayID != p.OverlayID {
+			return nil, errors.New("lexical overlay observation differs from its plan")
+		}
 		if p.CandidateID != candidate || p.BaseID != s.RILexical.Intent.Plan.ManifestID {
-			return nil, errors.New("lexical overlay differs from role candidate or base")
+			if p.BaseID != s.RILexical.Intent.Plan.ManifestID {
+				return nil, errors.New("lexical overlay differs from role candidate or base")
+			}
+			// A confirmed file effect deliberately advances the candidate beyond
+			// its previously staged overlay. In REVIEWING, retain the immutable
+			// base index for reviewer context; never relabel the old overlay as
+			// current-candidate evidence. The exact proposal must bridge the
+			// overlay candidate to the confirmed current candidate.
+			if s.State != "REVIEWING" || !autonomousFilesApplied(s) {
+				return nil, errors.New("lexical overlay differs from role candidate or base")
+			}
+			previousCandidate, err := s.WriterProposal.Prepared.Proposal.Before.ID()
+			if err != nil || previousCandidate != p.CandidateID {
+				return nil, errors.New("stale lexical overlay is not bound to the confirmed file effect")
+			}
+			c.Instruction = "ri_search searches exact bytes in this fixed base-commit lexical scope. The candidate changed after this base-bound overlay was staged, so reviewer lexical context uses the base index only. Results carry blob identities and byte ranges; lexical absence is not semantic absence. Base scope does not include candidate edits."
+			return c, nil
 		}
 		c.OverlayID = p.OverlayID
 		c.Scope = "candidate"

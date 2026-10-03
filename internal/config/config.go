@@ -11,6 +11,7 @@ import (
 	"harness.local/engorch/internal/access"
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/hostenvironment"
+	"harness.local/engorch/internal/modelpolicy"
 	"harness.local/engorch/internal/opencode"
 	"harness.local/engorch/internal/providergateway"
 	"harness.local/engorch/internal/runtime"
@@ -33,6 +34,8 @@ type Config struct {
 	CandidateIdentity   string                  `toml:"candidate_identity" json:"candidate_identity,omitempty"`
 	WriterContract      string                  `toml:"writer_contract" json:"writer_contract,omitempty"`
 	PlannerContract     string                  `toml:"planner_contract" json:"planner_contract,omitempty"`
+	ReviewerContract    string                  `toml:"reviewer_contract" json:"reviewer_contract,omitempty"`
+	ExplorerContract    string                  `toml:"explorer_contract" json:"explorer_contract,omitempty"`
 	ControllerStateRoot string                  `toml:"controller_state_root" json:"controller_state_root,omitempty"`
 	Version             int                     `toml:"version" json:"version"`
 	Repository          string                  `toml:"repository" json:"repository"`
@@ -50,7 +53,13 @@ type Config struct {
 	TaskPool            *TaskPool               `toml:"task_pool" json:"task_pool,omitempty"`
 	HostPolicy          *hostenvironment.Policy `toml:"host_policy" json:"host_policy,omitempty"`
 	Exploration         *ExplorationPolicy      `toml:"exploration" json:"exploration,omitempty"`
+	ModelPolicy         *modelpolicy.Policy     `toml:"model_policy" json:"model_policy,omitempty"`
 }
+
+// plannerContractGraphV1 is the strict autonomous graph planner contract.
+// Planners bound to this contract must return only the engineeringplan v1
+// JSON schema with no Completed/Attempts; the runner owns all progress.
+const plannerContractGraphV1 = "plan-graph-v1"
 
 // ExplorationPolicy bounds durable explorer evidence separately from the
 // smaller projection supplied to writer invocations.
@@ -125,11 +134,40 @@ func (c Config) Validate() error {
 	if c.CandidateIdentity != "" && c.CandidateIdentity != "semantic-index-v2" {
 		return errors.New("unsupported candidate identity contract")
 	}
-	if c.WriterContract != "" && c.WriterContract != "nonempty-v1" && c.WriterContract != "utf8-v2" && c.WriterContract != writercontract.ContractChangesJSONV1 {
+	if c.WriterContract != "" && c.WriterContract != "nonempty-v1" && c.WriterContract != "utf8-v2" && c.WriterContract != writercontract.ContractChangesJSONV1 && c.WriterContract != writercontract.ContractUTF8ReplaceV3 && c.WriterContract != writercontract.ContractUTF8ScopedV4 && c.WriterContract != writercontract.ContractAnchoredEditsV1 && c.WriterContract != writercontract.ContractAnchoredEditsV2 {
 		return errors.New("unsupported writer contract")
 	}
-	if c.PlannerContract != "" && c.PlannerContract != "plan-v1" {
+	if c.WriterContract == writercontract.ContractAnchoredEditsV2 {
+		if c.Writer == nil || c.Writer.Runtime != "codex-app-server" {
+			return errors.New("anchored-edits-v2 requires a Codex writer runtime")
+		}
+		if c.Fixer != nil && c.Fixer.Runtime != "codex-app-server" {
+			return errors.New("anchored-edits-v2 requires a Codex fixer runtime")
+		}
+	}
+	if c.PlannerContract != "" && c.PlannerContract != "plan-v1" && c.PlannerContract != plannerContractGraphV1 && c.PlannerContract != "plan-graph-v2" && c.PlannerContract != "plan-graph-v3" && c.PlannerContract != "plan-graph-v4" && c.PlannerContract != "plan-graph-v5" && c.PlannerContract != "plan-graph-v6" {
 		return errors.New("unsupported planner contract")
+	}
+	if c.PlannerContract == "plan-graph-v4" || c.PlannerContract == "plan-graph-v6" {
+		if !writercontract.IsAnchoredEdits(c.WriterContract) || c.ExplorerContract != "json-v2" || c.Writer == nil || c.Explorer == nil {
+			return errors.New("parallel graph contracts require anchored-edits writer and json-v2 explorer contracts")
+		}
+		// The production parallel writer route is deliberately limited to the
+		// pinned Codex runtime. The deterministic fake route remains available
+		// for local contract tests; provider-backed routes need separate
+		// qualification before they can receive parallel writer dispatches.
+		if c.Writer.Runtime != "codex-app-server" && c.Writer.Runtime != "fake" {
+			return errors.New("parallel graph contracts require a Codex writer runtime")
+		}
+	}
+	if c.ExplorerContract != "" && c.ExplorerContract != "json-v1" && c.ExplorerContract != "json-v2" {
+		return errors.New("unsupported explorer contract")
+	}
+	if c.ReviewerContract != "" && c.ReviewerContract != "json-v1" {
+		return errors.New("unsupported reviewer contract")
+	}
+	if c.ReviewerContract != "" && c.Reviewer == nil {
+		return errors.New("reviewer contract requires an explicit reviewer route")
 	}
 	if (c.Version != 1 && c.Version != 2) || strings.TrimSpace(c.Repository) == "" || len(c.Repository) > 256 {
 		return errors.New("invalid configuration identity")
@@ -275,6 +313,9 @@ func (c Config) Validate() error {
 	} else if c.OpenCode != nil {
 		return errors.New("OpenCode configuration supplied without an OpenCode runtime")
 	}
+	if err := c.validateModelPolicy(); err != nil {
+		return err
+	}
 	if len(c.Verification) == 0 || len(c.Verification) > 64 {
 		return errors.New("one to 64 required checks expected")
 	}
@@ -311,20 +352,33 @@ func (c Config) OpenCodeWriterOutputExpectation(invocation runtime.Invocation) (
 	}
 	var request struct {
 		OutputSchema json.RawMessage `json:"output_schema"`
+		CandidateID  string          `json:"candidate_id"`
 	}
 	if err := json.Unmarshal([]byte(invocation.Input), &request); err != nil || len(request.OutputSchema) == 0 || string(request.OutputSchema) == "null" {
 		return nil, errors.New("native writer output schema missing from invocation")
 	}
-	wantUTF8, err := canonical.Normalize(writercontract.UTF8Schema())
-	if err != nil {
-		return nil, err
+	wantSchema := writercontract.UTF8Schema()
+	var err error
+	switch c.WriterContract {
+	case writercontract.ContractUTF8ScopedV4:
+		wantSchema, err = writercontract.UTF8SchemaForCandidate(request.CandidateID)
+		if err != nil {
+			return nil, errors.New("native writer candidate binding invalid")
+		}
+	case writercontract.ContractAnchoredEditsV1:
+		wantSchema, err = writercontract.AnchoredEditsSchemaForCandidate(request.CandidateID)
+		if err != nil {
+			return nil, errors.New("native writer candidate binding invalid")
+		}
+	case writercontract.ContractChangesJSONV1:
+		wantSchema = writercontract.ChangesJSONSchema()
 	}
-	wantJSON, err := canonical.Normalize(writercontract.ChangesJSONSchema())
+	wantUTF8, err := canonical.Normalize(wantSchema)
 	if err != nil {
 		return nil, err
 	}
 	got, err := canonical.Normalize(request.OutputSchema)
-	if err != nil || !bytes.Equal(got, wantUTF8) && !bytes.Equal(got, wantJSON) {
+	if err != nil || !bytes.Equal(got, wantUTF8) {
 		return nil, errors.New("native writer output schema differs from admitted writer contract")
 	}
 	expectation, err := opencode.NewStructuredOutputExpectation(request.OutputSchema)
@@ -350,6 +404,47 @@ func (c Config) ResolveProviderRole(role string) (ResolvedProviderRole, error) {
 	return c.Provider.ResolveRole(role)
 }
 
+// ResolveProviderRoleProfile resolves an invocation's exact policy-admitted
+// model and effort while retaining the role's configured endpoint, adapter,
+// credentials and capability contract.
+func (c Config) ResolveProviderRoleProfile(role string, profile runtime.Profile) (ResolvedProviderRole, error) {
+	base, err := c.Route(role)
+	if err != nil || profile.Role != role || !c.AllowsProfile(profile) || profile.Runtime != base.Runtime || profile.Provider != base.Provider {
+		return ResolvedProviderRole{}, errors.Join(errors.New("provider profile is not admitted for role"), err)
+	}
+	if c.Provider == nil {
+		return ResolvedProviderRole{}, errors.New("provider configuration unavailable")
+	}
+	resolved, err := c.Provider.ResolveRoleProfile(role, profile)
+	if err != nil {
+		return ResolvedProviderRole{}, err
+	}
+	if c.OpenCode != nil && c.OpenCode.NativeWriterOutput && (role == "writer" || role == "fixer") {
+		schema := c.nativeWriterSchemas()[role]
+		terminal, err := nativeTerminalForRole(role, c.Provider.Roles[role], resolved.Model, schema)
+		if err != nil {
+			return ResolvedProviderRole{}, err
+		}
+		reserved, _, err := resolved.Model.ConservativeReservation()
+		if err != nil {
+			return ResolvedProviderRole{}, err
+		}
+		endpointID, err := resolved.Endpoint.ID()
+		if err != nil {
+			return ResolvedProviderRole{}, err
+		}
+		modelID, err := resolved.Model.ID()
+		if err != nil {
+			return ResolvedProviderRole{}, err
+		}
+		binding := providergateway.Binding{Version: 1, AccessPolicyID: strings.Repeat("0", 64), AccessInvocationID: strings.Repeat("1", 64), RouteID: strings.Repeat("2", 64), ReservedTokens: reserved, EndpointID: endpointID, ModelID: modelID, Endpoint: resolved.Endpoint, Model: resolved.Model}
+		if _, err := providergateway.AdapterRequestExpectationID(binding, providergateway.AdapterRequestExpectation{MaxBytes: resolved.Model.MaxRequestBytes, MaxOutputTokens: resolved.Model.MaxOutputTokens, Controls: resolved.AdapterControls, RequiredCapabilities: resolved.RequiredCapabilities, ResponseFraming: resolved.ResponseFraming, TerminalStructuredOutput: terminal}); err != nil {
+			return ResolvedProviderRole{}, err
+		}
+	}
+	return resolved, nil
+}
+
 func (c Config) nativeWriterSchemas() map[string]json.RawMessage {
 	result := map[string]json.RawMessage{}
 	if c.OpenCode == nil || !c.OpenCode.NativeWriterOutput {
@@ -358,6 +453,8 @@ func (c Config) nativeWriterSchemas() map[string]json.RawMessage {
 	schema := writercontract.UTF8Schema()
 	if c.WriterContract == writercontract.ContractChangesJSONV1 {
 		schema = writercontract.ChangesJSONSchema()
+	} else if c.WriterContract == writercontract.ContractAnchoredEditsV1 {
+		schema = writercontract.AnchoredEditsSchema()
 	}
 	for role, profile := range map[string]*runtime.Profile{"writer": c.Writer, "fixer": c.Fixer} {
 		if profile != nil && profile.Runtime == "opencode-http" {
@@ -371,8 +468,8 @@ func (c Config) validateNativeWriterOutput() error {
 	if c.OpenCode == nil || !c.OpenCode.NativeWriterOutput {
 		return nil
 	}
-	if c.Version != 2 || c.WriterContract != "utf8-v2" && c.WriterContract != writercontract.ContractChangesJSONV1 {
-		return errors.New("native OpenCode writer output requires configuration v2 utf8-v2 or changes-json-v1")
+	if c.Version != 2 || c.WriterContract != "utf8-v2" && c.WriterContract != writercontract.ContractChangesJSONV1 && c.WriterContract != writercontract.ContractUTF8ReplaceV3 && c.WriterContract != writercontract.ContractUTF8ScopedV4 && c.WriterContract != writercontract.ContractAnchoredEditsV1 {
+		return errors.New("native OpenCode writer output requires configuration v2 utf8-v2, utf8-replace-v3, utf8-scoped-v4, anchored-edits-v1 or changes-json-v1")
 	}
 	if c.Provider == nil {
 		return errors.New("native OpenCode writer output requires provider configuration")
@@ -500,7 +597,12 @@ func (c Config) accessPolicy(runID string) (access.Policy, error) {
 		if configured.Role == "writer" || configured.Role == "fixer" {
 			permission = "workspace-write"
 		}
-		p.Routes = append(p.Routes, access.Route{Version: 1, Role: configured.Role, Runtime: configured.Runtime, Provider: configured.Provider, Model: configured.Model, Effort: configured.Effort, AccessID: id, Permission: permission})
+		choices := c.ModelChoices(configured.Role)
+		modelChoices := make([]access.ModelChoice, 0, len(choices))
+		for _, choice := range choices {
+			modelChoices = append(modelChoices, access.ModelChoice{Model: choice.Model, Effort: choice.Effort})
+		}
+		p.Routes = append(p.Routes, access.Route{Version: 1, Role: configured.Role, Runtime: configured.Runtime, Provider: configured.Provider, Model: configured.Model, Effort: configured.Effort, AccessID: id, Permission: permission, ModelChoices: modelChoices})
 	}
 	if len(a.Roles) != len(p.Routes) || len(a.Invocations) != len(p.Routes) {
 		return p, errors.New("access mapping contains unconfigured roles")

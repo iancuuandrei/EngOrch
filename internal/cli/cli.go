@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"harness.local/engorch/internal/buildinfo"
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/codexruntime"
 	"harness.local/engorch/internal/config"
@@ -28,6 +30,7 @@ type Command struct {
 }
 
 var commands = []Command{
+	{"version", "", "Report the build version, commit and build date."},
 	{"agent-interrupt", "RUN SCHEDULE_ID TURN_ID ACTOR NONCE", "Request interruption of one exact scheduled turn; delivery does not prove runtime teardown or resolve UNKNOWN effects."},
 	{"agent-spawn", "RUN SCHEDULE_ID REQUEST_JSON", "Queue a read-only explorer child using controller-derived invocation and authority."},
 	{"agent-followup", "RUN SCHEDULE_ID MESSAGE_JSON", "Queue an exact explorer follow-up through the existing per-agent FIFO scheduler."},
@@ -68,6 +71,7 @@ var commands = []Command{
 	{"explore", "RUN QUESTION", "Execute or resume the configured explorer and record advisory context."},
 	{"review", "RUN", "Execute or resume the configured read-only reviewer and admit its bound verdict."},
 	{"prepare-writer", "RUN", "Inspect the exact configured writer invocation for the current admitted candidate."},
+	{"writer-files", "RUN", "Export the already recorded writer proposal as an exact file approval preview without preparing a new intent."},
 	{"write", "RUN", "Execute or resume the configured writer and record a file proposal without applying changes."},
 	{"ri close-producer", "RUN INTENT_ID ACTOR EVIDENCE workloads-stopped", "Close interrupted producer uncertainty with explicit quiescence evidence; retain UNKNOWN outcome."},
 	{"ri prepare-producer", "RUN CHECK_JSON OUTPUT", "Freeze a semantic indexer invocation in the admitted isolated workspace."},
@@ -87,14 +91,15 @@ var commands = []Command{
 	{"ri definition|references", "EXE EXE_SHA256 SNAPSHOT SNAPSHOT_ID SYMBOL PRODUCER LIMIT [CURSOR]", "Page direct semantic occurrences; relationship expansion and absence inference are not performed."},
 	{"ri path", "EXE EXE_SHA256 SNAPSHOT SNAPSHOT_ID FROM TO RELATION DIRECTION PRODUCER MAX_DEPTH MAX_EDGES", "Find a bounded observed graph path; exhaustion does not prove absence."},
 	{"ri", "status|coverage|deps|rdeps EXE EXE_SHA256 SNAPSHOT SNAPSHOT_ID ...", "Query a committed-source snapshot. Coverage adds NODE RELATION DIRECTION; deps/rdeps add NODE PRODUCER LIMIT [CURSOR] for direct dependency edges."},
-	{"init", "", "Write a new fake-runtime configuration without overwriting an existing file."},
+	{"init", "[--codex EXE --model MODEL [--effort EFFORT] [--writer-model MODEL] [--writer-effort EFFORT] [--reviewer-model MODEL] [--reviewer-effort EFFORT] [--auth-source PATH] [--state-root PATH] [--validate-writer-edits]]", "Create a fake configuration or a complete Codex role configuration without overwriting an existing file; validate-writer-edits opts into same-turn anchored edit validation."},
 	{"doctor", "", "Validate configuration and committed Git identity; dispatch no runtime."},
+	{"diff", "[RUN]", "Show the current isolated candidate diff, including non-ignored untracked files with coverage metadata, without applying or dispatching work."},
 	{"plan", "OBJECTIVE or --file PATH", "Create a plan from exact objective text or a bounded UTF-8 file using the explicitly configured runtime and access profile."},
 	{"status", "", "List validated local run IDs, workflow/lifecycle states and plan IDs without input or evidence bodies."},
-	{"inspect", "RUN [--export-jsonl]", "Replay one run and show its bound inputs and state, or export its validated canonical event history."},
-	{"resume", "RUN [ACTOR NONCE]", "Resume planning, or explicitly reopen a settled pause with ACTOR and NONCE; never resend uncertain work."},
+	{"inspect", "[RUN] [--export-jsonl]", "Replay one run and show its bound inputs and state, or export its validated canonical event history."},
+	{"resume", "[RUN] [ACTOR NONCE] or --autonomous [RUN]", "Resume planning, explicitly reopen a settled pause with ACTOR and NONCE, or continue one bounded autonomous run without resending uncertain work."},
 	{"approve", "RUN PLAN ACTOR", "Approve one exact plan with an explicit human actor."},
-	{"run", "RUN", "Create or validate the approved run's isolated writer worktree."},
+	{"run", "RUN or --autonomous [--prepare-only] [--max-repairs N] [--max-parallel N] [--parallel-writers] OBJECTIVE or --file PATH", "Create or validate an approved run's isolated writer worktree, or create and advance a bounded autonomous coding run; parallel-writers opts into up to two independent initial implementation tasks; prepare-only returns after graph and workspace confirmation."},
 	{"reconcile", "RUN", "Observe unknown local commit, RI import/publication, workspace or file effects without retrying writes."},
 	{"ri prepare-import", "RUN PLAN_JSON", "Validate an import plan and return its exact effect approval target."},
 	{"ri import", "RUN PLAN_JSON INTENT_ID ACTOR", "Execute an exactly authorized, journaled local SCIP import."},
@@ -113,21 +118,32 @@ var commands = []Command{
 // Reference returns generated Markdown from the actual command catalogue.
 func Reference() string {
 	var b strings.Builder
-	b.WriteString("# CLI reference\n\nGenerated from `internal/cli`; do not edit by hand.\n\nUse `harness [--root PATH] COMMAND`. Output is canonical JSON except help and `inspect --export-jsonl`.\n\n| Command | Arguments | Behavior |\n| --- | --- | --- |\n")
+	b.WriteString("# CLI reference\n\nGenerated from `internal/cli`; do not edit by hand.\n\nUse `harness [--root PATH] COMMAND`. Output is canonical JSON except help, aggregated run-snapshot JSON, and `inspect --export-jsonl`.\n\n| Command | Arguments | Behavior |\n| --- | --- | --- |\n")
 	for _, c := range commands {
 		fmt.Fprintf(&b, "| `%s` | `%s` | %s |\n", c.Name, c.Arguments, c.Summary)
 	}
 	b.WriteString("\n`harness help` shows commands; `harness reference` regenerates this file.\nErrors exit 1; success exits 0. Workspaces and exact approved file proposals are\nimplemented, with journaled verification and Codex planning. GitHub effects follow.\n`reconcile` observes UNKNOWN workspace/file state without retrying writes.\n")
+	b.WriteString("Commands that return a run snapshot encode the complete replay-validated state as JSON; this aggregate is not an identity payload and may exceed the canonical single-value bound. Other command output remains canonical JSON. `inspect RUN --export-jsonl` emits the validated event history as per-event canonical JSONL.\n")
 	return b.String()
 }
 
 func output(w io.Writer, v any) error {
+	if snapshot, ok := v.(control.Snapshot); ok {
+		return outputSnapshot(w, snapshot)
+	}
 	b, err := canonical.Bytes(v)
 	if err != nil {
 		return err
 	}
 	_, err = w.Write(append(b, '\n'))
 	return err
+}
+
+// outputSnapshot serializes the complete replay-validated snapshot without
+// applying the canonical single-value bound used for identity and transport
+// payloads. Its fields remain the control.Snapshot JSON shape.
+func outputSnapshot(w io.Writer, snapshot control.Snapshot) error {
+	return json.NewEncoder(w).Encode(snapshot)
 }
 
 func configuration(root string) (config.Config, error) {
@@ -208,6 +224,16 @@ func Execute(ctx context.Context, args []string, cwd string, out io.Writer) (res
 		_, err := io.WriteString(out, Reference())
 		return err
 	}
+	if args[0] == "version" {
+		if len(args) != 1 {
+			return errors.New("version takes no arguments")
+		}
+		info, err := buildinfo.Current()
+		if err != nil {
+			return err
+		}
+		return output(out, info)
+	}
 	var err error
 	*root, err = filepath.Abs(*root)
 	if err != nil {
@@ -268,22 +294,12 @@ func Execute(ctx context.Context, args []string, cwd string, out io.Writer) (res
 		return recoveryCommand(ctx, *root, command, args, out)
 	case "prepare-files", "apply-files":
 		return fileCommand(ctx, *root, command, args, out)
+	case "writer-files":
+		return writerFilesCommand(*root, args, out)
 	case "init":
-		if len(args) != 0 {
-			return errors.New("init takes no arguments")
-		}
-		f, err := os.OpenFile(filepath.Join(*root, "harness.toml"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-		if err != nil {
-			return err
-		}
-		_, writeErr := f.WriteString(config.Example)
-		if writeErr == nil {
-			writeErr = f.Sync()
-		}
-		if err = errors.Join(writeErr, f.Close()); err != nil {
-			return err
-		}
-		return output(out, map[string]string{"status": "CREATED", "configuration": "harness.toml", "runtime": "fake"})
+		return initCommand(ctx, *root, args, out)
+	case "diff":
+		return diffCommand(ctx, *root, args, out)
 	case "doctor":
 		if len(args) != 0 {
 			return errors.New("doctor takes no arguments")
@@ -344,12 +360,30 @@ func Execute(ctx context.Context, args []string, cwd string, out io.Writer) (res
 			return err
 		}
 		return output(out, s)
-	case "prepare-explorer", "explore", "usage", "prepare-review", "review", "prepare-writer", "write", "inspect", "resume", "approve", "run", "reconcile", "verify", "close-verification":
+	case "run":
+		return runCommand(ctx, *root, args, out)
+	case "prepare-explorer", "explore", "usage", "prepare-review", "review", "prepare-writer", "write", "inspect", "resume", "approve", "reconcile", "verify", "close-verification":
+		if command == "resume" && len(args) >= 1 && args[0] == "--autonomous" {
+			return autonomousResumeCommand(ctx, *root, args[1:], out)
+		}
 		if command == "resume" && len(args) == 3 {
 			return lifecycleCommand(ctx, *root, command, args, out)
 		}
-		if command == "inspect" && len(args) == 2 && args[1] == "--export-jsonl" {
-			return inspectExport(ctx, *root, args[0], out)
+		if command == "inspect" {
+			id, export, err := inspectRunArgument(*root, args)
+			if err != nil {
+				return err
+			}
+			if export {
+				return inspectExport(ctx, *root, id, out)
+			}
+			args = []string{id}
+		} else if command == "resume" && len(args) == 0 {
+			id, err := latestRunID(*root)
+			if err != nil {
+				return err
+			}
+			args = []string{id}
 		}
 		want := 1
 		if command == "prepare-explorer" || command == "explore" {
@@ -501,6 +535,9 @@ func Execute(ctx context.Context, args []string, cwd string, out io.Writer) (res
 		}
 		runs := []runStatus{}
 		for _, p := range entries {
+			if runJournalSidecar(p) {
+				continue
+			}
 			s, err := control.Inspect(p)
 			if err != nil {
 				return err

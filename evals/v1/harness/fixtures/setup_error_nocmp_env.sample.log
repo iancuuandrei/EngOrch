@@ -1,0 +1,5 @@
+=== RUN   TestNocmpIntegration
+--- FAIL: TestNocmpIntegration (0.02s)
+    nocmp_test.go:42: mkdir C:\Windows\tmp: Access is denied.
+FAIL	go.uber.org/atomic	0.311s
+FAIL
