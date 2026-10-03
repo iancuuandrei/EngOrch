@@ -41,6 +41,33 @@ func TestOptionalPlannerContractIsStrictAndIdentityBound(t *testing.T) {
 	if err != nil || repairContract.PlannerContract != "plan-graph-v3" {
 		t.Fatalf("repair graph planner contract rejected: %v", err)
 	}
+	parallelContractRaw := strings.Replace(Example, "\n[planner]", "\nwriter_contract = \"anchored-edits-v1\"\nplanner_contract = \"plan-graph-v4\"\nexplorer_contract = \"json-v2\"\n\n[planner]", 1)
+	if _, err := Parse([]byte(parallelContractRaw)); err == nil {
+		t.Fatal("parallel graph contract admitted without writer and explorer routes")
+	}
+	parallelFixture := parallelContractRaw + `
+
+[writer]
+runtime = "fake"
+provider = "deterministic"
+model = "fixture-v1"
+effort = "none"
+role = "writer"
+
+[explorer]
+runtime = "fake"
+provider = "deterministic"
+model = "fixture-v1"
+effort = "none"
+role = "explorer"
+`
+	if _, err := Parse([]byte(parallelFixture)); err != nil {
+		t.Fatalf("parallel graph local fixture routes rejected: %v", err)
+	}
+	unsupportedRuntime := strings.Replace(parallelFixture, "runtime = \"fake\"\nprovider = \"deterministic\"\nmodel = \"fixture-v1\"\neffort = \"none\"\nrole = \"writer\"", "runtime = \"provider-api\"\nprovider = \"openai\"\nmodel = \"fixture-v1\"\neffort = \"none\"\nrole = \"writer\"", 1)
+	if _, err := Parse([]byte(unsupportedRuntime)); err == nil {
+		t.Fatal("parallel graph contract admitted an unqualified provider writer")
+	}
 	legacyJSON, err := canonical.Bytes(legacy)
 	if err != nil {
 		t.Fatal(err)

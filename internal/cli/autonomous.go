@@ -58,7 +58,8 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	fs := flag.NewFlagSet("run --autonomous", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	maxRepairs := fs.Int("max-repairs", defaultAutonomousMaxRepairs, "maximum bounded repair attempts")
-	maxParallel := fs.Int("max-parallel", defaultAutonomousMaxParallel, "maximum bounded parallel explorers (1 sequential, 2..8 parallel)")
+	maxParallel := fs.Int("max-parallel", defaultAutonomousMaxParallel, "maximum bounded parallel task workers (1 sequential, 2..8 parallel)")
+	parallelWriters := fs.Bool("parallel-writers", false, "allow two independent initial implementation tasks when justified")
 	prepareOnly := fs.Bool("prepare-only", false, "accept the graph and confirm its workspace, then return before explorer or writer dispatch")
 	goalFile := fs.String("file", "", "read objective from file")
 	if err := fs.Parse(args); err != nil {
@@ -81,7 +82,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 		if err := validateAutonomousObjective(objective); err != nil {
 			return err
 		}
-		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *prepareOnly, out)
+		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *parallelWriters, *prepareOnly, out)
 	}
 	if fs.NArg() != 1 || fs.Arg(0) == "" {
 		return errors.New("run --autonomous requires one objective or --file PATH")
@@ -89,7 +90,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	if err := validateAutonomousObjective(fs.Arg(0)); err != nil {
 		return err
 	}
-	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *prepareOnly, out)
+	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *parallelWriters, *prepareOnly, out)
 }
 
 // validateAutonomousObjective rejects whitespace-only, invalid UTF-8 and
@@ -108,7 +109,7 @@ func validateAutonomousObjective(objective string) error {
 	return nil
 }
 
-func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, prepareOnly bool, out io.Writer) error {
+func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, parallelWriters, prepareOnly bool, out io.Writer) error {
 	if err := validateAutonomousObjective(objective); err != nil {
 		return err
 	}
@@ -133,6 +134,16 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 	// never-started repair writes within that scope. Nil/old policies remain
 	// compatible and replay with their historical repair behavior.
 	cfg.PlannerContract = "plan-graph-v3"
+	parallelImplementationVersion := 0
+	if parallelWriters {
+		cfg.PlannerContract = "plan-graph-v4"
+		parallelImplementationVersion = 1
+		// Validate the opt-in against the configured implementation route before
+		// creating a run or dispatching any planner intent.
+		if err := cfg.Validate(); err != nil {
+			return err
+		}
+	}
 	if cfg.Reviewer != nil {
 		cfg.ReviewerContract = "json-v1"
 	}
@@ -142,7 +153,7 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 		Repository: identity,
 		Objective:  objective,
 		Config:     cfg,
-		Execution:  &control.ExecutionPolicy{Mode: "autonomous-v1", MaxRepairs: maxRepairs, Context: "bounded-v1", GraphVersion: 1, MaxParallel: maxParallel, RepairPlanningVersion: 1},
+		Execution:  &control.ExecutionPolicy{Mode: "autonomous-v1", MaxRepairs: maxRepairs, Context: "bounded-v1", GraphVersion: 1, MaxParallel: maxParallel, RepairPlanningVersion: 1, ParallelImplementationVersion: parallelImplementationVersion},
 	}
 	creation, err = bindCurrentHost(ctx, creation)
 	if err != nil {

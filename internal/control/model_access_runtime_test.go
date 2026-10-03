@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"harness.local/engorch/internal/access"
 	"harness.local/engorch/internal/canonical"
@@ -105,10 +106,73 @@ func runFixtureAppServer() int {
 				return 4
 			}
 			var input struct {
-				CandidateID string `json:"candidate_id"`
+				CandidateID        string `json:"candidate_id"`
+				VerificationPlanID string `json:"verification_plan_id"`
+				Instruction        string `json:"instruction"`
+				Objective          string `json:"objective"`
+				Question           string `json:"question"`
+				ImplementationTask *struct {
+					ID string `json:"id"`
+				} `json:"implementation_task"`
 			}
 			if json.Unmarshal([]byte(params.Input[0].Text), &input) != nil || input.CandidateID == "" {
 				return 5
+			}
+			if strings.Contains(input.Instruction, "Review the current candidate") {
+				decision := "approve"
+				findings := []ReviewFinding{}
+				if strings.Contains(input.Objective, "parallel repair fixture") {
+					stateRoot := filepath.Dir(filepath.Dir(filepath.Dir(os.Getenv("CODEX_HOME"))))
+					marker, markerErr := os.OpenFile(filepath.Join(stateRoot, "review-changes-requested-once"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+					if markerErr == nil {
+						_ = marker.Close()
+						decision = "changes_requested"
+						findings = []ReviewFinding{{Path: "repair.go", Message: "fixture requires a bounded repair"}}
+					} else if !errors.Is(markerErr, os.ErrExist) {
+						return 14
+					}
+				}
+				output, _ := json.Marshal(ReviewVerdict{CandidateID: input.CandidateID, VerificationPlanID: input.VerificationPlanID, Decision: decision, Findings: findings})
+				result = map[string]any{"turn": map[string]any{"id": "turn-v2", "status": "completed", "itemsView": "full", "error": nil, "items": []any{map[string]any{"type": "agentMessage", "id": "message-v2", "phase": "final_answer", "text": string(output)}}}}
+				break
+			}
+			if strings.Contains(input.Question, "REPAIR DESIGN") {
+				output, _ := json.Marshal(Exploration{CandidateID: input.CandidateID, Summary: "repair fixture path", Paths: []string{"repair.go"}})
+				result = map[string]any{"turn": map[string]any{"id": "turn-v2", "status": "completed", "itemsView": "full", "error": nil, "items": []any{map[string]any{"type": "agentMessage", "id": "message-v2", "phase": "final_answer", "text": string(output)}}}}
+				break
+			}
+			if input.ImplementationTask != nil && input.ImplementationTask.ID != "" {
+				stateRoot := filepath.Dir(filepath.Dir(filepath.Dir(os.Getenv("CODEX_HOME"))))
+				if _, err := os.Stat(filepath.Join(stateRoot, "graph-writer-barrier")); err == nil {
+					marker := filepath.Join(stateRoot, "ready-"+input.ImplementationTask.ID)
+					if err := os.WriteFile(marker, []byte("ready"), 0600); err != nil {
+						return 11
+					}
+					deadline := time.Now().Add(8 * time.Second)
+					for time.Now().Before(deadline) {
+						if _, a := os.Stat(filepath.Join(stateRoot, "ready-impl-alpha")); a == nil {
+							if _, b := os.Stat(filepath.Join(stateRoot, "ready-impl-beta")); b == nil {
+								break
+							}
+						}
+						time.Sleep(10 * time.Millisecond)
+					}
+					if _, err := os.Stat(filepath.Join(stateRoot, "ready-impl-alpha")); err != nil {
+						return 12
+					}
+					if _, err := os.Stat(filepath.Join(stateRoot, "ready-impl-beta")); err != nil {
+						return 13
+					}
+				}
+				path := "alpha.txt"
+				if input.ImplementationTask.ID == "impl-beta" {
+					path = "beta.txt"
+				} else if strings.HasPrefix(input.ImplementationTask.ID, "impl-repair-") {
+					path = "repair.go"
+				}
+				output, _ := json.Marshal(map[string]any{"candidate_id": input.CandidateID, "changes": []any{map[string]any{"path": path, "before_hash": nil, "edits": []any{}, "new_content_utf8": "parallel fixture output\n", "executable": false}}})
+				result = map[string]any{"turn": map[string]any{"id": "turn-v2", "status": "completed", "itemsView": "full", "error": nil, "items": []any{map[string]any{"type": "agentMessage", "id": "message-v2", "phase": "final_answer", "text": string(output)}}}}
+				break
 			}
 			before := sha256.Sum256([]byte("base\n"))
 			change := map[string]any{"path": "file.txt", "before_hash": hex.EncodeToString(before[:]), "content_base64": base64.StdEncoding.EncodeToString([]byte("fixture writer output\n")), "executable": false}

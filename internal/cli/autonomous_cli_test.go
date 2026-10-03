@@ -88,7 +88,7 @@ func TestRunAutonomousCreatesBoundPolicyAndReportsResumableBlocker(t *testing.T)
 	if s.Creation.Objective != "Make a bounded fixture change" || s.Creation.Execution == nil || s.Creation.Execution.Mode != "autonomous-v1" || s.Creation.Execution.MaxRepairs != 3 {
 		t.Fatalf("autonomous input was not durably bound: %#v", s.Creation)
 	}
-	if s.Creation.Execution.GraphVersion != 1 || s.Creation.Execution.MaxParallel != 3 || s.Creation.Execution.Context != "bounded-v1" || s.Creation.Execution.RepairPlanningVersion != 1 || s.Creation.Config.PlannerContract != "plan-graph-v3" {
+	if s.Creation.Execution.GraphVersion != 1 || s.Creation.Execution.MaxParallel != 3 || s.Creation.Execution.Context != "bounded-v1" || s.Creation.Execution.RepairPlanningVersion != 1 || s.Creation.Execution.ParallelImplementationVersion != 0 || s.Creation.Config.PlannerContract != "plan-graph-v3" {
 		t.Fatalf("graph execution and bounded context not defaulted: %#v", s.Creation.Execution)
 	}
 	if s.State != "IMPLEMENTING" || result.RunID != s.RunID || result.State != s.State || result.Phase != "implementation" || result.BlockedReason == "" {
@@ -275,8 +275,65 @@ func TestAutonomousParallelFlagDefaultsSequentialOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Creation.Execution == nil || s.Creation.Execution.GraphVersion != 1 || s.Creation.Execution.MaxParallel != 1 || s.Creation.Execution.RepairPlanningVersion != 1 || s.Creation.Config.PlannerContract != "plan-graph-v3" {
+	if s.Creation.Execution == nil || s.Creation.Execution.GraphVersion != 1 || s.Creation.Execution.MaxParallel != 1 || s.Creation.Execution.RepairPlanningVersion != 1 || s.Creation.Execution.ParallelImplementationVersion != 0 || s.Creation.Config.PlannerContract != "plan-graph-v3" {
 		t.Fatalf("sequential override not bound: %#v", s.Creation.Execution)
+	}
+}
+
+func TestAutonomousParallelWritersOptInBindsV4PolicyAndAllowsSerialScheduler(t *testing.T) {
+	root := autonomousCLIFixture(t)
+	configPath := filepath.Join(root, "harness.toml")
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Replace(string(content), "\n[planner]", "\nwriter_contract = \"anchored-edits-v1\"\nexplorer_contract = \"json-v2\"\n\n[planner]", 1)
+	text += `
+
+[writer]
+runtime = "fake"
+provider = "deterministic"
+model = "fixture-v1"
+effort = "none"
+role = "writer"
+
+[explorer]
+runtime = "fake"
+provider = "deterministic"
+model = "fixture-v1"
+effort = "none"
+role = "explorer"
+`
+	if err := os.WriteFile(configPath, []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	err = Execute(context.Background(), []string{"run", "--autonomous", "--parallel-writers", "--max-parallel", "1", "Parallel fixture"}, root, &out)
+	if err == nil {
+		t.Fatal("deterministic fake planner should not produce a production graph")
+	}
+	entries, err := filepath.Glob(filepath.Join(root, ".harness", "runs", "*.jsonl"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("expected one durable opted-in run, entries=%v err=%v", entries, err)
+	}
+	s, err := control.Inspect(entries[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := s.Creation.Execution
+	if policy == nil || policy.ParallelImplementationVersion != 1 || policy.GraphVersion != 1 || policy.RepairPlanningVersion != 1 || policy.Context != "bounded-v1" || policy.MaxParallel != 1 || s.Creation.Config.PlannerContract != "plan-graph-v4" {
+		t.Fatalf("parallel writer policy or serial scheduler was not durably bound: %#v, %#v", policy, s.Creation.Config)
+	}
+}
+
+func TestAutonomousParallelWritersRejectsUnsupportedRoutesBeforeRunCreation(t *testing.T) {
+	root := autonomousCLIFixture(t)
+	var out bytes.Buffer
+	if err := Execute(context.Background(), []string{"run", "--autonomous", "--parallel-writers", "Parallel fixture"}, root, &out); err == nil {
+		t.Fatal("parallel writer opt-in accepted a config without admitted writer/explorer routes")
+	}
+	if entries, err := filepath.Glob(filepath.Join(root, ".harness", "runs", "*.jsonl")); err != nil || len(entries) != 0 {
+		t.Fatalf("unsupported parallel writer route created a run: %v, %v", entries, err)
 	}
 }
 

@@ -165,7 +165,8 @@ func ExecuteScheduledClaim(ctx context.Context, controllerPath string, claim tas
 		// Narrow exception: only static graph-bound explorers in the same
 		// frozen batch may tolerate sibling read-only appends. All other
 		// operations retain the legacy exclusive head gate.
-		if !(isStaticGraphExplorerCohort(current, claim) && verifyGraphCohortDelta(controllerPath, claim) == nil) {
+		if !(isStaticGraphExplorerCohort(current, claim) && verifyGraphCohortDelta(controllerPath, claim) == nil) &&
+			!(isStaticGraphWriterCohort(current, claim) && verifyGraphWriterCohortDelta(controllerPath, claim) == nil) {
 			return taskscheduler.Evidence{}, errors.Join(&taskscheduler.ParkError{Reason: taskscheduler.ParkNoEffect}, errors.New("scheduled controller head changed before admission"))
 		}
 	}
@@ -193,7 +194,8 @@ func ExecuteScheduledClaim(ctx context.Context, controllerPath string, claim tas
 		}
 	}
 	if claim.ControllerHead != head && before.AdmissionID == "" {
-		if !(isStaticGraphExplorerCohort(s, claim) && verifyGraphCohortDelta(controllerPath, claim) == nil) {
+		if !(isStaticGraphExplorerCohort(s, claim) && verifyGraphCohortDelta(controllerPath, claim) == nil) &&
+			!(isStaticGraphWriterCohort(s, claim) && verifyGraphWriterCohortDelta(controllerPath, claim) == nil) {
 			return taskscheduler.Evidence{}, errors.New("scheduled controller head changed")
 		}
 	}
@@ -234,6 +236,9 @@ func ExecuteScheduledClaim(ctx context.Context, controllerPath string, claim tas
 			_, err = ensureAcceptedExplorerResult(ctx, controllerPath, claim, invocation, &record)
 		}
 	case taskscheduler.OperationWriter:
+		if parallelImplementationEnabled(s) {
+			ctx = withGraphWriterTask(ctx, claim.Task.ID)
+		}
 		_, err = RunWriter(ctx, controllerPath)
 	case taskscheduler.OperationReviewer:
 		_, err = RunReview(ctx, controllerPath)
@@ -403,6 +408,11 @@ func scheduledRuntimeJournal(s Snapshot, invocation runtime.Invocation, task tas
 			if s.WriterHost != nil && s.WriterHost.Intent.Invocation.ID == invocation.ID {
 				return filepath.Join(s.WriterHost.Intent.Launch.Root, "writer.jsonl"), nil
 			}
+			for _, host := range s.GraphWriterHosts {
+				if host.Intent.Invocation.ID == invocation.ID {
+					return filepath.Join(host.Intent.Launch.Root, "writer.jsonl"), nil
+				}
+			}
 		case taskscheduler.OperationReviewer:
 			if s.ReviewHost != nil && s.ReviewHost.Intent.Invocation.ID == invocation.ID {
 				return filepath.Join(s.ReviewHost.Intent.Launch.Root, "review.jsonl"), nil
@@ -438,15 +448,13 @@ func scheduledInvocation(task taskscheduler.TaskSpec, turn *taskscheduler.AgentT
 		return s, "", runtime.Invocation{}, err
 	}
 	if s.Creation.Config.Version != 2 {
-		// Narrow exception: only static graph-bound V1 explorer in the current
-		// frozen batch, in IMPLEMENTING or opted-in repair-design REPAIRING with
-		// resolved candidate/workspace. Never broaden V1 writer/reviewer/planner
-		// or dynamic agent_turn. V1 TaskPool remains forbidden; PumpOptions.Workers
-		// bounds concurrency instead.
-		if !(s.Creation.Config.Version == 1 && task.Operation == taskscheduler.OperationExplorer && turn == nil &&
-			s.Creation.Execution.GraphEnabled() && v1StaticGraphExplorerStateAllowed(s) &&
-			s.Workspace != nil && s.Candidate != nil && s.Plan != nil && s.Graph != nil &&
-			s.Creation.Config.TaskPool == nil && isStaticGraphExplorerCohort(s, taskscheduler.Claim{Task: task})) {
+		// V1 is permitted only for static graph explorers or explicitly opted-in
+		// initial implementation writers. V1 TaskPool remains forbidden;
+		// PumpOptions.Workers bounds cohort concurrency instead.
+		v1GraphExplorer := task.Operation == taskscheduler.OperationExplorer && v1StaticGraphExplorerStateAllowed(s) && isStaticGraphExplorerCohort(s, taskscheduler.Claim{Task: task})
+		v1GraphWriter := task.Operation == taskscheduler.OperationWriter && s.State == "IMPLEMENTING" && parallelImplementationEnabled(s) && isStaticGraphWriterCohort(s, taskscheduler.Claim{Task: task})
+		if !(s.Creation.Config.Version == 1 && turn == nil && s.Creation.Execution.GraphEnabled() && s.Creation.Execution.Context == taskContextBoundedV1 &&
+			s.Workspace != nil && s.Candidate != nil && s.Plan != nil && s.Graph != nil && s.Creation.Config.TaskPool == nil && (v1GraphExplorer || v1GraphWriter)) {
 			return s, "", runtime.Invocation{}, errors.New("scheduled dispatch requires configuration v2")
 		}
 	}
@@ -458,7 +466,15 @@ func scheduledInvocation(task taskscheduler.TaskSpec, turn *taskscheduler.AgentT
 	case taskscheduler.OperationExplorer:
 		invocation, err = explorerInvocation(s, task.Input)
 	case taskscheduler.OperationWriter:
-		invocation, err = writerInvocation(s)
+		if parallelImplementationEnabled(s) {
+			if task.ID == "" {
+				err = errors.New("graph writer task ID required")
+			} else {
+				invocation, err = writerInvocationForTask(s, task.ID)
+			}
+		} else {
+			invocation, err = writerInvocation(s)
+		}
 	case taskscheduler.OperationReviewer:
 		if s.Review != nil {
 			invocation = s.Review.Invocation
@@ -597,6 +613,11 @@ func scheduledEvidence(s Snapshot, head string, invocation runtime.Invocation, t
 		}
 	}
 	complete = complete || task.Operation == taskscheduler.OperationWriter && s.WriterProposal != nil && s.WriterProposal.Invocation.ID == invocation.ID
+	if task.Operation == taskscheduler.OperationWriter && parallelImplementationEnabled(s) {
+		if record, ok := s.GraphWriterResults[task.ID]; ok && record.Writer.Invocation.ID == invocation.ID {
+			complete = true
+		}
+	}
 	complete = complete || task.Operation == taskscheduler.OperationReviewer && s.Review != nil && s.Review.Invocation.ID == invocation.ID
 	// V1 static graph-bound explorers have no separate ModelAccess/AgentDispatch
 	// admission; the exact recorded ExplorerRecord plus frozen task_context is
@@ -605,6 +626,9 @@ func scheduledEvidence(s Snapshot, head string, invocation runtime.Invocation, t
 	// or dynamic turns. Every lookup still binds the exact invocation.
 	if complete && evidence.AdmissionID == "" && task.Operation == taskscheduler.OperationExplorer &&
 		s.Creation.Config.Version == 1 && s.Creation.Execution.GraphEnabled() {
+		evidence.AdmissionID = invocation.ID
+	}
+	if complete && evidence.AdmissionID == "" && task.Operation == taskscheduler.OperationWriter && parallelImplementationEnabled(s) && s.Creation.Config.Version == 1 {
 		evidence.AdmissionID = invocation.ID
 	}
 	if complete && evidence.AdmissionID != "" {

@@ -428,6 +428,17 @@ func Digest(g Graph) (string, error) {
 // dependencies, and native verification/review gates. ModeDirect avoids graph
 // branches for simple tasks with a single implementation.
 func ValidateAutonomousGraph(g Graph) error {
+	return ValidateAutonomousGraphWithImplementations(g, 1)
+}
+
+// ValidateAutonomousGraphWithImplementations validates an autonomous graph
+// whose immutable execution policy permits at most maxInitial initial
+// implementation tasks. The compatibility validator above retains the
+// historical one-implementation contract.
+func ValidateAutonomousGraphWithImplementations(g Graph, maxInitial int) error {
+	if maxInitial < 1 || maxInitial > 2 {
+		return errors.New("initial implementation limit must be 1 or 2")
+	}
 	if err := g.Validate(); err != nil {
 		return err
 	}
@@ -457,24 +468,37 @@ func ValidateAutonomousGraph(g Graph) error {
 			impls = append(impls, t)
 		}
 	}
-	if len(impls) != 1 {
-		return fmt.Errorf("graph must contain exactly one initial implementation, found %d", len(impls))
+	if len(impls) == 0 || len(impls) > maxInitial {
+		return fmt.Errorf("graph must contain one to %d initial implementations, found %d", maxInitial, len(impls))
 	}
-	impl := impls[0]
-	if len(impl.WritePaths) == 0 {
-		return errors.New("implementation requires concrete declared write paths")
-	}
-	if len(impl.Dependencies) == 0 {
-		for _, t := range g.Tasks {
-			if t.Kind == Research || t.Kind == Design {
-				return errors.New("implementation requires research/design dependencies")
+	for i, impl := range impls {
+		if len(impl.WritePaths) == 0 {
+			return fmt.Errorf("implementation %q requires concrete declared write paths", impl.ID)
+		}
+		if len(impl.Dependencies) == 0 {
+			for _, t := range g.Tasks {
+				if t.Kind == Research || t.Kind == Design {
+					return errors.New("implementation requires research/design dependencies")
+				}
 			}
 		}
-	}
-	for _, dep := range impl.Dependencies {
-		d := byID[dep]
-		if d.Kind != Research && d.Kind != Design {
-			return fmt.Errorf("implementation dependency %q must be research or design", dep)
+		for _, dep := range impl.Dependencies {
+			d := byID[dep]
+			if d.Kind != Research && d.Kind != Design {
+				return fmt.Errorf("implementation dependency %q must be research or design", dep)
+			}
+		}
+		for _, other := range impls[i+1:] {
+			if dependsOn(impl.ID, other.ID, byID) || dependsOn(other.ID, impl.ID, byID) {
+				return errors.New("initial implementation tasks must be independent")
+			}
+			for _, a := range impl.WritePaths {
+				for _, b := range other.WritePaths {
+					if pathsOverlapFold(a, b) {
+						return fmt.Errorf("initial implementation write paths overlap: %q and %q", a, b)
+					}
+				}
+			}
 		}
 	}
 	hasVerification, hasReview := false, false
@@ -491,8 +515,10 @@ func ValidateAutonomousGraph(g Graph) error {
 			if len(t.WritePaths) != 0 {
 				return fmt.Errorf("verification task %q must not declare writes", t.ID)
 			}
-			if !dependsOn(t.ID, impl.ID, byID) {
-				return fmt.Errorf("verification task %q must depend on implementation", t.ID)
+			for _, impl := range impls {
+				if !dependsOn(t.ID, impl.ID, byID) {
+					return fmt.Errorf("verification task %q must depend on implementation %q", t.ID, impl.ID)
+				}
 			}
 		case Review:
 			reviewCount++
@@ -500,8 +526,10 @@ func ValidateAutonomousGraph(g Graph) error {
 			if len(t.WritePaths) != 0 {
 				return fmt.Errorf("review task %q must not declare writes", t.ID)
 			}
-			if !dependsOn(t.ID, impl.ID, byID) {
-				return fmt.Errorf("review task %q must depend on implementation", t.ID)
+			for _, impl := range impls {
+				if !dependsOn(t.ID, impl.ID, byID) {
+					return fmt.Errorf("review task %q must depend on implementation %q", t.ID, impl.ID)
+				}
 			}
 		}
 	}
@@ -515,6 +543,11 @@ func ValidateAutonomousGraph(g Graph) error {
 		return errors.New("initial autonomous graph requires exactly one verification and one review gate")
 	}
 	return nil
+}
+
+func pathsOverlapFold(a, b string) bool {
+	a, b = strings.ToLower(a), strings.ToLower(b)
+	return pathsOverlap(a, b)
 }
 
 // ValidateAutonomousRevision extends ValidateRevision for runner-owned

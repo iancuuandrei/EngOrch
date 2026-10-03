@@ -27,6 +27,22 @@ these six observations do not establish a general success rate or a completed
 v1 release. Later CLI run-listing fixes and documentation changes were verified
 separately from this immutable evaluation binary.
 
+## Harder parser task on public main
+
+A separate fresh `godotenv` attempt used clean public-main binary
+`10fee6bafa4ecc28ae8a56f52c08a4001ecd8b28`, the same pinned runtime, and
+`gpt-6-luna` with high effort. It completed research and design but ended
+`BLOCKED` in implementation before any file effect. The returned paths,
+candidate ID and file hashes were valid, but the proposed `godotenv.go`
+before-anchor occurred zero times in the current file. The other two anchors
+occurred once. Exact anchored-edit validation rejected the proposal;
+verification and review were not run, and the candidate remained clean.
+
+The [sanitized diagnostic](../../evals/v1/results/godotenv-main10-20261003.json)
+retains exact evaluation/result identities and unknown metadata. The original
+run was not resumed or edited. This is a separate unsuccessful harder-task
+attempt, not an added PASS or a seventh row in the six-task comparison.
+
 ## Initial matched six-task run
 
 Two fresh sets of pinned repositories used the same Codex executable, model
@@ -89,6 +105,12 @@ Afero checks. This establishes useful read-only parallelism and scoped
 implementation, not concurrent overlapping writers.
 
 ## Reproduction and retained evidence
+
+The [sanitized comparison record](../../evals/v1/results/comparison-20261003.json)
+publishes the retained evaluation hashes, exact binary/runtime identities,
+task pins and per-task outcomes. Unknown metrics remain null. It contains no
+raw model output or credentials and does not include an executable archive
+of the accepted candidate bytes; it is a result summary, not release proof.
 
 Use the [pinned evaluation runner](../../evals/v1/README.md). Acceptance tests are
 added only to the independently bound candidate copy after agent work completes.

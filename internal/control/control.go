@@ -54,6 +54,10 @@ type ExecutionPolicy struct {
 	// RepairPlanningVersion opts new graph runs into candidate-bound design
 	// tasks that refine never-started repair write paths within original scope.
 	RepairPlanningVersion int `json:"repair_planning_version,omitempty"`
+	// ParallelImplementationVersion opts new graph runs into a bounded static
+	// cohort of at most two independent implementation writers. Their proposals
+	// are collected on one candidate and applied through one aggregate effect.
+	ParallelImplementationVersion int `json:"parallel_implementation_version,omitempty"`
 }
 
 // Validate admits only the bounded autonomous workflow with a repair budget
@@ -88,6 +92,12 @@ func (p ExecutionPolicy) Validate() error {
 	if p.RepairPlanningVersion == 1 && p.GraphVersion != 1 {
 		return errors.New("repair planning requires graph execution")
 	}
+	if p.ParallelImplementationVersion != 0 && p.ParallelImplementationVersion != 1 {
+		return errors.New("invalid parallel implementation version")
+	}
+	if p.ParallelImplementationVersion == 1 && (p.GraphVersion != 1 || p.RepairPlanningVersion != 1 || p.Context != taskContextBoundedV1) {
+		return errors.New("parallel implementation requires graph execution, bounded task context, and repair planning")
+	}
 	return nil
 }
 
@@ -113,6 +123,10 @@ func (p *ExecutionPolicy) GraphEnabled() bool {
 	return p != nil && p.GraphVersion == 1
 }
 
+func parallelImplementationEnabled(s Snapshot) bool {
+	return s.Creation.Execution != nil && s.Creation.Execution.ParallelImplementationVersion == 1
+}
+
 // MachineApproval records that the immutable execution policy, rather than a
 // human, admitted the exact planner result.
 type MachineApproval struct {
@@ -136,6 +150,9 @@ type Snapshot struct {
 	Review             *ReviewRecord                      `json:"review,omitempty"`
 	WriterHost         *WriterHostState                   `json:"writer_host,omitempty"`
 	WriterProposal     *WriterRecord                      `json:"writer_proposal,omitempty"`
+	GraphWriterHosts   map[string]WriterHostState         `json:"graph_writer_hosts,omitempty"`
+	GraphWriterResults map[string]GraphWriterRecord       `json:"graph_writer_results,omitempty"`
+	GraphWriterBatch   *GraphWriterBatchRecord            `json:"graph_writer_batch,omitempty"`
 	RIProducer         *RIProducerState                   `json:"ri_producer"`
 	RIPublish          *RIPublishState                    `json:"ri_publish"`
 	RIImport           *RIImportState                     `json:"ri_import"`
@@ -324,6 +341,31 @@ func Replay(events []journal.Event) (Snapshot, error) {
 			}
 		case "writer.proposed":
 			if err := replayWriterProposal(&s, e, seenEffects); err != nil {
+				return s, err
+			}
+		case "graph.writer.host-intent", "graph.writer.host-ready", "graph.writer.host-observed", "graph.writer.runtime-observed":
+			if err := replayGraphWriterHost(&s, e); err != nil {
+				return s, err
+			}
+			if e.Kind == "graph.writer.runtime-observed" {
+				var event GraphWriterHostEvent
+				if err := canonical.Decode(e.Payload, &event); err != nil {
+					return s, err
+				}
+				host, ok := s.GraphWriterHosts[event.TaskID]
+				if !ok || host.RuntimeReceipt == nil {
+					return s, errors.New("exact graph writer runtime receipt required")
+				}
+				if err := requireCompletedModelAccess(s, host.Intent.Invocation, host.RuntimeReceipt.JournalHead, host.RuntimeReceipt.ResultHash); err != nil {
+					return s, err
+				}
+			}
+		case "graph.writer.proposed":
+			if err := replayGraphWriterProposal(&s, e, seenEffects); err != nil {
+				return s, err
+			}
+		case "graph.writer.batch-proposed":
+			if err := replayGraphWriterBatch(&s, e); err != nil {
 				return s, err
 			}
 		case "ri.producer-intent", "ri.producer-observed", "ri.producer-closed":
@@ -665,9 +707,18 @@ func validateRepairPlanningBinding(c Creation) error {
 	if c.Execution != nil {
 		version = c.Execution.RepairPlanningVersion
 	}
-	contract := c.Config.PlannerContract == plannerContractGraphV3
-	if (version == 1) != contract {
+	parallelVersion := 0
+	if c.Execution != nil {
+		parallelVersion = c.Execution.ParallelImplementationVersion
+	}
+	contractV3 := c.Config.PlannerContract == plannerContractGraphV3
+	contractV4 := c.Config.PlannerContract == "plan-graph-v4"
+	if version == 1 && !(contractV3 && parallelVersion == 0 || contractV4 && parallelVersion == 1) ||
+		version == 0 && (contractV3 || contractV4 || parallelVersion != 0) {
 		return errors.New("repair planning policy and planner contract must be enabled together")
+	}
+	if (parallelVersion == 1) != contractV4 {
+		return errors.New("parallel implementation policy and planner contract must be enabled together")
 	}
 	return nil
 }

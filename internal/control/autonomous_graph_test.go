@@ -77,6 +77,19 @@ func graphAwaitingApprovalWithGraph(t *testing.T, c Creation, graph engineeringp
 	if err := Append(path, "planning.started", struct{}{}); err != nil {
 		t.Fatal(err)
 	}
+	if c.Config.Version == 2 && c.Config.Planner.Runtime == "fake" {
+		planning, err := Inspect(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		intent, err := expectedPlanningAccess(planning)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := Append(path, "planning.access-intent", intent); err != nil {
+			t.Fatal(err)
+		}
+	}
 	inv, err := plannerInvocation(c.Config, c.Objective)
 	if err != nil {
 		t.Fatal(err)

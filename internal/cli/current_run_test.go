@@ -10,11 +10,13 @@ import (
 	"testing"
 )
 
-func TestGraphSchedulerSidecarNames(t *testing.T) {
+func TestRunJournalSidecarNames(t *testing.T) {
 	runID := strings.Repeat("a", 64)
 	valid := runID + ".jsonl.graph-schedule-0123456789abcdef.jsonl"
-	for _, name := range []string{valid, filepath.Join("runs", valid)} {
-		if !graphSchedulerSidecar(name) {
+	writers := runID + ".jsonl.graph-writers-0123456789abcdef.jsonl"
+	modelAccess := runID + ".jsonl.model-access.jsonl"
+	for _, name := range []string{valid, filepath.Join("runs", valid), writers, filepath.Join("runs", writers), modelAccess, filepath.Join("runs", modelAccess)} {
+		if !runJournalSidecar(name) {
 			t.Fatalf("canonical scheduler sidecar rejected: %s", name)
 		}
 	}
@@ -25,8 +27,16 @@ func TestGraphSchedulerSidecarNames(t *testing.T) {
 		runID + ".jsonl.graph-schedule-0123456789abcde.jsonl",
 		runID + ".jsonl.graph-schedule-0123456789abcdeg.jsonl",
 		runID + ".jsonl.graph-schedule-0123456789abcdef.jsonl.extra",
+		runID + ".jsonl.graph-writers-0123456789abcdeg.jsonl",
+		runID + ".jsonl.graph-writers-0123456789abcde.jsonl",
+		strings.Repeat("A", 64) + ".jsonl.graph-writers-0123456789abcdef.jsonl",
+		runID + ".jsonl.graph-writers-0123456789abcdef.jsonl.extra",
+		runID + ".jsonl.graph-unknown-0123456789abcdef.jsonl",
+		runID + ".jsonl.model-access.jsonl.extra",
+		runID + ".jsonl.model-access-extra.jsonl",
+		strings.Repeat("A", 64) + ".jsonl.model-access.jsonl",
 	} {
-		if graphSchedulerSidecar(name) {
+		if runJournalSidecar(name) {
 			t.Fatalf("noncanonical entry ignored: %s", name)
 		}
 	}
@@ -35,8 +45,13 @@ func TestGraphSchedulerSidecarNames(t *testing.T) {
 func TestRunListingIgnoresCanonicalGraphSchedulerSidecars(t *testing.T) {
 	root, runID, _ := diffWorkspaceFixture(t)
 	runs := filepath.Join(root, ".harness", "runs")
-	sidecar := filepath.Join(runs, runID+".jsonl.graph-schedule-0123456789abcdef.jsonl")
-	if err := os.WriteFile(sidecar, []byte("separate scheduler event contract"), 0600); err != nil {
+	for _, kind := range []string{"schedule", "writers"} {
+		sidecar := filepath.Join(runs, runID+".jsonl.graph-"+kind+"-0123456789abcdef.jsonl")
+		if err := os.WriteFile(sidecar, []byte("separate scheduler event contract"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(runs, runID+".jsonl.model-access.jsonl"), []byte("separate model access event contract"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	latest, err := latestRunID(root)

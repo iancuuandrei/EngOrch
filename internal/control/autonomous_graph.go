@@ -12,6 +12,7 @@ import (
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/codexhost"
 	"harness.local/engorch/internal/engineeringplan"
+	"harness.local/engorch/internal/fileeffects"
 	"harness.local/engorch/internal/journal"
 	"harness.local/engorch/internal/safepath"
 	"harness.local/engorch/internal/taskscheduler"
@@ -107,7 +108,11 @@ func parseAcceptedGraph(s Snapshot) (engineeringplan.Graph, error) {
 	if err != nil {
 		return engineeringplan.Graph{}, err
 	}
-	if err := engineeringplan.ValidateAutonomousGraph(g); err != nil {
+	maxInitialImplementations := 1
+	if s.Creation.Execution != nil && s.Creation.Execution.ParallelImplementationVersion == 1 {
+		maxInitialImplementations = 2
+	}
+	if err := engineeringplan.ValidateAutonomousGraphWithImplementations(g, maxInitialImplementations); err != nil {
 		return engineeringplan.Graph{}, err
 	}
 	readTasks := 0
@@ -140,7 +145,7 @@ func parseAcceptedGraph(s Snapshot) (engineeringplan.Graph, error) {
 		g.Tasks = append(g.Tasks,
 			engineeringplan.Task{ID: verifyID, Kind: engineeringplan.Verification, Title: "Verify the candidate", Dependencies: []string{impl.ID}, ScopePaths: impl.ScopePaths, ExpectedEvidence: []engineeringplan.Evidence{{Kind: "test", Description: "native candidate verification"}}, EstimatedSeconds: 300},
 			engineeringplan.Task{ID: reviewID, Kind: engineeringplan.Review, Title: "Review the verified candidate", Dependencies: []string{verifyID}, ScopePaths: impl.ScopePaths, ExpectedEvidence: []engineeringplan.Evidence{{Kind: "review", Description: "native independent review"}}, EstimatedSeconds: 300})
-		if err := engineeringplan.ValidateAutonomousGraph(g); err != nil {
+		if err := engineeringplan.ValidateAutonomousGraphWithImplementations(g, maxInitialImplementations); err != nil {
 			return engineeringplan.Graph{}, err
 		}
 	}
@@ -378,18 +383,18 @@ func validateGraphEvidence(s Snapshot, task engineeringplan.Task, p GraphProgres
 		if err != nil || candidateID != p.CandidateID {
 			return errors.New("implementation candidate substitution")
 		}
-		if s.WriterProposal == nil || s.WriterProposal.Invocation.ID != p.WriterInvocationID {
-			return errors.New("writer evidence not recorded")
-		}
-		proposalCandidate, err := s.WriterProposal.Prepared.Proposal.Before.ID()
-		if err != nil {
-			// Before may differ after apply; check After matches current candidate.
-			afterID, aerr := s.WriterProposal.Prepared.Proposal.After.ID()
-			if aerr != nil || afterID != p.CandidateID {
-				return errors.New("writer candidate binding mismatch")
+		if record, isBatchMember, validMember := graphWriterResultForTask(s, task.ID, p.WriterInvocationID); isBatchMember {
+			if !validMember || !graphWriterBatchEffectApplied(s) {
+				return errors.New("task-bound writer evidence not recorded")
+			}
+			afterID, aerr := s.GraphWriterBatch.Prepared.Proposal.After.ID()
+			if aerr != nil || afterID != p.CandidateID || record.Writer.Invocation.ID != p.WriterInvocationID {
+				return errors.New("aggregate writer candidate binding mismatch")
 			}
 		} else {
-			_ = proposalCandidate
+			if s.WriterProposal == nil || s.WriterProposal.Invocation.ID != p.WriterInvocationID {
+				return errors.New("writer evidence not recorded")
+			}
 			afterID, aerr := s.WriterProposal.Prepared.Proposal.After.ID()
 			if aerr != nil || afterID != p.CandidateID {
 				return errors.New("writer candidate binding mismatch")
@@ -437,10 +442,19 @@ func validateGraphEvidence(s Snapshot, task engineeringplan.Task, p GraphProgres
 }
 
 func requireWriterPathsInScope(task engineeringplan.Task, s Snapshot) error {
-	if s.WriterProposal == nil {
-		return errors.New("writer proposal unavailable for scope check")
+	var changes []fileeffects.Change
+	if record, isBatchMember, validMember := graphWriterResultForTask(s, task.ID, ""); isBatchMember {
+		if !validMember {
+			return errors.New("task-bound writer proposal unavailable for scope check")
+		}
+		changes = record.Writer.Prepared.Proposal.Changes
+	} else {
+		if s.WriterProposal == nil {
+			return errors.New("writer proposal unavailable for scope check")
+		}
+		changes = s.WriterProposal.Prepared.Proposal.Changes
 	}
-	for _, c := range s.WriterProposal.Prepared.Proposal.Changes {
+	for _, c := range changes {
 		ok := false
 		for _, w := range task.WritePaths {
 			if c.Path == w || strings.HasPrefix(c.Path, w+"/") {
@@ -453,6 +467,24 @@ func requireWriterPathsInScope(task engineeringplan.Task, s Snapshot) error {
 		}
 	}
 	return nil
+}
+
+// graphWriterResultForTask recognizes only a task that is an exact member of
+// the recorded initial aggregate. The policy alone does not make a later
+// serial repair a member of that cohort.
+func graphWriterResultForTask(s Snapshot, taskID, invocationID string) (GraphWriterRecord, bool, bool) {
+	if s.GraphWriterBatch == nil || taskID == "" {
+		return GraphWriterRecord{}, false, false
+	}
+	for _, member := range s.GraphWriterBatch.Members {
+		if member.TaskID != taskID {
+			continue
+		}
+		record, ok := s.GraphWriterResults[taskID]
+		valid := ok && record.TaskID == taskID && record.Writer.Invocation.ID == member.InvocationID && (invocationID == "" || member.InvocationID == invocationID)
+		return record, true, valid
+	}
+	return GraphWriterRecord{}, false, false
 }
 
 // requireGraphReady verifies mandatory graph tasks have actual evidence before READY.
@@ -1231,7 +1263,7 @@ func requireFreshGraphPreparationState(s Snapshot) error {
 	if len(s.TaskContexts) != 0 {
 		return errors.New("autonomous preparation boundary passed after task context was admitted")
 	}
-	if s.ExplorerHost != nil || len(s.ExplorerRuns) != 0 || len(s.Explorations) != 0 || s.WriterHost != nil || s.WriterProposal != nil || s.FileIntent != nil || s.Verification != nil || s.ReviewHost != nil || s.Review != nil {
+	if s.ExplorerHost != nil || len(s.ExplorerRuns) != 0 || len(s.Explorations) != 0 || s.WriterHost != nil || s.WriterProposal != nil || len(s.GraphWriterHosts) != 0 || len(s.GraphWriterResults) != 0 || s.GraphWriterBatch != nil || s.FileIntent != nil || s.Verification != nil || s.ReviewHost != nil || s.Review != nil {
 		return errors.New("autonomous preparation boundary passed after role or file work started")
 	}
 	if s.Graph != nil {
@@ -1302,11 +1334,13 @@ func autonomousGraphImplementing(ctx context.Context, path string, s Snapshot) (
 	}
 	var research []engineeringplan.Task
 	var implReady *engineeringplan.Task
+	var implReadyTasks []engineeringplan.Task
 	for _, t := range ready {
 		switch t.Kind {
 		case engineeringplan.Research, engineeringplan.Design:
 			research = append(research, t)
 		case engineeringplan.Implementation:
+			implReadyTasks = append(implReadyTasks, t)
 			if implReady == nil {
 				copy := t
 				implReady = &copy
@@ -1339,6 +1373,54 @@ func autonomousGraphImplementing(ctx context.Context, path string, s Snapshot) (
 			if (t.Kind == engineeringplan.Research || t.Kind == engineeringplan.Design) && !t.Completed {
 				return s, false, fmt.Errorf("research task %q must complete before writer", t.ID)
 			}
+		}
+		if parallelImplementationEnabled(s) {
+			if len(implReadyTasks) < 1 || len(implReadyTasks) > 2 {
+				return s, false, errors.New("parallel implementation cohort must contain one or two ready tasks")
+			}
+			for i := 0; i < len(implReadyTasks); i++ {
+				for j := i + 1; j < len(implReadyTasks); j++ {
+					if !tasksIndependentAndDisjoint(implReadyTasks[i], implReadyTasks[j]) {
+						return s, false, errors.New("parallel implementation tasks are not independent and disjoint")
+					}
+				}
+			}
+			if err := autonomousDispatchBlocked(s); err != nil {
+				return s, false, err
+			}
+			if s.GraphWriterBatch == nil {
+				allRecorded := true
+				for _, task := range implReadyTasks {
+					if _, ok := s.GraphWriterResults[task.ID]; !ok {
+						allRecorded = false
+						break
+					}
+				}
+				if !allRecorded {
+					if err := runGraphWriterBatch(ctx, path, s, implReadyTasks); err != nil {
+						latest, ierr := InspectOr(s, path, err)
+						return latest, false, ierr
+					}
+					s, err = Inspect(path)
+					if err != nil {
+						return s, false, err
+					}
+				}
+				batch, err := buildGraphWriterBatch(s, taskIDs(implReadyTasks))
+				if err != nil {
+					return s, false, err
+				}
+				if err := recordGraphWriterBatch(path, batch); err != nil {
+					latest, ierr := InspectOr(s, path, err)
+					return latest, false, ierr
+				}
+				return s, true, nil
+			}
+			if _, err := applyGraphWriterBatch(ctx, path, s); err != nil {
+				latest, ierr := InspectOr(s, path, err)
+				return latest, false, ierr
+			}
+			return s, true, nil
 		}
 		if err := autonomousDispatchBlocked(s); err != nil {
 			return s, false, err
@@ -1506,6 +1588,9 @@ func recordGraphImplementationProgress(path string) error {
 	if err != nil {
 		return err
 	}
+	if graphWriterBatchEffectApplied(s) {
+		return recordParallelGraphImplementationProgress(path, s)
+	}
 	if s.Graph == nil || s.Candidate == nil || s.WriterProposal == nil {
 		return errors.New("implementation progress requires graph, candidate and writer evidence")
 	}
@@ -1559,6 +1644,75 @@ func recordGraphImplementationProgress(path string) error {
 	p := GraphProgress{Version: 1, PlanID: s.Graph.PlanID, Digest: s.Graph.Digest, TaskID: active.ID, AttemptID: attemptID, Outcome: "completed", CandidateID: candidateID, WriterInvocationID: s.WriterProposal.Invocation.ID}
 	_, err = recordGraphProgress(path, p)
 	return err
+}
+
+func taskIDs(tasks []engineeringplan.Task) []string {
+	ids := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		ids = append(ids, task.ID)
+	}
+	return ids
+}
+
+func recordParallelGraphImplementationProgress(path string, s Snapshot) error {
+	if s.Graph == nil || s.Candidate == nil || s.GraphWriterBatch == nil || s.FileOutcome != "CONFIRMED" || s.FileIntent == nil || s.FileIntent.Prepared.Intent != s.GraphWriterBatch.Prepared.Intent {
+		return errors.New("parallel implementation progress requires its confirmed aggregate effect")
+	}
+	candidateID, err := s.Candidate.ID()
+	if err != nil {
+		return err
+	}
+	afterID, err := s.GraphWriterBatch.Prepared.Proposal.After.ID()
+	if err != nil || afterID != candidateID {
+		return errors.Join(errors.New("parallel writer aggregate candidate differs"), err)
+	}
+	for _, member := range s.GraphWriterBatch.Members {
+		latest, err := Inspect(path)
+		if err != nil {
+			return err
+		}
+		if evidence, ok := latest.Graph.Evidence[member.TaskID]; ok && evidence.Outcome == "completed" && evidence.CandidateID == candidateID && evidence.WriterInvocationID == member.InvocationID {
+			continue
+		}
+		task, ok := latest.Graph.Graph.Task(member.TaskID)
+		if !ok || task.Kind != engineeringplan.Implementation {
+			return errors.New("parallel writer task disappeared from graph")
+		}
+		record, ok := latest.GraphWriterResults[member.TaskID]
+		if !ok || record.Writer.Invocation.ID != member.InvocationID || !graphWriterChangesWithinTask(task, record.Writer.Prepared.Proposal.Changes) {
+			return errors.New("parallel writer task evidence is missing or substituted")
+		}
+		attemptID := fmt.Sprintf("attempt-%d", len(task.Attempts)+1)
+		p := GraphProgress{Version: 1, PlanID: latest.Graph.PlanID, Digest: latest.Graph.Digest, TaskID: task.ID, AttemptID: attemptID, Outcome: "completed", CandidateID: candidateID, WriterInvocationID: member.InvocationID}
+		if _, err := recordGraphProgress(path, p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func applyGraphWriterBatch(ctx context.Context, path string, s Snapshot) (Snapshot, error) {
+	if s.GraphWriterBatch == nil || s.Creation.Execution == nil || s.Creation.Execution.ParallelImplementationVersion != 1 {
+		return s, errors.New("parallel writer aggregate is unavailable")
+	}
+	if s.FileOutcome == "UNKNOWN" {
+		return s, errors.New("parallel writer file effect is UNKNOWN")
+	}
+	if s.FileIntent != nil {
+		return s, errors.New("parallel writer aggregate already has a file attempt")
+	}
+	if err := autonomousDispatchBlocked(s); err != nil {
+		return s, err
+	}
+	authorization, err := autonomousFileAuthorization(s, s.GraphWriterBatch.Prepared.Intent)
+	if err != nil {
+		return s, err
+	}
+	if _, err := ApplyFiles(ctx, path, s.GraphWriterBatch.Prepared, authorization); err != nil {
+		return InspectOr(s, path, err)
+	}
+	latest, err := Inspect(path)
+	return latest, err
 }
 
 func recordGraphVerificationProgress(path string) error {

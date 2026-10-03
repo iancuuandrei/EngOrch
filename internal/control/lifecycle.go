@@ -156,6 +156,7 @@ func lifecycleReconciliationEvent(kind string) bool {
 		"planning.host-ready", "planning.host-observed", "planning.runtime-observed", "planning.provider-observed", "plan.recorded",
 		"explorer.host-ready", "explorer.host-observed", "explorer.runtime-observed", "explorer.recorded",
 		"writer.host-ready", "writer.host-observed", "writer.runtime-observed", "writer.proposed",
+		"graph.writer.host-ready", "graph.writer.host-observed", "graph.writer.runtime-observed", "graph.writer.proposed",
 		"review.host-ready", "review.host-observed", "review.runtime-observed", "review.recorded",
 		"role.provider-observed", "workspace.confirmed", "files.observed",
 		"verification.observed", "verification.closed",
@@ -299,6 +300,11 @@ func lifecycleUnresolved(s Snapshot) []string {
 	}
 	if s.WriterHost != nil && s.WriterHost.RuntimeReceipt == nil {
 		result = append(result, "writer:"+s.WriterHost.Intent.Invocation.ID)
+	}
+	for taskID, host := range s.GraphWriterHosts {
+		if host.RuntimeReceipt == nil {
+			result = append(result, "graph-writer:"+taskID+":"+host.Intent.Invocation.ID)
+		}
 	}
 	if s.ReviewHost != nil && s.ReviewHost.RuntimeReceipt == nil {
 		result = append(result, "review:"+s.ReviewHost.Intent.Invocation.ID)
