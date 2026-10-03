@@ -1,0 +1,142 @@
+{
+  "schema": "fabric.humanize.accepted_resume.v1",
+  "task_id": "go-humanize-feature-performance",
+  "run_id": "b7a148ac6e886aa96d20b1a2ec4b0beda662bc696cd45b3a2c5e2c23a8150b98",
+  "terminal_state": "READY",
+  "accepted_candidate_id": "543ee0095c1b56a5306b3af4a959587b27132171f15c8181de355c0e1077e04f",
+  "plan_id": "3b33b458d1798584a27b5cd168078bc85a782564ef41c945b1e299447cb8ce7e",
+  "source": {
+    "resume_candidate_copy_sha256": "7a877b6358cfa2cf0a5baf30075fccd9906947a9cd75ddefba2b8d651180bdfd",
+    "intervention": "Root-reported global sort-order correction required to resume; this is a source intervention after the original BLOCKED evaluation.",
+    "resume_build_clean_before": true,
+    "resume_build_clean_after": true,
+    "resume_build_source_stable": true,
+    "resume_commit": "58c6c115e9647f21e9caf9a8a16166c9e52bc5e6",
+    "resume_binary_sha256": "2e210a93135e63c87afb468920366d91d0d5649fbbf122e2b29f06d5cbd17123",
+    "initial_commit": "25dbde632f7d0af7d4b0e9328dc3e9c8750db166"
+  },
+  "original_parallel_evaluation": {
+    "retained_unchanged": true,
+    "measurement_receipt_sha256": "341ea855e9897138ccffec5366f3bc458c23b195b0b4c4f257b9ecad08e9d406",
+    "file_effects_before_resume": 0,
+    "outcome": "BLOCKED"
+  },
+  "initial_writers": [
+    {
+      "task_id": "parsebytes-underscores",
+      "invocation_id": "9b3ef2e4355adf64afabb128ebfc2a1867b294a48678e792b6ee5be743e748b3",
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "input_tokens": 380557,
+      "output_tokens": 3951,
+      "dispatch_started_at": "2026-10-03T06:45:55.9032917Z",
+      "dispatch_ended_at": "2026-10-03T06:47:25.3632588Z",
+      "proposed_paths": [
+        "bytes.go",
+        "bytes_test.go"
+      ]
+    },
+    {
+      "task_id": "commaf-allocations",
+      "invocation_id": "a201ce7c02154ccd1d5099a8ab6280560fc7ae84a6b10fe3355496478b01065e",
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "input_tokens": 294308,
+      "output_tokens": 5365,
+      "dispatch_started_at": "2026-10-03T06:45:55.8330035Z",
+      "dispatch_ended_at": "2026-10-03T06:48:08.9824243Z",
+      "proposed_paths": [
+        "comma.go",
+        "comma_test.go"
+      ]
+    }
+  ],
+  "initial_writer_replay": {
+    "comparison_basis": "Ready snapshot graph_writer_results retain the same two invocation IDs, usage values, proposals and dispatch timestamps as the original parallel receipt.",
+    "results_match_original_receipt": true,
+    "additional_initial_writer_invocations": 0
+  },
+  "repair": {
+    "input_tokens": 225814,
+    "invocation_id": "b18a414f16b9a731e362d30b270ca58154db20cd7a236e016b9ea5aa430e02ff",
+    "dispatch_started_at": null,
+    "timing_status": "Not present in the retained ready snapshot; left null.",
+    "effort": "high",
+    "output_tokens": 1899,
+    "dispatch_ended_at": null,
+    "attempts": 1,
+    "model": "gpt-6-luna"
+  },
+  "review": {
+    "input_tokens": 206005,
+    "dispatch_ended_at": null,
+    "invocation_id": "8122ed6dcee10fffb7dd664ad4711a63907d8388c791b289453b7c5959d07604",
+    "dispatch_started_at": null,
+    "timing_status": "Not present in the retained ready snapshot; left null.",
+    "effort": "high",
+    "decision": "approve",
+    "output_tokens": 2177,
+    "findings": 0,
+    "model": "gpt-6-luna"
+  },
+  "acceptance": {
+    "candidate_files_sha256": "0c8f132b1bd0618dbadfb5408962fdd9006c3c821b90fe501c3cf08364b606f8",
+    "acceptance_helper_candidate_workspace_edits": false,
+    "candidate_id": "543ee0095c1b56a5306b3af4a959587b27132171f15c8181de355c0e1077e04f",
+    "release_qualified": false,
+    "additional_provider_calls_by_acceptance_helper": 0,
+    "native_verification": {
+      "exit_code": 0,
+      "argv": "go test -count=1 ./..."
+    },
+    "native_heldout_copy_ids_match": true,
+    "native_heldout_files_hashes_match": true,
+    "candidate_file_count": 39,
+    "classification": "PASS",
+    "heldout": {
+      "commaf_subtest_observed": true,
+      "parsebytes_subtest_observed": true,
+      "exit_code": 0
+    }
+  },
+  "evidence": {
+    "original_eval_rewritten": false,
+    "original_parallel_receipt_sha256": "341ea855e9897138ccffec5366f3bc458c23b195b0b4c4f257b9ecad08e9d406",
+    "ready_snapshot_sha256": "f7619c6a0241723b034ab2a584f6447298ecf761f7b57f9d3ad451d1148ac59e",
+    "candidate_acceptance_receipt_sha256": "ff87c975a19f7e6a93652ac189572779da95a02066db9fef05237950c826d29e"
+  },
+  "limitations": [
+    "This is a resumed run after a source intervention, not a clean initial parallel success.",
+    "The original parallel evaluation remains BLOCKED and unchanged.",
+    "Native and held-out candidate-copy gates passed for the resumed candidate; this does not establish release qualification.",
+    "Provider call count for the original runtime invocations is unknown. Repair and review wrapper dispatch timestamps are unavailable in the retained snapshot.",
+    "No causal performance gain is inferred from the PAR/SER arms."
+  ],
+  "correction": {
+    "supersedes_sha256": "10f2806c24a262c7aed8a1449dcf54acc469b725561bd55cfef4765fecfdc853",
+    "reason": "Corrected a run-id transcription typo; receipt now uses the run ID read from both the READY snapshot and acceptance receipt.",
+    "previous_run_id": "b7a148ac6e886aa96d20b1a2ec4c0beda662bc696cd45b3a2c5e2c23a8150b98",
+    "corrected_run_id": "b7a148ac6e886aa96d20b1a2ec4b0beda662bc696cd45b3a2c5e2c23a8150b98",
+    "validated_snapshot_sha256": "f7619c6a0241723b034ab2a584f6447298ecf761f7b57f9d3ad451d1148ac59e",
+    "validated_acceptance_sha256": "ff87c975a19f7e6a93652ac189572779da95a02066db9fef05237950c826d29e"
+  },
+  "event_export": {
+    "sha256": "d0476c22f823ac02cac01c90155ee9a1eb9519c7b845336d1d0606ef710c0e5d",
+    "initial_writer_proposal_sequences": [
+      28,
+      30
+    ],
+    "repair_writer_proposal_sequence": 62,
+    "review_invocation_sequences": [
+      45,
+      75
+    ],
+    "initial_writer_invocations_unchanged": true,
+    "additional_initial_writer_invocations": 0,
+    "repair_dispatch_started_at": null,
+    "repair_dispatch_ended_at": null,
+    "review_dispatch_started_at": null,
+    "review_dispatch_ended_at": null,
+    "timing_limit": "Native export records no dispatch timestamps or event wall-clock timestamps for the repair writer or review records; sequence order is available, durations are not."
+  }
+}

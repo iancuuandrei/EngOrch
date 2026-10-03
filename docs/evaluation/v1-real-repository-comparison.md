@@ -64,6 +64,37 @@ successful acceptance or latency claim. Actual validation-tool call counts
 are not established by occurrences of tool names in schemas or instructions.
 The original run and candidate were preserved without a retry.
 
+## Numeric parallel trial and execution setup
+
+The clean `daea08eea9947af1ff148ad38e7a155d54f943d4` numeric trial admitted
+two independent initial writers and completed both bounded repair writers
+through confirmed file effects. The new union-scope repair path therefore
+reached execution. However, all three native observations were `NOT_RUN`
+with `started=false`: the Fabric child could not resolve or hash the configured
+`go` executable from its PATH. This is a setup blocker, not a failed native
+test or evidence about the implementation's correctness. The repair budget
+was exhausted; the original run was not resumed.
+
+Its validated 85-event history exports successfully. The aggregated inspect
+snapshot was 1,328,141 canonical bytes, exceeding the one-value transport
+limit; this was a separate CLI display failure. The
+[sanitized trial](../../evals/v1/results/numeric-parallel-daea08e-20261003.json)
+retains exact identities, statuses and missing metrics. There is no successful
+parallel-latency comparison or extra PASS in the original six-task result.
+
+## Performance-task preflight
+
+The pinned go-humanize `Commaf` task began with a full native baseline PASS.
+Its ordinary benchmark used four allocations per call; finite extremes used up
+to eleven. The initial standalone preflight passed sampled output-equivalence
+checks while all six requested two-allocation representatives failed. The
+[preflight receipt](../../evals/v1/results/commaf-performance-preflight-20261003.json)
+records those results and zero provider calls. The task later reached Fabric
+READY and passed its native and held-out acceptance gates; the separate
+[accepted-task receipt](../../evals/v1/results/commaf-performance-accepted-20261003.json)
+records that later result. The preflight remains an earlier baseline observation,
+not the final task status.
+
 ## Initial matched six-task run
 
 Two fresh sets of pinned repositories used the same Codex executable, model
@@ -217,3 +248,147 @@ Only `bool_ext.go` and `bool_test.go` changed. This demonstrates the repaired
 path and restart with the earlier failure preserved; it involved a product fix
 and an explicit resume. It is a separate result, not a fifth PASS in the latest
 six-task evaluation or a zero-intervention release qualification.
+
+## Separate real performance acceptance
+
+The pinned go-humanize Commaf task ran autonomously on `52ab227`, reached
+READY, passed candidate-bound native tests and received an approving review
+with zero findings. The initial evaluation remained BLOCKED because the
+candidate-copy helper decoded the six-field projection as a full snapshot.
+Its held-out checks had not run. That original result is retained unchanged.
+
+After the strict projection-decoder correction, the same reviewed candidate
+`fbefecd4bed3303fa375d5a7f060167808d7b5ac58e85cff868b272c9d60671a`
+was independently captured and copied under the helper's read lease. Native
+tests, sampled output equivalence and all six allocation-budget cases passed
+on that copy, without changing the original candidate or calling the model
+again. The corrected helper was built from an explicitly dirty development
+tree; this is supplementary task acceptance, not final release qualification.
+
+The upstream Commaf benchmark used 136 B/op and four allocations before the
+task; five candidate samples used 24 B/op and one allocation. Candidate timing
+was 57.85–58.88 ns/op versus baseline 165.3–171.8 ns/op on the same host and
+toolchain. Load was uncontrolled, so timing is informational. Allocation and
+sampled semantic checks are the acceptance evidence. The task used ten completed
+runtime invocations, 1,714,158 input tokens and 20,825 output tokens; the actual
+provider request count remains unknown. This result is separate from the
+original six-task PR #5 comparison and proves neither parallel speedup nor
+exhaustive equivalence over every floating-point bit pattern.
+
+See [the sanitized receipt](../../evals/v1/results/commaf-performance-accepted-20261003.json)
+for the original evidence hashes, exact candidate/review identities and the
+supplementary native and held-out test results.
+
+## Combined Humanize serial and parallel task
+
+A harder combined task on the pinned `go-humanize` commit
+`a1b4e66b9a6d890e9e15e7091cf16c8032367d6e` required both validated underscore
+separators in `ParseBytes` and a bounded `Commaf` allocation reduction. Both
+runs requested `gpt-6-luna` at high effort. They used different graphs, and the
+parallel run was resumed after a product-source change, so their outcomes do
+not establish a causal total speedup.
+
+The serial run `afd7f6883150796cb748e2e206df9cc658969441db166e461ceee821a933c414`
+used the same initial product source `25dbde632f7d0af7d4b0e9328dc3e9c8750db166`
+and binary `d4364dcc60a6b8367edbf7c19f8245670ba66b884c808998e3ba9cb0604a001f`.
+It reached READY and PASS after one repair. Its graph plan was
+`6dfbaab9d60a6c86f9b56dcd46b069b8c8e07443166e8179930403cd6a573b47`, verification
+plan `76bd3980ec47fab5c46408279bbd98056e4792a5074285fb613e3687ded16ab6`, and its
+approved candidate was
+`6ad46c7ba7f26b2292b9a9f672d9e73757cfc818970dc5eb3505f6cfcf3d0338`. Native
+verification and the combined held-out acceptance passed with zero review
+findings. The native and held-out copies independently reported the same
+candidate and file identity (`601418ae13db19e4aee09954958179b1318d46fa6bc97002b73d7dede0de9cba`).
+The [serial measurement receipt](../../evals/v1/results/humanize-feature-performance-serial-20261003.json)
+retains its graph, writer intervals, token usage and acceptance bindings.
+
+The parallel run `b7a148ac6e886aa96d20b1a2ec4b0beda662bc696cd45b3a2c5e2c23a8150b98`
+was initially BLOCKED on product source `25dbde632f7d0af7d4b0e9328dc3e9c8750db166`
+(binary `d4364dcc60a6b8367edbf7c19f8245670ba66b884c808998e3ba9cb0604a001f`).
+Its initial graph plan was
+`1f897f745d2dd6b84a23d51fd56f45a2f1624e4b829c5daa19e21d0a4c7a819a`. It had two
+writer proposals but no confirmed file effect, native verification,
+or acceptance. That original BLOCKED evaluation is retained. Its initial
+parallel-writer graph recorded 89.460 seconds of controller-wrapper overlap;
+the serial run recorded zero overlap. These are wrapper intervals, not provider
+request durations or whole-task savings. The graphs differed, and the parallel
+run required a later source intervention and repair, so the overlap does not
+show a causal speedup.
+
+The same parallel run was safely resumed with the clean `58c6c115e9647f21e9caf9a8a16166c9e52bc5e6`
+build (binary SHA-256
+`2e210a93135e63c87afb468920366d91d0d5649fbbf122e2b29f06d5cbd17123`; candidate-copy
+helper SHA-256 `7a877b6358cfa2cf0a5baf30075fccd9906947a9cd75ddefba2b8d651180bdfd`).
+Its READY snapshot retained the same run ID and upstream pin. During the repair
+cycle, review rejected candidate `c8e620f3245aecbcd2869267e9c6d19a3f6ccb7d76c55c392e8cd3d553d9a8d8`:
+removing commas before validating underscores allowed malformed placements
+such as `1,_000` and `1_,000`. One repair addressed that finding. The resumed
+run reached READY with candidate
+`543ee0095c1b56a5306b3af4a959587b27132171f15c8181de355c0e1077e04f`, approved
+with zero findings under verification plan
+`3b33b458d1798584a27b5cd168078bc85a782564ef41c945b1e299447cb8ce7e`.
+
+A separate candidate-bound acceptance then passed native verification and both
+held-out oracles (`ParseBytesUnderscores` and `CommafPerformance`) using
+independent captures of the reviewed candidate. The sanitized
+[combined-task receipt](../../evals/v1/results/humanize-feature-performance-accepted-20261003.json)
+records the retained original BLOCKED evaluation, safe resume, review repair,
+copy bindings, both oracle results, and source/tool provenance. This separate
+completion does not rewrite the original BLOCKED result or change the historical
+six-task comparison (4/6 versus 1/6).
+
+This serial/parallel exercise is a bounded concurrency measurement, not a
+production mode adoption decision. It reports one successful serial run and a resumed parallel run with a source intervention; no same-graph serial replay or causal
+total-duration comparison was performed. Provider request counts remain
+unknown. The separate deterministic offline
+[scheduling-decision experiment](../../evals/v1/scheduling-decision-experiment/README.md)
+models static DAG priority; it is not this runtime measurement.
+
+## Open parallel fixture observation
+
+The full Go suite on `52ab227` failed once in
+`TestParallelGraphWritersV2AccessAndUsage`. Both fake runtime journals retained
+completed invocation results and both access-sidecar receipts were complete,
+but the controller had recorded only one access receipt before scheduler
+cancellation. A subsequent five-repeat run failed on its fifth iteration.
+Two bounded, test-only diagnostic-overlay batches then passed ten repetitions
+each without capturing an original adapter dispatch error. Those passes do
+not erase the failure or identify its cause.
+
+A later full integration suite on clean, stable source `58c6c115e9647f21e9caf9a8a16166c9e52bc5e6`
+passed `go test -p 1 ./... -count=1 -timeout 25m` with exit code 0. The retained
+[integration receipt](../../evals/v1/results/pr11-integration-58c6c11-20261003.json)
+binds the run; its stdout SHA-256 is
+`e5bda732b9d27165861c0d8fc8bedd6e1d50e5b75573faad806d0528fc7123c6`. This later
+pass does not reproduce or explain the earlier `52ab227` intermittent failure,
+nor establish its real-provider impact.
+
+No retry, timeout, recovery or production synchronization behavior was changed
+in response to the earlier failure. UNKNOWN is not converted to success and
+uncertain effects are not resent.
+
+## Generated-code decomposition failure
+
+The fresh numeric attempt on clean `de2f587` ran two initial writers and
+confirmed one combined file effect. It failed native checks twice because
+the generated Uint64 test expected `strconv.ParseUint` to accept `+42`.
+After two repairs the native check passed, but review still requested a
+regeneration-consistent Int64 implementation. The run stopped with its
+admitted repair budget exhausted; held-out acceptance was NOT RUN.
+
+The generator, template and directives were present in selected context.
+Neither initial implementation task owned the shared template, so the
+benchmark's asserted independence was incorrect for a complete,
+regeneration-stable feature. This was an ownership/decomposition failure,
+not evidence of missing repository context. The original run and candidate
+remain unchanged. See [the retained receipt](../../evals/v1/results/numeric-generated-code-de2f587-20261003.json).
+
+The numeric objective now explicitly requires shared-generator ownership.
+New planner recipes V5/V6 add that guidance without changing the input bytes
+of existing V3/V4 runs. A separate combined humanize task requires both the
+ParseBytes feature and Commaf performance improvement in distinct source/test
+groups; it is the next serial/parallel comparison, not an accepted result.
+Completed graph-writer proposals can now retain optional UTC dispatch
+intervals. These cover controller wrapper execution, not provider requests;
+old runs without intervals retain unknown overlap, and unusable local clock
+observations omit timing without blocking a valid proposal.

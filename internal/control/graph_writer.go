@@ -130,8 +130,40 @@ type GraphWriterHostEvent struct {
 // GraphWriterRecord retains one task's actual runtime result and independently
 // prepared proposal against the common frozen candidate.
 type GraphWriterRecord struct {
-	TaskID string       `json:"task_id"`
-	Writer WriterRecord `json:"writer"`
+	TaskID   string                     `json:"task_id"`
+	Writer   WriterRecord               `json:"writer"`
+	Dispatch *GraphWriterDispatchTiming `json:"dispatch,omitempty"`
+}
+
+// GraphWriterDispatchTiming records the controller wrapper interval for a
+// completed graph writer. It does not count provider requests or alter the
+// invocation identity; absent timing preserves historical records.
+type GraphWriterDispatchTiming struct {
+	StartedAt string `json:"started_at"`
+	EndedAt   string `json:"ended_at"`
+}
+
+func (t *GraphWriterDispatchTiming) validate() error {
+	if t == nil {
+		return nil
+	}
+	if !strings.HasSuffix(t.StartedAt, "Z") || !strings.HasSuffix(t.EndedAt, "Z") {
+		return errors.New("graph writer dispatch timing must be UTC")
+	}
+	startedAt, startErr := time.Parse(time.RFC3339Nano, t.StartedAt)
+	endedAt, endErr := time.Parse(time.RFC3339Nano, t.EndedAt)
+	if startErr != nil || endErr != nil || endedAt.Before(startedAt) {
+		return errors.New("invalid graph writer dispatch timing")
+	}
+	return nil
+}
+
+func observedGraphWriterDispatchTiming(startedAt, endedAt time.Time) *GraphWriterDispatchTiming {
+	timing := &GraphWriterDispatchTiming{StartedAt: startedAt.UTC().Format(time.RFC3339Nano), EndedAt: endedAt.UTC().Format(time.RFC3339Nano)}
+	if timing.validate() != nil {
+		return nil
+	}
+	return timing
 }
 
 // GraphWriterMember binds one aggregate member to its exact graph task and
@@ -256,6 +288,9 @@ func replayGraphWriterProposal(s *Snapshot, e journal.Event, seen map[string]boo
 	}
 	if record.TaskID == "" || s.Graph == nil || s.GraphWriterResults[record.TaskID].TaskID != "" {
 		return errors.New("graph writer proposal task missing or duplicated")
+	}
+	if err := record.Dispatch.validate(); err != nil {
+		return err
 	}
 	task, ok := s.Graph.Graph.Task(record.TaskID)
 	if !ok || task.Kind != "implementation" || task.Completed {
@@ -449,6 +484,7 @@ func buildGraphWriterBatch(s Snapshot, taskIDs []string) (GraphWriterBatchRecord
 		members = append(members, GraphWriterMember{TaskID: id, InvocationID: record.Writer.Invocation.ID})
 		changes = append(changes, record.Writer.Prepared.Proposal.Changes...)
 	}
+	sort.Slice(changes, func(i, j int) bool { return changes[i].Path < changes[j].Path })
 	if len(ids) == 2 {
 		first, ok1 := s.Graph.Graph.Task(ids[0])
 		second, ok2 := s.Graph.Graph.Task(ids[1])
@@ -555,8 +591,8 @@ func recordGraphWriterBatch(path string, batch GraphWriterBatchRecord) error {
 	return Append(path, "graph.writer.batch-proposed", batch)
 }
 
-func recordGraphWriterProposal(path string, taskID string, writer WriterRecord) error {
-	return Append(path, "graph.writer.proposed", GraphWriterRecord{TaskID: taskID, Writer: writer})
+func recordGraphWriterProposal(path string, taskID string, writer WriterRecord, dispatch *GraphWriterDispatchTiming) error {
+	return Append(path, "graph.writer.proposed", GraphWriterRecord{TaskID: taskID, Writer: writer, Dispatch: dispatch})
 }
 
 func graphWriterInvocation(s Snapshot, taskID string) (runtime.Invocation, error) {

@@ -98,6 +98,13 @@ func RunWriter(ctx context.Context, path string) (WriterRecord, error) {
 	if err != nil {
 		return WriterRecord{}, err
 	}
+	// This bounds controller wrapper execution only. It says nothing about
+	// provider request count, and is persisted only after a successful proposal
+	// so UNKNOWN dispatch behavior remains unchanged.
+	var startedAt time.Time
+	if taskID != "" {
+		startedAt = time.Now().UTC()
+	}
 	result, err := executeWriterForTask(ctx, path, s, expected, taskID)
 	if err != nil {
 		return WriterRecord{}, err
@@ -105,11 +112,12 @@ func RunWriter(ctx context.Context, path string) (WriterRecord, error) {
 	if taskID == "" {
 		return RecordWriterProposal(ctx, path, expected.Invocation, result)
 	}
+	endedAt := time.Now().UTC()
 	record, err := prepareGraphWriterFiles(ctx, path, taskID, expected.Invocation, result)
 	if err != nil {
 		return WriterRecord{}, err
 	}
-	if err := recordGraphWriterProposal(path, taskID, record); err != nil {
+	if err := recordGraphWriterProposal(path, taskID, record, observedGraphWriterDispatchTiming(startedAt, endedAt)); err != nil {
 		return WriterRecord{}, err
 	}
 	return record, nil

@@ -7,7 +7,7 @@
 //
 // Usage:
 //
-//	candidatecopy --snapshot <fabric inspect JSON> --expected-candidate <64hex> --destination <fresh absolute path>
+//	candidatecopy --snapshot <six-field snapshot projection JSON> --expected-candidate <64hex> --destination <fresh absolute path>
 package main
 
 import (
@@ -37,6 +37,21 @@ type output struct {
 	WorktreeID  string `json:"worktree_id"`
 }
 
+// candidateCopySnapshot is the bounded, authority-relevant projection emitted
+// by the v1 evaluation runner. Keep this schema separate from control.Snapshot:
+// the complete snapshot contains unrelated host and execution evidence that
+// must not be copied into the helper input. Required pointer fields deliberately
+// have no omitempty so canonical.Decode requires their explicit presence (null
+// is valid for review when no review record exists).
+type candidateCopySnapshot struct {
+	RunID        string                     `json:"run_id"`
+	State        string                     `json:"state"`
+	Workspace    *worktree.Binding          `json:"workspace"`
+	Candidate    *worktree.Candidate        `json:"candidate"`
+	Verification *control.VerificationState `json:"verification"`
+	Review       *control.ReviewRecord      `json:"review"`
+}
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "candidatecopy BLOCKED:", err)
@@ -46,7 +61,7 @@ func main() {
 
 func run(argv []string) error {
 	fset := flag.NewFlagSet("candidatecopy", flag.ContinueOnError)
-	snapshotPath := fset.String("snapshot", "", "actual fabric inspect JSON file")
+	snapshotPath := fset.String("snapshot", "", "six-field projection of actual fabric inspect JSON")
 	expected := fset.String("expected-candidate", "", "reviewed candidate digest (64 hex)")
 	destination := fset.String("destination", "", "fresh absolute external path")
 	if err := fset.Parse(argv); err != nil {
@@ -108,6 +123,7 @@ func run(argv []string) error {
 }
 
 func loadSnapshot(p string) (control.Snapshot, error) {
+	var projection candidateCopySnapshot
 	var snap control.Snapshot
 	info, err := os.Stat(p)
 	if err != nil {
@@ -123,8 +139,16 @@ func loadSnapshot(p string) (control.Snapshot, error) {
 	if len(raw) == 0 || len(raw) > 8<<20 {
 		return snap, errors.New("snapshot size out of bound")
 	}
-	if err := canonical.Decode(raw, &snap); err != nil {
+	if err := canonical.Decode(raw, &projection); err != nil {
 		return snap, fmt.Errorf("snapshot decode failed: %w", err)
+	}
+	snap = control.Snapshot{
+		RunID:        projection.RunID,
+		State:        projection.State,
+		Workspace:    projection.Workspace,
+		Candidate:    projection.Candidate,
+		Verification: projection.Verification,
+		Review:       projection.Review,
 	}
 	return snap, nil
 }

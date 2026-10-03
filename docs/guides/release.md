@@ -89,3 +89,46 @@ exact per-archive component identities (`fabric[.exe]`,
 `engorch-ri[.exe]`, unique name and path, hash match), the declared Rust
 target, and the artifact filename carrying the exact release version.
 It checks integrity only, and `release_qualified` must remain `false`.
+
+## Install and run a Windows bundle
+
+Keep `release.json`, `SHA256SUMS`, and the Windows ZIP together in the
+release directory. Obtain them from the same release or build them using
+the command above. The bundle includes Fabric and Rust repository
+intelligence; install the configured Codex runtime separately and sign in
+before starting a real task.
+
+```powershell
+$release = 'C:\tmp\fabric-rel-win'
+$install = "$env:LOCALAPPDATA\Fabric\v0.1.0"
+New-Item -ItemType Directory -Force (Split-Path $install) | Out-Null
+pwsh -File scripts/release-verify.ps1 -ReleaseDirectory $release
+pwsh -File scripts/install-fabric.ps1 -ReleaseDirectory $release -InstallDirectory $install
+$fabric = Join-Path $install 'fabric.exe'
+& $fabric version
+# In the repository you want Fabric to change:
+& $fabric init --codex 'C:\tools\codex.exe' --model gpt-6-luna --effort high
+& $fabric run --autonomous 'Implement the requested feature and add regression tests'
+& $fabric status
+& $fabric inspect
+& $fabric diff
+```
+
+Replace the runtime path and objective with your installed runtime and task.
+The install target must not already exist. The installer verifies archive
+and component hashes and refuses to merge files into an existing installation.
+Use the full executable path as shown, or add that version's directory to
+your user PATH. See [autonomous mode](autonomous-task.md) for configuration,
+verification results and blocked-run diagnostics.
+
+## Upgrade without overwriting project state
+
+Install a newer verified bundle into a new version directory beside the old
+one, then select its `fabric.exe` explicitly or update your user PATH. Keep
+the old directory until the new version has passed your checks. Installation
+does not replace repository `.harness` configuration, journals or candidate
+worktrees. Do not reinitialize an existing project as an upgrade step.
+Before resuming a saved run, inspect it with the selected version and follow
+its reported compatibility or blocked-state instructions; an unknown external
+effect is not permission to rerun the task. Removing an old executable
+directory is optional and does not require deleting project evidence.

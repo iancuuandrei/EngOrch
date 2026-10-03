@@ -19,6 +19,8 @@ unproven; see the real-repository evaluation report.
   (graph still applies, but without overlap). `--max-repairs` remains 0..8.
 - `--parallel-writers` is an experimental opt-in, off by default; see its
   separate contract and pending acceptance below.
+- [Configured model routing](model-routing.md) can select admitted profiles
+  using role, final input size and accepted failures. It remains optional.
 - `--prepare-only` accepts the graph, confirms the isolated workspace and
   pristine candidate, and returns `status: PREPARED` before explorer or writer
   dispatch. The durable run remains `IMPLEMENTING`; continue that exact run
@@ -26,13 +28,13 @@ unproven; see the real-repository evaluation report.
 - Empty `Context` and `GraphVersion 0 / MaxParallel 0` preserve the legacy
   sequential workflow byte-for-byte; `canonical.Hash("harness.run.v1")` and
   `canonical.Hash("harness.execution-policy.v1")` are unchanged for old runs.
-- `Config.PlannerContract` may be `""`, `plan-v1` (legacy) or `plan-graph-v1` / `plan-graph-v2` / `plan-graph-v3` / `plan-graph-v4`
+- `Config.PlannerContract` may be `""`, `plan-v1` (legacy) or `plan-graph-v1` through `plan-graph-v6`.
   (strict autonomous graph). Empty retains historical raw planner input
   identity.
 
 ## Planner contract
 
-- Default new autonomous CLI runs freeze `plan-graph-v3`; the parallel-writer opt-in freezes `plan-graph-v4`. Both include the exact JSON schema in the invocation and Codex request. Legacy graph invocation recipes are unchanged. Evidence entries require `kind` and `description`; root scope `.` is allowed, but writes require concrete paths. Strict wire objects include every property; empty parent IDs and empty dependency/write arrays represent absent values. Initial implementation scope also bounds subsequent repair designs.
+- Default new autonomous CLI runs freeze `plan-graph-v5`; the parallel-writer opt-in freezes `plan-graph-v6`. These recipes include generated-source ownership guidance and the exact JSON schema in the invocation and Codex request. Earlier recipes, including V3/V4, retain their original input bytes so existing journals remain inspectable. Evidence entries require `kind` and `description`; root scope `.` is allowed, but writes require concrete paths. Strict wire objects include every property; empty parent IDs and empty dependency/write arrays represent absent values. Initial implementation scope also bounds subsequent repair designs.
 
 - `plan-graph-v1` instructs planners to return only the engineeringplan v1
   strict JSON schema (version, mode, summary, tasks). `completed` and
@@ -72,7 +74,7 @@ unproven; see the real-repository evaluation report.
   completed results preserved; UNKNOWN blocks retry and revision.
 - Repair/review failure in historical graph policies appends the original
   scoped implementation/verification/review extension byte-for-byte. New CLI
-  runs bind `RepairPlanningVersion: 1`, with v3 by default or v4 for the parallel
+  runs bind `RepairPlanningVersion: 1`, with v5 by default or v6 for the parallel
   writer opt-in: each repair slot
   first adds a read-only design task bound to the exact failed gate and current
   candidate. Its recorded `Exploration.Paths` may fill only that never-started
@@ -95,8 +97,9 @@ unproven; see the real-repository evaluation report.
 ## Experimental parallel implementation opt-in
 
 `fabric run --autonomous --parallel-writers "OBJECTIVE"` selects the new
-`plan-graph-v4` recipe and immutable `ParallelImplementationVersion: 1`.
-The default remains the v3 singleton writer path. The opt-in requires bounded
+`plan-graph-v6` recipe and immutable `ParallelImplementationVersion: 1`.
+Existing V4 runs retain their original recipe.
+The default remains the v5 singleton writer path. The opt-in requires bounded
 context, graph execution, repair planning, the anchored-edits writer contract,
 and the JSON-v2 explorer contract. Unsupported writer routes reject before run
 creation; the first production route is Codex.

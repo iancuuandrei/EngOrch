@@ -1,0 +1,36 @@
+{
+  "task_id": "go-humanize-feature-performance",
+  "source_sha": "a1b4e66b9a6d890e9e15e7091cf16c8032367d6e",
+  "prepared_run_id": "20261003T060714Z-053d57ed",
+  "product_head_at_prepare": "5c0ed92edb6b44f4dcc1d69e98a2fb97bf337ced",
+  "product_tree_dirty_at_prepare": true,
+  "tested_runner_sha256": "cbe7a4e3672f1f99c7d6b4c3f153e3efe7f31e6e8227d14cf7025d5f79f820ec",
+  "baseline_native": "PASS",
+  "native_argv": "go test -count=1 ./...",
+  "native_scope": "full",
+  "heldout": "EXPECTED_FAIL",
+  "heldout_classification": "targeted_assertion",
+  "required_oracles": [
+    "ParseBytesUnderscores",
+    "CommafPerformance"
+  ],
+  "output_equivalence": "PASS: no CommafOutputEquivalence assertion failures",
+  "heldout_stdout_sha256": "39efe9d2b66b0a76901a1182beb14c5fb719b6246264eb3011c588d2dd18ded9",
+  "native_stdout_sha256": "7fb4d96fa397a4c6bb1b67e95b1e471fca75f9c0d35c40d6bb505077998bde7f",
+  "composition": "unchanged original fixtures with temporary entry point renames and exact-selector wrapper requiring both",
+  "fixtures": [
+    {
+      "path": "evals/v1/heldout/humanize.heldout_test.go",
+      "sha256": "8402e2584a029fcca0a1751be2445d476947ae4e773a2e6a81b0ece058a480ff"
+    },
+    {
+      "path": "evals/v1/heldout/commaf_performance.heldout_test.go",
+      "sha256": "e7788794290324db9f276b1c95ae1afd2cec4da70ad1da084f639b7661d3fd6a"
+    }
+  ],
+  "go_version": "go version go1.27.1 windows/amd64",
+  "provider_calls": 0,
+  "fabric_task": "NOT RUN",
+  "release_qualified": false,
+  "note": "Actual Prepare ran both oracles on a disposable baseline; task checkout remains free of held-out sources. Later runner change only makes inapplicable Windows-exclusion metadata null; this record binds the tested runner bytes above. Earlier standalone-combined-fixture preflight is preserved separately."
+}

@@ -1,6 +1,6 @@
 # Fabric v1 real-repository evaluation: pinned custom tasks
 
-This suite defines eight custom real-repository tasks, each pinned to an
+This suite defines ten custom real-repository tasks, each pinned to an
 audited upstream commit. It is not a SWE-bench score and it is not a general
 full-v1 proof; it reports per-task behavioral acceptance on the selected
 repositories only. `manifest.json` is the authoritative source, commit,
@@ -17,13 +17,57 @@ was blocked before file application because a proposed source anchor did not
 match the current file. Actual Fabric completion is still pending.
 
 `go-atomic-numeric-text` uses the same pinned MIT go-atomic source for two
-independent text-encoding API extensions: Int64 and Uint64. Native baseline
+text-encoding API extensions: Int64 and Uint64. Both wrappers share a generator
+template; a regeneration-stable implementation requires explicit shared
+ownership or dependencies. Their distinct filenames do not establish safe
+independence. Native baseline
 tests pass; the held-out baseline builds and fails runtime interface
 assertions for both missing APIs. The [preflight receipt](results/atomic-numeric-preflight-20261003.json)
-records zero provider calls. This task is intended for serial/parallel
-qualification, separately from the original six-task PR #5 comparison.
+records zero provider calls. The earlier parallel attempt used an incorrect
+independence assumption and exhausted two repairs with native PASS but review
+changes requested for generated-source drift. See
+[the retained failure](results/numeric-generated-code-de2f587-20261003.json).
+The task now explicitly requires generator consistency; it is not the selected
+serial/parallel qualification case.
 Its Windows native check has the same narrow NocmpIntegration exclusion as
 go-atomic; its held-out check never excludes a test.
+
+`go-humanize-commaf-performance` measures a practical formatting improvement
+on the pinned MIT go-humanize repository. The pristine full upstream suite
+passes. On Go 1.27.1, ordinary `Commaf` inputs use four allocations per call;
+finite extremes use up to eleven. Acceptance preserves exact output on
+boundary values and deterministic float bit patterns and requires at most
+two allocations per call on the documented finite representatives. Allocation
+counts are the performance gate; benchmark timings are informational. The
+[preflight receipt](results/commaf-performance-preflight-20261003.json)
+records full native PASS, output-equivalence PASS and the targeted allocation
+baseline failure, with zero provider calls.
+This task adds no successful result to the original six-task comparison.
+
+The [separate Commaf acceptance](results/commaf-performance-accepted-20261003.json)
+passed native, review and supplementary candidate-bound held-out checks;
+the original evaluation's copy-decoder BLOCKED outcome remains preserved.
+
+`go-humanize-feature-performance` combines the ParseBytes separator feature
+with the Commaf allocation task on the same pinned repository. The source/test
+ownership groups are `bytes.go`/`bytes_test.go` and `comma.go`/`comma_test.go`.
+Both behavioral and performance oracles are mandatory. The planner must still
+verify independence; the task does not force unsafe parallel execution. Use
+fresh serial and parallel arms with the identical objective, pins, binary,
+model, runtime and held-out checks. Adding this task is not accepted parallel
+execution or a speedup claim.
+The [composed preflight](results/humanize-composed-preflight-20261003.json)
+records full native baseline PASS and compiled, targeted baseline failures for
+both required improvements, with zero provider calls.
+Prepare and acceptance reuse the two unchanged original fixtures through an
+exact-selector wrapper that invokes both. The earlier
+[standalone fixture preflight](results/humanize-feature-performance-preflight-20261003.json)
+is retained as historical evidence for that previous fixture implementation.
+
+The portable [scheduling decision experiment](scheduling-decision-experiment/README.md)
+compares the actual nonparked ready-task priority with estimated critical-path
+priority and demonstrates an unsafe evidence-stopping counterexample. These
+are modeled outcomes, not real runtime gains; neither heuristic is adopted.
 
 Held-out acceptance sources live in `evals/v1/heldout/` and the classifier in
 `evals/v1/harness/Classify-CheckOutput.ps1` with regression fixtures under
@@ -44,6 +88,19 @@ assertions still run; no static-analysis PASS is claimed for that task.
 `-NativeBuildReceiptPath` optionally supplies an exact binary build receipt;
 the runner validates it when explicitly supplied and never discovers an old
 receipt from a machine-specific artifact directory.
+
+The selected `-GoExe` is also bound to the environment of each Fabric child:
+its directory is temporarily placed first in PATH, and `go` must resolve to
+that exact selected executable before the command starts. The caller's PATH
+is restored after success or failure. This keeps the manifest's verification
+argv unchanged while making its `go` executable available to Fabric. Go
+identity and child-resolution policy are recorded in evaluation provenance.
+
+Full inspect snapshots remain in the task evidence and supply the evaluation
+gate. The acceptance copier receives a separate bounded snapshot projection
+with the unchanged run/state/workspace/candidate/verification/review fields;
+unrelated host context stays in the full artifact. Both artifacts are hashed.
+Canonical event and copier input limits remain enforced.
 
 - `scripts/evaluate-v1.ps1 -Action Prepare` prepares a unique run
   directory with fresh pinned detached clones. Fabric config
@@ -97,7 +154,11 @@ receipt from a machine-specific artifact directory.
   registry and bound to the run; there is no task-checkout fallback.
   Repair accounting uses `repair_attempts` (absent stays null); the review
   `result.output` JSON verdict is parsed for decision/findings with bound
-  IDs. Hidden acceptance tests run only in a disposable byte-copy of the
+  IDs. Native and hidden gates start from independently captured disposable
+  copies. The hidden-gate copy is captured after native tests finish, so native
+  test writes cannot become the hidden gate's input. Each helper observation
+  must match the same candidate, workspace, file hash and file count; separate
+  paths and observations are retained. Hidden acceptance tests run only in a byte-copy of the
   finished candidate by the explicit `-CandidateCopyExe` Go helper under
   a read lease. The helper binds the live candidate to both the review and
   verification plan, captures exact file bytes and modes, and rejects
@@ -167,3 +228,11 @@ times, and one merged file effect. A single-writer plan can be a valid product
 result but cannot establish parallel implementation benefit. Compare elapsed
 time and token usage only within the accepted, equivalently scoped pair;
 unknown provider request counts or monetary costs remain unknown.
+
+When present, `graph_writer_results[TASK].dispatch.started_at` and `.ended_at`
+record the completed writer's controller wrapper interval, including runtime
+setup. They permit direct overlap measurement for new runs; they are not
+provider-request timestamps. Older runs and unusable clock observations omit
+the fields. Do not reconstruct their overlap from journal ordering or requested
+worker limits. Retain end-to-end evaluation time, repairs and token usage
+separately when comparing accepted serial and parallel arms.
