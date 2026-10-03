@@ -79,12 +79,22 @@ param(
     [string]$PR5BaselineScript,
     [string]$CandidateCopyExe,
     [string]$NativeBuildReceiptPath,
+    [ValidateRange(0, 10000000)][long]$AutoCompactTokenLimit = 0,
     [string]$RunRoot = 'D:\dev\Fabric-v1-eval-runs',
     [string[]]$TaskIds,
     [string]$RunId
 )
 
 $ErrorActionPreference = 'Stop'
+function Assert-AutoCompactRunnerBinding([string]$Mode, [long]$Limit, [bool]$Explicit) {
+    if ($Explicit -and ($Limit -le 0 -or $Limit -gt 10000000)) {
+        throw 'AutoCompactTokenLimit must be between 1 and 10000000 when supplied.'
+    }
+    if ($Mode -eq 'PR5Matched' -and $Explicit) {
+        throw 'AutoCompactTokenLimit requires Native mode; PR5Matched retains its original invocation.'
+    }
+}
+Assert-AutoCompactRunnerBinding $EvalMode $AutoCompactTokenLimit ([bool]$PSBoundParameters.ContainsKey('AutoCompactTokenLimit'))
 function Assert-IsolatedRunnerOptionShape([bool]$Enabled, [string]$PolicyPath, [bool]$Parallel, [string]$Mode, [int]$ParallelLimit) {
     if ($Enabled -ne (-not [string]::IsNullOrWhiteSpace($PolicyPath))) {
         throw 'IsolatedWriters and IsolationPolicyPath must be supplied together.'
@@ -156,8 +166,9 @@ function Get-NativeInitArgs([string]$TaskPath, [string]$RuntimePath, [string]$Wr
     return $nativeArgs
 }
 
-function Get-NativeRunArgs([string]$TaskPath, [string]$Objective, [bool]$EnableParallelWriters, [int]$ParallelLimit, [string]$PlannerContext = '', [string]$PromptRecipe = '', [string]$PlannerContextRIExecutable = '', [string]$PlannerContextRIExecutableSHA256 = '', [bool]$EnableIsolatedWriters = $false, [string]$IsolationPolicyPath = '') {
+function Get-NativeRunArgs([string]$TaskPath, [string]$Objective, [bool]$EnableParallelWriters, [int]$ParallelLimit, [string]$PlannerContext = '', [string]$PromptRecipe = '', [string]$PlannerContextRIExecutable = '', [string]$PlannerContextRIExecutableSHA256 = '', [bool]$EnableIsolatedWriters = $false, [string]$IsolationPolicyPath = '', [long]$AutoCompactTokenLimit = 0) {
     if ($ParallelLimit -lt 0 -or $ParallelLimit -gt 8) { throw 'Scheduler override must be 0 (default) or 1..8.' }
+    if ($AutoCompactTokenLimit -lt 0 -or $AutoCompactTokenLimit -gt 10000000) { throw 'AutoCompactTokenLimit must be 0 (omitted) or 1..10000000.' }
     if ($PromptRecipe -notin @('', 'cache-prefix-v1')) { throw 'Unsupported prompt recipe.' }
     Assert-PlannerContextBindingShape $PlannerContext $PlannerContextRIExecutable $PlannerContextRIExecutableSHA256
     if ($EnableParallelWriters -and $EnableIsolatedWriters) { throw 'ParallelWriters and IsolatedWriters are mutually exclusive.' }
@@ -172,8 +183,33 @@ function Get-NativeRunArgs([string]$TaskPath, [string]$Objective, [bool]$EnableP
     if ($EnableParallelWriters) { $nativeArgs += '--parallel-writers' }
     if ($EnableIsolatedWriters) { $nativeArgs += @('--isolated-writers', '--isolation-policy', $IsolationPolicyPath) }
     if ($ParallelLimit -ne 0) { $nativeArgs += @('--max-parallel', [string]$ParallelLimit) }
+    if ($AutoCompactTokenLimit -gt 0) { $nativeArgs += @('--auto-compact-token-limit', [string]$AutoCompactTokenLimit) }
     $nativeArgs += $Objective
     return $nativeArgs
+}
+
+function Assert-AutoCompactPreparedBinding($Prior, [long]$Limit) {
+    $preparedLimit = 0L
+    if ($null -ne $Prior.PSObject.Properties['auto_compact_token_limit_requested'] -and $null -ne $Prior.auto_compact_token_limit_requested) {
+        $preparedLimit = [long]$Prior.auto_compact_token_limit_requested
+    }
+    if ($preparedLimit -ne $Limit) {
+        throw 'AutoCompactTokenLimit must match the treatment recorded by the prepared run.'
+    }
+}
+
+function Assert-AutoCompactObserved($Snapshot, [long]$Limit) {
+    $execution = $Snapshot.creation.execution
+    $observed = $null
+    if ($null -ne $execution) { $observed = $execution.codex_auto_compact }
+    if ($Limit -eq 0) {
+        if ($null -ne $observed) { throw 'Inspected run unexpectedly enables native Codex automatic compaction.' }
+        return $null
+    }
+    if ($null -eq $observed -or $observed.version -ne 1 -or $observed.token_limit -ne $Limit) {
+        throw 'Inspected run auto-compaction option does not match the requested Native treatment.'
+    }
+    return $observed
 }
 
 function Get-GitText([string]$Path, [string[]]$GitArgs) {
@@ -891,6 +927,7 @@ if ($Action -eq 'Prepare') {
             planner_context_ri_executable_requested = if (Test-GoSourceContextMode $PlannerContext) { $PlannerContextRIExecutable } else { $null }
             planner_context_ri_executable_sha256_requested = if (Test-GoSourceContextMode $PlannerContext) { $PlannerContextRIExecutableSHA256 } else { $null }
             prompt_recipe_requested = $PromptRecipe
+            auto_compact_token_limit_requested = if ($AutoCompactTokenLimit -gt 0) { $AutoCompactTokenLimit } else { $null }
             provider_calls         = 0
             input_tokens           = $null
             output_tokens          = $null
@@ -925,6 +962,7 @@ if ($Action -eq 'Prepare') {
         planner_context_ri_executable_sha256_requested = if (Test-GoSourceContextMode $PlannerContext) { $PlannerContextRIExecutableSHA256 } else { $null }
         planner_context_ri_executable_sha256_verified = if (Test-GoSourceContextMode $PlannerContext) { $actualPlannerContextRIExecutableSHA256 } else { $null }
         prompt_recipe_requested  = $PromptRecipe
+        auto_compact_token_limit_requested = if ($AutoCompactTokenLimit -gt 0) { $AutoCompactTokenLimit } else { $null }
         created_utc                   = [DateTime]::UtcNow.ToString('o')
         product_head                  = $productHead
         product_tree_dirty_at_prepare = $productDirty
@@ -996,6 +1034,7 @@ $runJsonPath = Join-Path $runPath 'run.json'
 if (-not (Test-Path -LiteralPath $runJsonPath)) { throw "Prepared run not found: $runJsonPath. Prepare first with a new run nonce." }
 $priorRunJsonSha = (Get-FileSha256 $runJsonPath).ToLowerInvariant()
 $prior = Get-Content -Raw -LiteralPath $runJsonPath | ConvertFrom-Json
+Assert-AutoCompactPreparedBinding $prior $AutoCompactTokenLimit
 $preparedPlannerContext = [string]$prior.planner_context_requested
 if ($preparedPlannerContext -ne $PlannerContext) {
     throw 'PlannerContext must match the treatment recorded by the prepared run.'
@@ -1059,6 +1098,7 @@ foreach ($entry in $entries) {
         planner_context_ri_executable_requested = if (Test-GoSourceContextMode $PlannerContext) { $PlannerContextRIExecutable } else { $null }
         planner_context_ri_executable_sha256_requested = if (Test-GoSourceContextMode $PlannerContext) { $PlannerContextRIExecutableSHA256 } else { $null }
         prompt_recipe_requested = $PromptRecipe
+        auto_compact_token_limit_requested = if ($AutoCompactTokenLimit -gt 0) { $AutoCompactTokenLimit } else { $null }
     }
     if ($IsolatedWriters) {
         $result.isolated_writers_requested = $true
@@ -1094,9 +1134,10 @@ foreach ($entry in $entries) {
             $result.verification_config_sha256 = $verPolicy.ConfigSha
             $result.native_test_scope = $verPolicy.Scope
             Set-Content -NoNewline -Encoding utf8 (Join-Path $taskOutDir 'verification-argv.log') $verPolicy.ArgvText
-            $runArgs = @(Get-NativeRunArgs $taskPath $entry.task ([bool]$ParallelWriters) $MaxParallel $PlannerContext $PromptRecipe $PlannerContextRIExecutable $PlannerContextRIExecutableSHA256 ([bool]$IsolatedWriters) $isolationPolicyBinding.Path)
+            $runArgs = @(Get-NativeRunArgs $taskPath $entry.task ([bool]$ParallelWriters) $MaxParallel $PlannerContext $PromptRecipe $PlannerContextRIExecutable $PlannerContextRIExecutableSHA256 ([bool]$IsolatedWriters) $isolationPolicyBinding.Path $AutoCompactTokenLimit)
             $result.parallel_writers_requested = [bool]$ParallelWriters
             if ($IsolatedWriters) { $result.isolated_writers_requested = $true }
+            if ($AutoCompactTokenLimit -gt 0) { $result.auto_compact_token_limit_requested = $AutoCompactTokenLimit }
             $result.writer_edit_validation_requested = [bool]$ValidateWriterEdits
             $result.max_parallel_requested = if ($MaxParallel -eq 0) { $null } else { $MaxParallel }
             Invoke-WithPinnedGo $GoExe {
@@ -1139,6 +1180,8 @@ foreach ($entry in $entries) {
             $observedPromptRecipe = [string]$snap.creation.execution.prompt_recipe
             $result.prompt_recipe_observed = $observedPromptRecipe
             if ($observedPromptRecipe -ne $PromptRecipe) { throw 'Inspected run prompt_recipe does not match the requested treatment.' }
+            $autoCompactObserved = Assert-AutoCompactObserved $snap $AutoCompactTokenLimit
+            $result.auto_compact_token_limit_observed = if ($null -ne $autoCompactObserved) { $autoCompactObserved.token_limit } else { $null }
             if ($IsolatedWriters) {
                 $expectedStateRoot = [IO.Path]::GetFullPath((Join-Path $taskOutDir 'controller-state'))
                 if ([string]$snap.creation.config.controller_state_root -cne $expectedStateRoot) {
@@ -1451,6 +1494,7 @@ $evalRecord = [ordered]@{
     planner_context_ri_executable_sha256_requested = if (Test-GoSourceContextMode $PlannerContext) { $PlannerContextRIExecutableSHA256 } else { $null }
     planner_context_ri_executable_sha256_verified = if (Test-GoSourceContextMode $PlannerContext) { $actualPlannerContextRIExecutableSHA256 } else { $null }
     prompt_recipe_requested = $PromptRecipe
+    auto_compact_token_limit_requested = if ($AutoCompactTokenLimit -gt 0) { $AutoCompactTokenLimit } else { $null }
     parallel_writers_requested = [bool]$ParallelWriters
     writer_edit_validation_requested = [bool]$ValidateWriterEdits
     max_parallel_requested = if ($MaxParallel -eq 0) { $null } else { $MaxParallel }

@@ -97,7 +97,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	plannerContext := fs.String("planner-context", "", "planner evidence mode: source-bounded-v1 or pinned go-source-context-v1/go-source-context-v2/go-contract-context-v1")
 	plannerContextRIExecutable := fs.String("planner-context-ri-executable", "", "absolute path to the pinned Go-source RI parser (required for either go-source-context mode)")
 	plannerContextRIExecutableSHA256 := fs.String("planner-context-ri-executable-sha256", "", "lowercase SHA-256 of the pinned Go-source RI parser")
-	plannerContextParseCache := fs.Bool("planner-context-parse-cache", false, "reuse local Go parser facts for go-source-context-v2 only")
+	plannerContextParseCache := fs.Bool("planner-context-parse-cache", false, "reuse local Go parser facts for go-source-context-v2 or go-contract-context-v1")
 	promptRecipe := fs.String("prompt-recipe", "", "opt in to cache-prefix-v1 prompt ordering")
 	autoCompactTokenLimit := fs.Int64("auto-compact-token-limit", 0, "opt in to Codex automatic in-turn compaction at this positive token threshold")
 	prepareOnly := fs.Bool("prepare-only", false, "accept the graph and confirm its workspace, then return before explorer or writer dispatch")
@@ -173,8 +173,8 @@ func validatePlannerParseCacheVersion(plannerContext string, version int) error 
 	if version == 0 {
 		return nil
 	}
-	if version != 1 || plannerContext != autonomousPlannerContextGoSourceV2 {
-		return errors.New("planner-context-parse-cache requires go-source-context-v2")
+	if version != 1 || plannerContext != autonomousPlannerContextGoSourceV2 && plannerContext != autonomousPlannerContextGoContractV1 {
+		return errors.New("planner-context-parse-cache requires go-source-context-v2 or go-contract-context-v1")
 	}
 	return nil
 }

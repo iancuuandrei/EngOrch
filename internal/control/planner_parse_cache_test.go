@@ -15,7 +15,7 @@ import (
 	"harness.local/engorch/internal/repository"
 )
 
-func TestPlannerParseCachePolicyIsOptInAndV2Only(t *testing.T) {
+func TestPlannerParseCachePolicyIsOptInAndContextBound(t *testing.T) {
 	legacy := ExecutionPolicy{Mode: "autonomous-v1"}
 	legacyBytes, err := canonical.Bytes(legacy)
 	if err != nil {
@@ -39,6 +39,11 @@ func TestPlannerParseCachePolicyIsOptInAndV2Only(t *testing.T) {
 	opted.PlannerParseCacheVersion = 1
 	if err := opted.Validate(); err != nil {
 		t.Fatalf("v2 cache opt-in rejected: %v", err)
+	}
+	contract := opted
+	contract.PlannerContext = plannerContextGoContractV1
+	if err := contract.Validate(); err != nil {
+		t.Fatalf("contract cache opt-in rejected: %v", err)
 	}
 	for name, candidate := range map[string]ExecutionPolicy{
 		"unknown version": func() ExecutionPolicy { p := opted; p.PlannerParseCacheVersion = 2; return p }(),
@@ -133,6 +138,12 @@ func TestPlannerParseCacheCreatesMissingUserCacheDirectorySafely(t *testing.T) {
 }
 
 func TestPlannerParseCacheOptInPreservesPlannerIdentityAndReplayDoesNotRequery(t *testing.T) {
+	for _, mode := range []string{plannerContextGoSourceV2, plannerContextGoContractV1} {
+		t.Run(mode, func(t *testing.T) { testPlannerParseCacheIdentity(t, mode) })
+	}
+}
+
+func testPlannerParseCacheIdentity(t *testing.T, mode string) {
 	executable := os.Getenv("ENGORCH_RI_BINARY")
 	if executable == "" {
 		t.Skip("ENGORCH_RI_BINARY is required for local RI fixture")
@@ -152,13 +163,14 @@ func TestPlannerParseCacheOptInPreservesPlannerIdentityAndReplayDoesNotRequery(t
 
 	c := autonomousCreation(t, 0)
 	c.Objective = "Review the bounded parser cache fixture and generated helpers"
-	c.Execution.PlannerContext = plannerContextGoSourceV2
+	c.Execution.PlannerContext = mode
 	c.Execution.PlannerContextRIExecutable = filepath.Clean(executable)
 	c.Execution.PlannerContextRIExecutableSHA256 = producer
 	c.Execution.PlannerParseCacheVersion = 1
 	root := c.Repository.Root
 	autonomousGitInit(t, root)
 	files := map[string]string{
+		"go.mod":            "module example.test/cache\n\ngo 1.25\n",
 		"pkg/value.go":      "package pkg\n\nfunc Value() int { return 7 }\n",
 		"pkg/value_test.go": "package pkg\n\nfunc ExampleValue() { _ = Value() }\n",
 	}
@@ -171,7 +183,7 @@ func TestPlannerParseCacheOptInPreservesPlannerIdentityAndReplayDoesNotRequery(t
 			t.Fatal(err)
 		}
 	}
-	for _, args := range [][]string{{"add", "pkg"}, {"-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "Go parse-cache fixture"}} {
+	for _, args := range [][]string{{"add", "."}, {"-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "Go parse-cache fixture"}} {
 		if out, err := autonomousGitCmd(t, root, args); err != nil {
 			t.Fatal(err, string(out))
 		}
@@ -188,8 +200,8 @@ func TestPlannerParseCacheOptInPreservesPlannerIdentityAndReplayDoesNotRequery(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cold.Graph == nil || cold.Context == nil || cold.Unavailable != "" {
-		t.Fatalf("cache-enabled admission did not produce Go context: %+v", cold)
+	if cold.Graph == nil || cold.Unavailable != "" || mode == plannerContextGoSourceV2 && cold.Context == nil || mode == plannerContextGoContractV1 && cold.ContractContext == nil {
+		t.Fatal("cache-enabled admission did not produce the selected evidence")
 	}
 	cacheDir, err := ensurePlannerParseCacheDir(c.Repository, producer)
 	if err != nil {
@@ -197,6 +209,19 @@ func TestPlannerParseCacheOptInPreservesPlannerIdentityAndReplayDoesNotRequery(t
 	}
 	if entries, err := os.ReadDir(cacheDir); err != nil || len(entries) == 0 {
 		t.Fatalf("RI cache was not populated: entries=%d err=%v", len(entries), err)
+	}
+
+	uncachedCreation := c
+	uncachedCreation.Execution = &ExecutionPolicy{}
+	*uncachedCreation.Execution = *c.Execution
+	uncachedCreation.Execution.PlannerParseCacheVersion = 0
+	uncachedPath := filepath.Join(t.TempDir(), "uncached.jsonl")
+	if err := Append(uncachedPath, "run.created", uncachedCreation); err != nil {
+		t.Fatal(err)
+	}
+	uncached, err := AdmitPlannerGoContext(context.Background(), uncachedPath)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	secondPath := filepath.Join(t.TempDir(), "warm.jsonl")
@@ -207,14 +232,18 @@ func TestPlannerParseCacheOptInPreservesPlannerIdentityAndReplayDoesNotRequery(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cold.RecordID != warm.RecordID || cold.Graph.Digest != warm.Graph.Digest || cold.Context.Digest != warm.Context.Digest {
-		t.Fatal("warm local parser cache changed durable planner evidence identity")
+	if uncached.RecordID != cold.RecordID || cold.RecordID != warm.RecordID || uncached.Graph.Digest != cold.Graph.Digest || cold.Graph.Digest != warm.Graph.Digest || plannerCacheEvidenceDigest(t, uncached) != plannerCacheEvidenceDigest(t, cold) || plannerCacheEvidenceDigest(t, cold) != plannerCacheEvidenceDigest(t, warm) {
+		t.Fatal("cache mode changed durable planner evidence identity")
 	}
 	coldSnapshot, err := Inspect(firstPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	warmSnapshot, err := Inspect(secondPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uncachedSnapshot, err := Inspect(uncachedPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,8 +255,12 @@ func TestPlannerParseCacheOptInPreservesPlannerIdentityAndReplayDoesNotRequery(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if coldInvocation.Input != warmInvocation.Input {
-		t.Fatal("cache path or hit/miss observations changed planner prompt bytes")
+	uncachedInvocation, err := plannerInvocationForSnapshot(uncachedSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uncachedInvocation.Input != coldInvocation.Input || coldInvocation.Input != warmInvocation.Input {
+		t.Fatal("cache mode changed planner prompt bytes")
 	}
 	recordBytes, err := json.Marshal(cold)
 	if err != nil {
@@ -265,4 +298,16 @@ func TestPlannerParseCacheOptInPreservesPlannerIdentityAndReplayDoesNotRequery(t
 	if _, err := os.Stat(cacheDir); !os.IsNotExist(err) {
 		t.Fatalf("planner context replay re-created or inspected the parse cache: %v", err)
 	}
+}
+
+func plannerCacheEvidenceDigest(t *testing.T, record PlannerGoContextRecord) string {
+	t.Helper()
+	if record.Context != nil {
+		return record.Context.Digest
+	}
+	if record.ContractContext != nil {
+		return record.ContractContext.Digest
+	}
+	t.Fatal("planner cache fixture has no context evidence")
+	return ""
 }

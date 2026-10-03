@@ -20,6 +20,11 @@ and binds the committed Git objects, and graph construction, candidate file
 effects, native checks, review, and final acceptance are not skipped. Cache
 hit/parse counters are observability fields; they do not change graph identity.
 
+Native autonomous runs may opt in with `--planner-context-parse-cache` for
+`go-source-context-v2` or `go-contract-context-v1`. The contract mode keeps its
+v4 record, contract digest, prompt, and replay behavior unchanged; it only
+reuses validated file facts before deterministic graph and contract compilation.
+
 ## Local benchmark
 
 Run the bounded fixture benchmark with the pinned Go and RI executable:

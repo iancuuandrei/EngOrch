@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory = $true)][string]$HumanizeRepository,
     [Parameter(Mandatory = $true)][string]$GoExecutable,
     [Parameter(Mandatory = $true)][string]$OutputPath,
-    [ValidateRange(1, 10)][int]$Count = 5
+    [ValidateRange(1, 10)][int]$Count = 5,
+    [ValidateSet('Corpus', 'Contract')][string]$Mode = 'Corpus'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -19,6 +20,11 @@ function Get-BenchmarkSourceFingerprint([string]$root) {
     $files = @('go.mod', 'go.sum')
     foreach ($directory in @('internal/ri', 'internal/repository', 'internal/canonical', 'internal/safepath', 'internal/taskcontext', 'internal/gitexec')) {
         $files += Get-ChildItem -LiteralPath (Join-Path $root $directory) -File -Recurse | ForEach-Object {
+            [IO.Path]::GetRelativePath($root, $_.FullName).Replace('\', '/')
+        }
+    }
+    if ($Mode -eq 'Contract') {
+        $files += Get-ChildItem -LiteralPath (Join-Path $root 'internal') -File -Recurse | ForEach-Object {
             [IO.Path]::GetRelativePath($root, $_.FullName).Replace('\', '/')
         }
     }
@@ -56,14 +62,19 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not bind the benchmark source tree.' }
 $goVersion = (& $goPath version).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Could not read the Go toolchain version.' }
 $goHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $goPath).Hash.ToLowerInvariant()
+$riHashBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $riPath).Hash.ToLowerInvariant()
 $sourceFingerprintBefore = Get-BenchmarkSourceFingerprint $repoRoot
 
 $oldRi = $env:ENGORCH_RI_BINARY
 $oldHumanize = $env:ENGORCH_RI_BENCH_REPOSITORY
+$oldHumanizePin = $env:ENGORCH_RI_BENCH_HUMANIZE_COMMIT
+$oldRiPin = $env:ENGORCH_RI_BENCH_RI_SHA256
 $oldPath = $env:PATH
 try {
     $env:ENGORCH_RI_BINARY = $riPath
     $env:ENGORCH_RI_BENCH_REPOSITORY = $humanizePath
+    $env:ENGORCH_RI_BENCH_HUMANIZE_COMMIT = $humanizeCommit
+    $env:ENGORCH_RI_BENCH_RI_SHA256 = $riHashBefore
     $env:PATH = (Split-Path -Parent $goPath) + [IO.Path]::PathSeparator + $oldPath
 
     $start = [Diagnostics.ProcessStartInfo]::new()
@@ -72,9 +83,11 @@ try {
     $start.UseShellExecute = $false
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
+    $benchmarkPackage = if ($Mode -eq 'Contract') { './internal/control' } else { './internal/ri' }
+    $benchmarkName = if ($Mode -eq 'Contract') { '^BenchmarkPlannerGoContractResource$' } else { '^BenchmarkGoCorpusResource/(synthetic-24x64KiB|pinned-go-humanize)$' }
     foreach ($argument in @(
-        'test', './internal/ri', '-run', '^$', '-v',
-        '-bench', '^BenchmarkGoCorpusResource/(synthetic-24x64KiB|pinned-go-humanize)$',
+        'test', $benchmarkPackage, '-run', '^$', '-v',
+        '-bench', $benchmarkName,
         '-benchmem', '-benchtime=1x', "-count=$Count"
     )) {
         $start.ArgumentList.Add($argument)
@@ -115,7 +128,8 @@ try {
     $stdout = $stdoutTask.GetAwaiter().GetResult()
     $stderr = $stderrTask.GetAwaiter().GetResult()
     if ($process.ExitCode -ne 0) {
-        throw "Go benchmark failed with exit $($process.ExitCode): $stderr`n$stdout"
+        [IO.File]::WriteAllText("$outputPath.failure.log", "$stderr`n$stdout", [Text.UTF8Encoding]::new($false))
+        throw "Go benchmark failed with exit $($process.ExitCode); diagnostics retained in $outputPath.failure.log"
     }
     $sourceCommitAfter = (& git -C $repoRoot rev-parse --verify 'HEAD^{commit}').Trim()
     if ($LASTEXITCODE -ne 0 -or $sourceCommitAfter -ne $sourceCommitBefore) {
@@ -126,6 +140,13 @@ try {
         throw 'Benchmark source changed while the measurement was running.'
     }
     $riHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $riPath).Hash.ToLowerInvariant()
+    if ($riHash -cne $riHashBefore -or (Get-FileHash -Algorithm SHA256 -LiteralPath $goPath).Hash.ToLowerInvariant() -cne $goHash) {
+        throw 'Benchmark executable bytes changed while the measurement was running.'
+    }
+    $humanizeCommitAfter = (& git -C $humanizePath rev-parse --verify 'HEAD^{commit}').Trim()
+    if ($LASTEXITCODE -ne 0 -or $humanizeCommitAfter -cne $humanizeCommit) {
+        throw 'Benchmark repository HEAD changed while the measurement was running.'
+    }
     $result = [ordered]@{
         schema = 'engorch.ri.parse-cache-resource-measurement.v1'
         timestamp_utc = [DateTime]::UtcNow.ToString('o')
@@ -139,7 +160,8 @@ try {
         humanize_commit = $humanizeCommit
         humanize_tree = $humanizeTree
         count = $Count
-        command = 'go test ./internal/ri -run ^$ -v -bench BenchmarkGoCorpusResource/(synthetic-24x64KiB|pinned-go-humanize)$ -benchmem -benchtime=1x'
+        command = "go test $benchmarkPackage -run ^$ -v -bench $benchmarkName -benchmem -benchtime=1x"
+        measurement_mode = $Mode
         peak_sampled_process_tree_working_set_bytes = $peakWorkingSet
         max_sampled_process_tree_cpu_ms = [math]::Round($peakObservedCpuMs, 1)
         benchmark_output = $stdout.Trim()
@@ -151,5 +173,7 @@ try {
 } finally {
     $env:ENGORCH_RI_BINARY = $oldRi
     $env:ENGORCH_RI_BENCH_REPOSITORY = $oldHumanize
+    $env:ENGORCH_RI_BENCH_HUMANIZE_COMMIT = $oldHumanizePin
+    $env:ENGORCH_RI_BENCH_RI_SHA256 = $oldRiPin
     $env:PATH = $oldPath
 }

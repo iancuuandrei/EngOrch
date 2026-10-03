@@ -258,6 +258,7 @@ func TestAutonomousContractPlannerContextBindsSeparateOptIn(t *testing.T) {
 	err = Execute(context.Background(), []string{
 		"run", "--autonomous", "--prepare-only", "--max-parallel", "1",
 		"--planner-context", autonomousPlannerContextGoContractV1,
+		"--planner-context-parse-cache",
 		"--planner-context-ri-executable", parser,
 		"--planner-context-ri-executable-sha256", hex.EncodeToString(sum[:]),
 		"A bounded contract fixture objective",
@@ -278,12 +279,12 @@ func TestAutonomousContractPlannerContextBindsSeparateOptIn(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy := snapshot.Creation.Execution
-	if policy == nil || policy.PlannerContext != autonomousPlannerContextGoContractV1 || policy.PlannerParseCacheVersion != 0 || policy.PlannerContextRIExecutable != parser || policy.PlannerContextRIExecutableSHA256 != hex.EncodeToString(sum[:]) {
+	if policy == nil || policy.PlannerContext != autonomousPlannerContextGoContractV1 || policy.PlannerParseCacheVersion != 1 || policy.PlannerContextRIExecutable != parser || policy.PlannerContextRIExecutableSHA256 != hex.EncodeToString(sum[:]) {
 		t.Fatalf("contract planner policy was not immutably bound: %#v", policy)
 	}
 }
 
-func TestPlannerParseCacheFlagIsV2OnlyAndVersioned(t *testing.T) {
+func TestPlannerParseCacheFlagIsContextVersioned(t *testing.T) {
 	for _, test := range []struct {
 		mode    string
 		version int
@@ -293,6 +294,7 @@ func TestPlannerParseCacheFlagIsV2OnlyAndVersioned(t *testing.T) {
 		{mode: autonomousPlannerContextGoSourceV1, version: 0},
 		{mode: autonomousPlannerContextGoSourceV2, version: 0},
 		{mode: autonomousPlannerContextGoSourceV2, version: 1},
+		{mode: autonomousPlannerContextGoContractV1, version: 1},
 		{mode: autonomousPlannerContextGoSourceV1, version: 1, wantErr: true},
 		{mode: autonomousPlannerContextSourceBoundedV1, version: 1, wantErr: true},
 		{mode: autonomousPlannerContextGoSourceV2, version: 2, wantErr: true},

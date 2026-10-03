@@ -7,6 +7,10 @@ $ast = [System.Management.Automation.Language.Parser]::ParseFile($runner, [ref]$
 if ($parseErrors.Count -ne 0) { throw 'Evaluation runner does not parse.' }
 $builder = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-NativeRunArgs' }, $true)
 if ($null -eq $builder) { throw 'Native argument builder missing.' }
+$autoCompactBinding = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-AutoCompactRunnerBinding' }, $true)
+$autoCompactPrepared = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-AutoCompactPreparedBinding' }, $true)
+$autoCompactObserved = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-AutoCompactObserved' }, $true)
+if ($null -eq $autoCompactBinding -or $null -eq $autoCompactPrepared -or $null -eq $autoCompactObserved) { throw 'Automatic compaction binding helpers missing.' }
 $runnerOptions = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-IsolatedRunnerOptionShape' }, $true)
 if ($null -eq $runnerOptions) { throw 'Isolated runner option validator missing.' }
 $goMode = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Test-GoSourceContextMode' }, $true)
@@ -34,6 +38,9 @@ if ($null -eq $contextValidator) { throw 'Planner context binding validator miss
 . ([scriptblock]::Create($nativeGoArgs.Extent.Text))
 . ([scriptblock]::Create($runnerOptions.Extent.Text))
 . ([scriptblock]::Create($builder.Extent.Text))
+. ([scriptblock]::Create($autoCompactBinding.Extent.Text))
+. ([scriptblock]::Create($autoCompactPrepared.Extent.Text))
+. ([scriptblock]::Create($autoCompactObserved.Extent.Text))
 $tomlPolicy = Join-Path $PSScriptRoot 'Toml-ArgvPolicy.ps1'
 . $tomlPolicy
 if (-not (Test-GoSourceContextMode 'go-source-context-v1') -or
@@ -58,9 +65,41 @@ foreach ($invalidOptions in @(
 
 $taskPath = 'D:\task path\repo'
 $objective = 'Implement a real task with --literal text'
+Assert-AutoCompactRunnerBinding 'Native' 0 $false
+Assert-AutoCompactRunnerBinding 'Native' 64000 $true
+foreach ($badAutoCompact in @(
+    @{ Mode='Native'; Limit=0; Explicit=$true },
+    @{ Mode='Native'; Limit=-1; Explicit=$true },
+    @{ Mode='Native'; Limit=10000001; Explicit=$true },
+    @{ Mode='PR5Matched'; Limit=64000; Explicit=$true }
+)) {
+    $rejected = $false
+    try { Assert-AutoCompactRunnerBinding $badAutoCompact.Mode $badAutoCompact.Limit $badAutoCompact.Explicit } catch { $rejected = $true }
+    if (-not $rejected) { throw 'Invalid or non-Native automatic compaction option was accepted.' }
+}
 $expectedLegacy = @('--root', $taskPath, 'run', '--autonomous', $objective)
 $actualLegacy = @(Get-NativeRunArgs $taskPath $objective $false 0)
 if (($actualLegacy | ConvertTo-Json -Compress) -ne ($expectedLegacy | ConvertTo-Json -Compress)) { throw 'Default native invocation changed.' }
+$autoCompact = @(Get-NativeRunArgs $taskPath $objective $false 0 '' '' '' '' $false '' 64000)
+$expectedAutoCompact = @('--root', $taskPath, 'run', '--autonomous', '--auto-compact-token-limit', '64000', $objective)
+if (($autoCompact | ConvertTo-Json -Compress) -ne ($expectedAutoCompact | ConvertTo-Json -Compress)) { throw 'Native automatic compaction argv differs.' }
+foreach ($badLimit in @(-1, 10000001)) {
+    $rejected = $false
+    try { Get-NativeRunArgs $taskPath $objective $false 0 '' '' '' '' $false '' $badLimit | Out-Null } catch { $rejected = $true }
+    if (-not $rejected) { throw "Invalid automatic compaction threshold $badLimit was accepted." }
+}
+$preparedAutoCompact = [pscustomobject]@{ auto_compact_token_limit_requested = 64000 }
+Assert-AutoCompactPreparedBinding $preparedAutoCompact 64000
+$legacyPrepared = [pscustomobject]@{}
+Assert-AutoCompactPreparedBinding $legacyPrepared 0
+$rejectedPreparedMismatch = $false
+try { Assert-AutoCompactPreparedBinding $preparedAutoCompact 64001 } catch { $rejectedPreparedMismatch = $true }
+if (-not $rejectedPreparedMismatch) { throw 'Evaluate accepted a changed prepared automatic compaction threshold.' }
+$autoSnapshot = '{"creation":{"execution":{"codex_auto_compact":{"version":1,"token_limit":64000}}}}' | ConvertFrom-Json
+if ((Assert-AutoCompactObserved $autoSnapshot 64000).token_limit -ne 64000) { throw 'Inspected Native compaction policy was not returned.' }
+$rejectedAutoObservedMismatch = $false
+try { Assert-AutoCompactObserved $autoSnapshot 64001 | Out-Null } catch { $rejectedAutoObservedMismatch = $true }
+if (-not $rejectedAutoObservedMismatch) { throw 'Mismatched inspected automatic compaction policy was accepted.' }
 foreach ($limit in @(1, 2, 8)) {
     $expected = @('--root', $taskPath, 'run', '--autonomous', '--parallel-writers', '--max-parallel', [string]$limit, $objective)
     $actual = @(Get-NativeRunArgs $taskPath $objective $true $limit)

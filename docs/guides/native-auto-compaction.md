@@ -16,3 +16,11 @@ The upper bound is a configuration-input bound, not a claim about a model's
 context capacity. Whether native compaction occurred must be established from
 matched lifecycle observations; merely enabling the threshold does not prove
 that it triggered.
+
+The v1 evaluation runner exposes the Native-only matched treatment as
+`-AutoCompactTokenLimit N` on both Prepare and Evaluate. Prepare records the
+requested threshold in `run.json`; Evaluate requires the same value, checks
+the inspected immutable execution policy, and records requested/observed
+threshold fields in its receipt. Omit the parameter on both actions for the
+legacy argv. PR5Matched rejects this option because its baseline invocation is
+kept unchanged.

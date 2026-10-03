@@ -110,8 +110,13 @@ func TestGoPlannerContextPolicyRequiresOnlyItsPinnedParser(t *testing.T) {
 		t.Fatalf("contract context with parser pin rejected: %v", err)
 	}
 	contract.PlannerParseCacheVersion = 1
-	if err := contract.Validate(); err == nil {
-		t.Fatal("contract context accepted v2-only parse cache")
+	if err := contract.Validate(); err != nil {
+		t.Fatalf("contract context rejected explicit parse cache: %v", err)
+	}
+	unsupported := contract
+	unsupported.PlannerContext = plannerContextGoSourceV1
+	if err := unsupported.Validate(); err == nil {
+		t.Fatal("v1 context accepted unsupported parse cache")
 	}
 	legacyPlanner := base
 	legacyPlanner.PlannerContextRIExecutable = good.PlannerContextRIExecutable

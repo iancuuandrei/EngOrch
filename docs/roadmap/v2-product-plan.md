@@ -376,3 +376,21 @@ integrated increment, without resurrecting a G0 promotion ladder.
   feature/performance task and both unchanged held-out checks. A changed
   generator hub followed by isolated leaf stages is a separate unsupported
   design, and is not allowed to drive new recovery machinery.
+
+## Checkpoint — v1.0.11 integrated; v1.0.12 candidate
+
+- Public main/dev contain `3aa15c41b65a0dbae62de54c1908c919fed1c56c`;
+  automation-authored PR #20 is merged. Final clean full Go, independent
+  review, native-argument/public-objective checks, Sonar and security passed.
+  See the increment qualification record for exact candidate and binary pins.
+- Two fresh eight-task context cohorts passed native preflights and expected
+  held-out baseline discriminators with zero effects. The contract arm is now
+  evaluating the frozen increment; no new task acceptance is claimed yet.
+- The next increment extends existing exact per-file parse reuse to the
+  contract context, with uncached/cold/warm identity and prompt parity. It
+  also exposes the invocation-bound native-compaction threshold through the
+  matched evaluation runner. Both remain opt-in, with live qualification
+  and measured resource benefit required before broader adoption.
+- A candidate-bound, bounded impact projection for reviewer guidance is being
+  implemented separately. It supplies observed coupling and possible tests,
+  without claiming complete dependencies, independence or successful checks.
