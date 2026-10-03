@@ -1,38 +1,30 @@
 # Fabric
 
-A standalone engineering harness around coding agents: models supply judgment;
-deterministic code binds repository context, routing, approvals and outcomes.
-Go owns orchestration. Rust owns immutable repository intelligence.
+Fabric is an engineering agent runner. It binds model work to a repository,
+candidate identity, configured checks, review and durable run history. Go owns
+orchestration; Rust provides repository intelligence.
 
-The local implementation includes deterministic planning and effect journals,
-isolated writer workspaces, approved file changes, verification execution, a Codex
-planning/source-tool adapter and Rust SCIP intelligence. Explicit producer, import
-and local publication lifecycles feed immutable runtime queries. Seven optional
-engineering procedures accompany the code.
-
-The bounded writer/reviewer model workflow (plan, implement, verify, review,
-commit) is qualified end to end at the v0.0.1 trusted bootstrap checkpoint
-(see below); the full product v1.0.0 program remains future work. Local
-fixtures and bounded authenticated planning tests do not establish model
-quality or OS sandboxing.
+Fabric v1.0.0 has a reproducible Windows amd64 distribution and a recorded
+installed-binary acceptance run. Start with the
+[Windows installed-task guide](docs/getting-started/installed-autonomous-task.md)
+for download, setup, a bounded autonomous task and result inspection. The
+[release guide](docs/guides/release.md) describes the accepted package and its
+limits. Linux amd64 remains optional and unqualified.
 
 ## Run your first real coding task
 
-The [native autonomous task guide](docs/guides/autonomous-task.md) introduces
-`fabric run --autonomous`: plan, explore, implement, verify and review with a
-bounded repair budget and durable result inspection. A
-[real repository pilot](docs/evaluation/native-autonomous-pilot.md) reached
-`READY` and passed independent hidden checks. The
-[task graph guide](docs/guides/graph-autonomous-task.md) covers dependency-based
-decomposition, bounded parallel read-only agents, scoped implementation and
-configured adaptive model allocation. Full v1 release acceptance remains open.
+The installed-task guide uses `fabric run --autonomous` to plan, explore,
+implement, verify and review with a bounded repair budget. The result stays in
+an isolated Git worktree for operator inspection and integration; Fabric does
+not commit or publish it automatically. See the
+[v1.0.0 release acceptance record](docs/evaluation/v1-release-acceptance.md)
+for the exact distribution and installed-run evidence. The
+[task graph guide](docs/guides/graph-autonomous-task.md) documents dependency
+decomposition, bounded parallel read-only work and configured model allocation.
 
-Follow the [Windows first-task guide](docs/getting-started/real-task.md) to build
-Fabric, configure a stock Codex model, and run a coding task through planning,
-delegated inspection, implementation, verification and a separate review.
-The guide shows plan/file approvals and durable result inspection. This path has
-passed a real-model acceptance run from a fresh GitHub checkout at the exact
-source recorded in the [acceptance evidence](docs/evaluation/v1-product-gate.md).
+The earlier [source-built Windows first-task guide](docs/getting-started/real-task.md)
+covers the approval-based workflow accepted at its recorded source identity.
+Use the installed-task guide above for the v1.0.0 autonomous workflow.
 
 ## Checkpoint
 
@@ -69,10 +61,10 @@ The fake plan exercises protocol mechanics; it is not an evaluated model answer.
 See the [local planning guide](docs/getting-started/local-plan.md) for approval,
 replay and failure behavior.
 
-The [local Codex integration](integrations/codex/engorch/README.md) packages this
-workflow as a thin skill. Codex is the intended primary interface; the same CLI
-remains usable independently. Plugin installation and sandbox inheritance have
-not yet been qualified.
+The [source-build autonomous guide](docs/guides/autonomous-task.md) remains
+available for development checkouts. The [local Codex integration](integrations/codex/engorch/README.md)
+packages a separate workflow as a thin skill; this release acceptance does not
+qualify plugin installation or sandbox inheritance.
 
 ## Architecture and development
 

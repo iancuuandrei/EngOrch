@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "version": "v1.0.0",
+  "source_commit": "a4ca05692465bedc6b98d6ffbb8219b6d076f5d1",
+  "source_tree": "ce581f6f38fa28f3e42cd6bdd3f37acf7ccc64e4",
+  "source_date_epoch": 1791012510,
+  "platforms": [
+    "windows-amd64"
+  ],
+  "toolchain": {
+    "go": "go version go1.27.1 windows/amd64",
+    "cargo": "cargo 1.94.1 (29ea6fb6a 2026-03-24)",
+    "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)"
+  },
+  "archive": {
+    "file": "fabric_1.0.0_windows_amd64.zip",
+    "sha256": "7add99a1146bfe8a780dd38238904cf74f9fdb7dffd1a36e5211d045988a21e6",
+    "bytes": 36499100
+  },
+  "reproducibility": "PASS",
+  "independent_clean_builds": 2,
+  "integrity": "PASS",
+  "fresh_installation": "PASS",
+  "installed_task": {
+    "repository": "https://github.com/dustin/go-humanize",
+    "repository_commit": "a1b4e66b9a6d890e9e15e7091cf16c8032367d6e",
+    "runtime": "stock Codex",
+    "model": "gpt-6-luna",
+    "effort": "high",
+    "run_id": "7465e3271f8f13d754edaa0fe41f00866963997f02984274bf1ff274a67d7a86",
+    "state": "READY",
+    "candidate_id": "086ce91b9f3ec6be952da71b6ce4f7f3a732a5fa6b3fce1d659d78ca01383a12",
+    "verification_plan_id": "ddcdded95e4f278595a4a6c959aad5dbc614cced0692081ffef65e6e2b1c50fd",
+    "review_verification_plan_id": "ddcdded95e4f278595a4a6c959aad5dbc614cced0692081ffef65e6e2b1c50fd",
+    "review_decision": "approve",
+    "review_findings": 0,
+    "installed_fabric_sha256": "564c31d9531420fdf87aa9356d3078643678638437786130cfeb81a33501be63",
+    "installed_ri_sha256": "65123be724fa8e0388747897cee5dc3cf889881e1c1535404e36eba3ed88ebe0",
+    "native_exit_code": 0,
+    "heldout_exit_code": 0,
+    "acceptance": "PASS",
+    "gate_copies": "independent; held-out capture follows native tests",
+    "fixture_sha256": "8402e2584a029fcca0a1751be2445d476947ae4e773a2e6a81b0ece058a480ff",
+    "acceptance_additional_provider_calls": 0,
+    "candidate_workspace_edits_by_acceptance_script": false,
+    "metrics": {
+      "runtime_invocations_completed": 4,
+      "provider_calls": null,
+      "input_tokens": 639666.0,
+      "output_tokens": 7909.0,
+      "cost_minor_units": null,
+      "elapsed_ms": null,
+      "repair_attempts": null,
+      "notes": "Runtime invocations are not provider request counts. Null repair_attempts means no repair records; unavailable elapsed/cost/request count remain unknown."
+    }
+  },
+  "agent_ri": {
+    "proof": "PROVEN_JOURNAL_BOUND",
+    "evidence_scope": "local integrity-checked journal linkage; not external notarization",
+    "controller_chain": "VALID",
+    "controller_semantic_replay": "VALID",
+    "runtime_chain_count": 4,
+    "explorer_invocation_id": "5230832a81c07d8172df825d17873cdc3195e2adbf10f2a9a38a6324e03cbfeb",
+    "successful_calls": 4,
+    "validated_nonempty_calls": 3,
+    "candidate_overlay": "NOT RUN",
+    "public_collector": {
+      "powershell": "evals/v1/harness/collect-installed-ri-agent-proof.ps1",
+      "python": "evals/v1/harness/collect-installed-ri-agent-proof.py",
+      "powershell_sha256": "cbecf95d7ee7b08c299385dc6091aec7956fcb9a55de11cf429fa51ed2fec98d",
+      "python_sha256": "8ef4d09d1a1ab4d07c27f32218dad9ff33f0c7dcc611217aae550e788025163d",
+      "retained_run_readonly_recheck": "PROVEN_JOURNAL_BOUND",
+      "additional_provider_calls": 0,
+      "line_endings": "Canonical repository LF; strict 64-character lowercase hexadecimal run ID validation added before subprocess invocation."
+    }
+  },
+  "integration": {
+    "full_go_source_commit": "58c6c115e9647f21e9caf9a8a16166c9e52bc5e6",
+    "full_go": "PASS",
+    "release_source_mapping": "documentation and result records only; production/build/test source unchanged",
+    "exact_main_sonar": "PASS",
+    "sonar_issues": 0
+  },
+  "matched_concurrency": {
+    "status": "PASS",
+    "receipt": "evals/v1/results/humanize-matched-a4ca056-20261003.json",
+    "serial_elapsed_ms": 484962,
+    "parallel_elapsed_ms": 304622,
+    "limitation": "One descriptive pair; different plans and repair outcomes prevent attributing the whole difference to concurrency alone."
+  },
+  "release_qualified": true,
+  "qualification_scope": "Published Windows amd64 source cut a4ca056; installed task, RI, reproducibility and matched policy observation. Final documentation integration is recorded by PR12.",
+  "independent_review": "APPROVE",
+  "integration_pull_request": "https://github.com/iancuuandrei/Fabric/pull/12",
+  "publication": "PUBLISHED",
+  "release_url": "https://github.com/iancuuandrei/Fabric/releases/tag/v1.0.0",
+  "release_tag_source_commit": "a4ca05692465bedc6b98d6ffbb8219b6d076f5d1",
+  "public_download_acceptance": {
+    "archive_sha256": "7add99a1146bfe8a780dd38238904cf74f9fdb7dffd1a36e5211d045988a21e6",
+    "release_integrity": "PASS",
+    "fresh_install": "PASS",
+    "installed_binary_hashes_match_tested_package": true,
+    "fabric_version_commit": "a4ca05692465bedc6b98d6ffbb8219b6d076f5d1",
+    "additional_provider_calls": 0
+  },
+  "remaining_distribution_acceptance_gates": [],
+  "limitations": [
+    "Windows amd64 only; Linux not qualified",
+    "Unsigned integrity-checked archive",
+    "Recorded task and configuration; no general task-success estimate",
+    "RI proof is local journal linkage; no external notarization or overlay qualification"
+  ]
+}

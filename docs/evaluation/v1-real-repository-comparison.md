@@ -387,7 +387,12 @@ The numeric objective now explicitly requires shared-generator ownership.
 New planner recipes V5/V6 add that guidance without changing the input bytes
 of existing V3/V4 runs. A separate combined humanize task requires both the
 ParseBytes feature and Commaf performance improvement in distinct source/test
-groups; it is the next serial/parallel comparison, not an accepted result.
+groups. The subsequent fresh serial/parallel pair passed native, review and
+held-out gates in both arms: 484.962 seconds serial and 304.622 seconds
+parallel. Initial implementation writers overlapped by 106.088 seconds in
+the parallel arm and did not overlap in the serial arm. Plans differed and
+the serial arm needed one repair, so this single pair does not isolate a
+causal scheduling gain. See [the matched policy observation](../../evals/v1/results/humanize-matched-a4ca056-20261003.json).
 Completed graph-writer proposals can now retain optional UTC dispatch
 intervals. These cover controller wrapper execution, not provider requests;
 old runs without intervals retain unknown overlap, and unusable local clock
