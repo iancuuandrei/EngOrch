@@ -49,8 +49,11 @@ const (
 // unavailable context with no eligible source text rather than a silent
 // whole-repo scan.
 type TaskContextRecord struct {
-	Version           int                        `json:"version"`
-	Role              string                     `json:"role"`
+	Version int    `json:"version"`
+	Role    string `json:"role"`
+	// IsolationTaskID binds writer context to one confirmed child candidate.
+	// Empty preserves the historical record shape.
+	IsolationTaskID   string                     `json:"isolation_task_id,omitempty"`
 	SourceID          string                     `json:"source_id"`
 	CandidateID       string                     `json:"candidate_id"`
 	Query             string                     `json:"query"`
@@ -136,12 +139,38 @@ func taskContextForRole(s Snapshot, role, fullQuestion string) (*TaskContextReco
 	want := taskContextQueryHash(fullQuestion)
 	for i := range s.TaskContexts {
 		r := &s.TaskContexts[i]
-		if r.Role == role && r.SourceID == sourceID && r.CandidateID == candidateID && r.QueryHash == want {
+		if r.IsolationTaskID == "" && r.Role == role && r.SourceID == sourceID && r.CandidateID == candidateID && r.QueryHash == want {
 			out := *r
 			return &out, nil
 		}
 	}
 	return nil, errors.New("task context admission missing for current candidate and query")
+}
+
+func taskContextForIsolatedWriter(s Snapshot, role, fullQuestion string, binding isolatedWriterBinding) (*TaskContextRecord, error) {
+	if !taskContextEnabled(s) || role != "writer" || binding.TaskID == "" {
+		return nil, errors.New("isolated writer task context is unavailable")
+	}
+	if strings.TrimSpace(fullQuestion) == "" || !utf8.ValidString(fullQuestion) || len(fullQuestion) > taskContextFullQueryMax {
+		return nil, errors.New("writer task context question bound exceeded")
+	}
+	sourceID, err := s.Creation.Repository.ID()
+	if err != nil {
+		return nil, err
+	}
+	candidateID, err := binding.Candidate.ID()
+	if err != nil {
+		return nil, err
+	}
+	want := taskContextQueryHash(fullQuestion)
+	for i := range s.TaskContexts {
+		r := &s.TaskContexts[i]
+		if r.IsolationTaskID == binding.TaskID && r.Role == role && r.SourceID == sourceID && r.CandidateID == candidateID && r.QueryHash == want {
+			copy := *r
+			return &copy, nil
+		}
+	}
+	return nil, errors.New("isolated writer task context admission missing")
 }
 
 // writerTaskRole derives the task-context role for writer invocations. Repair
@@ -164,6 +193,20 @@ func maybeAdmitTaskContext(ctx context.Context, path, role, question string) err
 		return nil
 	}
 	if _, err := AdmitTaskContext(ctx, path, role, question); err != nil {
+		return err
+	}
+	return nil
+}
+
+func maybeAdmitIsolatedWriterTaskContext(ctx context.Context, path, taskID, question string) error {
+	s, err := Inspect(path)
+	if err != nil {
+		return err
+	}
+	if !taskContextEnabled(s) {
+		return nil
+	}
+	if _, err := admitTaskContext(ctx, path, "writer", question, taskID); err != nil {
 		return err
 	}
 	return nil
@@ -194,6 +237,10 @@ func maybeAdmitTaskContext(ctx context.Context, path, role, question string) err
 // context. The lease is released before appending via normal controller Append.
 // Replay performs no filesystem reads and no selection.
 func AdmitTaskContext(ctx context.Context, path, role, question string) (TaskContextRecord, error) {
+	return admitTaskContext(ctx, path, role, question, "")
+}
+
+func admitTaskContext(ctx context.Context, path, role, question, isolationTaskID string) (TaskContextRecord, error) {
 	if !taskContextValidRole(role) {
 		return TaskContextRecord{}, errors.New("invalid task context role")
 	}
@@ -216,32 +263,47 @@ func AdmitTaskContext(ctx context.Context, path, role, question string) (TaskCon
 	if s.Workspace == nil || s.Candidate == nil {
 		return TaskContextRecord{}, errors.New("task context requires a resolved workspace and candidate")
 	}
+	workspace, candidate := *s.Workspace, *s.Candidate
+	var isolated *isolatedWriterBinding
+	if isolationTaskID != "" {
+		if role != "writer" {
+			return TaskContextRecord{}, errors.New("isolated context is restricted to graph writers")
+		}
+		binding, err := isolatedWriterBindingForTask(s, isolationTaskID)
+		if err != nil {
+			return TaskContextRecord{}, err
+		}
+		isolated = &binding
+		workspace, candidate = binding.Workspace, binding.Candidate
+	} else if isolatedImplementationEnabled(s) && s.State == "IMPLEMENTING" && role == "writer" {
+		return TaskContextRecord{}, errors.New("isolated graph writer requires child-bound task context")
+	}
 	sourceID, err := s.Creation.Repository.ID()
 	if err != nil {
 		return TaskContextRecord{}, err
 	}
-	candidateID, err := s.Candidate.ID()
+	candidateID, err := candidate.ID()
 	if err != nil {
 		return TaskContextRecord{}, err
 	}
 	boundQuery, truncated, queryHash, queryLen := truncateTaskQuery(question)
 	// Reuse without new effects: same role, source, candidate and full query.
 	for _, existing := range s.TaskContexts {
-		if existing.Role == role && existing.SourceID == sourceID && existing.CandidateID == candidateID && existing.QueryHash == queryHash {
+		if existing.IsolationTaskID == isolationTaskID && existing.Role == role && existing.SourceID == sourceID && existing.CandidateID == candidateID && existing.QueryHash == queryHash {
 			return existing, nil
 		}
 	}
-	lease, err := worktree.AcquireRead(s.Workspace.Request)
+	lease, err := worktree.AcquireRead(workspace.Request)
 	if err != nil {
 		return TaskContextRecord{}, err
 	}
 	// Capture under the shared lease and require the exact current candidate.
-	captured, fileStates, captureErr := worktree.Capture(ctx, *s.Workspace)
+	captured, fileStates, captureErr := worktree.Capture(ctx, workspace)
 	if captureErr != nil {
 		_ = lease.Close()
 		return TaskContextRecord{}, captureErr
 	}
-	if captured != *s.Candidate {
+	if captured != candidate {
 		_ = lease.Close()
 		return TaskContextRecord{}, errors.New("task context candidate drift before admission")
 	}
@@ -250,20 +312,35 @@ func AdmitTaskContext(ctx context.Context, path, role, question string) (TaskCon
 		_ = lease.Close()
 		return TaskContextRecord{}, err
 	}
-	if fresh.Workspace == nil || fresh.Candidate == nil || *fresh.Candidate != *s.Candidate {
-		_ = lease.Close()
-		return TaskContextRecord{}, errors.New("task context candidate changed before admission")
+	if isolationTaskID == "" {
+		if fresh.Workspace == nil || fresh.Candidate == nil || *fresh.Candidate != candidate {
+			_ = lease.Close()
+			return TaskContextRecord{}, errors.New("task context candidate changed before admission")
+		}
+	} else {
+		current, currentErr := isolatedWriterBindingForTask(fresh, isolationTaskID)
+		if currentErr != nil || current.Workspace != workspace || current.Candidate != candidate {
+			_ = lease.Close()
+			return TaskContextRecord{}, errors.Join(errors.New("isolated task context candidate changed before admission"), currentErr)
+		}
 	}
 	// Use the freshest journal metadata for hints without extra dispatch.
 	s = fresh
 	explorationPaths := taskContextExplorationPaths(s)
 	writerPaths := taskContextWriterPaths(s)
-	lexicalSearches, lexicalPaths, err := taskContextCandidateLexicalEvidence(ctx, path, s, boundQuery)
-	if err != nil {
-		_ = lease.Close()
-		return TaskContextRecord{}, err
+	var lexicalSearches []TaskContextLexicalSearch
+	var lexicalPaths []string
+	if isolated == nil {
+		lexicalSearches, lexicalPaths, err = taskContextCandidateLexicalEvidence(ctx, path, s, boundQuery)
+		if err != nil {
+			_ = lease.Close()
+			return TaskContextRecord{}, err
+		}
 	}
 	prioritized := prioritizeTaskPaths(fileStates, explorationPaths, writerPaths, lexicalPaths, boundQuery)
+	if isolated != nil {
+		prioritized = prioritizeTaskPaths(fileStates, explorationPaths, isolated.Task.WritePaths, lexicalPaths, boundQuery)
+	}
 	type readFile struct {
 		path    string
 		hash    string
@@ -279,7 +356,7 @@ func AdmitTaskContext(ctx context.Context, path, role, question string) (TaskCon
 	if lex, lexErr := roleLexical(s); lexErr != nil {
 		_ = lease.Close()
 		return TaskContextRecord{}, lexErr
-	} else if lex != nil {
+	} else if lex != nil && isolated == nil {
 		lexicalBuild = lex.BuildID
 		lexicalOverlay = lex.OverlayID
 	}
@@ -321,7 +398,7 @@ func AdmitTaskContext(ctx context.Context, path, role, question string) (TaskCon
 	chunks := []worktree.SourceFile{}
 	if len(readPaths) > 0 {
 		var readErr error
-		chunks, readErr = worktree.ReadSources(ctx, *s.Workspace, captured, readPaths, taskContextMaxFileBytes)
+		chunks, readErr = worktree.ReadSources(ctx, workspace, captured, readPaths, taskContextMaxFileBytes)
 		if readErr != nil {
 			_ = lease.Close()
 			return TaskContextRecord{}, readErr
@@ -365,7 +442,7 @@ func AdmitTaskContext(ctx context.Context, path, role, question string) (TaskCon
 		reads = append(reads, readFile{fs.Path, fs.Hash, raw})
 	}
 	// Reject drift observed during reads before persisting anything.
-	after, fpErr := worktree.Fingerprint(ctx, *s.Workspace)
+	after, fpErr := worktree.Fingerprint(ctx, workspace)
 	if fpErr != nil {
 		_ = lease.Close()
 		return TaskContextRecord{}, fpErr
@@ -379,14 +456,15 @@ func AdmitTaskContext(ctx context.Context, path, role, question string) (TaskCon
 	}
 	if len(reads) == 0 {
 		rec := TaskContextRecord{
-			Version:        taskContextVersion,
-			Role:           role,
-			SourceID:       sourceID,
-			CandidateID:    candidateID,
-			Query:          boundQuery,
-			QueryTruncated: truncated,
-			QueryHash:      queryHash,
-			QueryLen:       queryLen,
+			Version:         taskContextVersion,
+			Role:            role,
+			IsolationTaskID: isolationTaskID,
+			SourceID:        sourceID,
+			CandidateID:     candidateID,
+			Query:           boundQuery,
+			QueryTruncated:  truncated,
+			QueryHash:       queryHash,
+			QueryLen:        queryLen,
 			Manifest: taskcontext.Manifest{
 				Version:   1,
 				Scope:     taskcontext.Scope{SourceID: sourceID, CandidateID: candidateID},
@@ -407,7 +485,7 @@ func AdmitTaskContext(ctx context.Context, path, role, question string) (TaskCon
 				return TaskContextRecord{}, errors.Join(err, inspectErr)
 			}
 			for _, existing := range latest.TaskContexts {
-				if existing.Role == role && existing.SourceID == sourceID && existing.CandidateID == candidateID && existing.QueryHash == queryHash {
+				if existing.IsolationTaskID == isolationTaskID && existing.Role == role && existing.SourceID == sourceID && existing.CandidateID == candidateID && existing.QueryHash == queryHash {
 					return existing, nil
 				}
 			}
@@ -450,6 +528,7 @@ func AdmitTaskContext(ctx context.Context, path, role, question string) (TaskCon
 	rec := TaskContextRecord{
 		Version:           taskContextVersion,
 		Role:              role,
+		IsolationTaskID:   isolationTaskID,
 		SourceID:          sourceID,
 		CandidateID:       candidateID,
 		Query:             boundQuery,
@@ -469,7 +548,7 @@ func AdmitTaskContext(ctx context.Context, path, role, question string) (TaskCon
 			return TaskContextRecord{}, errors.Join(err, inspectErr)
 		}
 		for _, existing := range latest.TaskContexts {
-			if existing.Role == role && existing.SourceID == sourceID && existing.CandidateID == candidateID && existing.QueryHash == queryHash && existing.ManifestID == manifestID {
+			if existing.IsolationTaskID == isolationTaskID && existing.Role == role && existing.SourceID == sourceID && existing.CandidateID == candidateID && existing.QueryHash == queryHash && existing.ManifestID == manifestID {
 				return existing, nil
 			}
 		}
@@ -662,7 +741,24 @@ func replayTaskContext(s *Snapshot, e journal.Event) error {
 	if err != nil || sourceID != rec.SourceID {
 		return errors.New("task context source substitution")
 	}
-	candidateID, err := s.Candidate.ID()
+	var candidate worktree.Candidate
+	if rec.IsolationTaskID == "" {
+		candidate = *s.Candidate
+	} else {
+		if rec.Role != "writer" || !isolatedImplementationEnabled(*s) {
+			return errors.New("isolated task context is not admitted for this role")
+		}
+		state, ok := s.GraphIsolations[rec.IsolationTaskID]
+		if !ok || state.Outcome != "CONFIRMED" || state.Candidate == nil || state.Binding == nil {
+			return errors.New("isolated task context requires a confirmed child")
+		}
+		binding, err := isolatedWriterBindingForTask(*s, rec.IsolationTaskID)
+		if err != nil || binding.Candidate != *state.Candidate {
+			return errors.Join(errors.New("isolated task context binding mismatch"), err)
+		}
+		candidate = *state.Candidate
+	}
+	candidateID, err := candidate.ID()
 	if err != nil || candidateID != rec.CandidateID {
 		return errors.New("task context candidate substitution")
 	}
@@ -687,7 +783,7 @@ func replayTaskContext(s *Snapshot, e journal.Event) error {
 			return errors.New("unavailable task context must not carry selected content")
 		}
 		for _, existing := range s.TaskContexts {
-			if existing.Role == rec.Role && existing.QueryHash == rec.QueryHash && existing.CandidateID == rec.CandidateID {
+			if existing.IsolationTaskID == rec.IsolationTaskID && existing.Role == rec.Role && existing.QueryHash == rec.QueryHash && existing.CandidateID == rec.CandidateID {
 				return errors.New("duplicate task context")
 			}
 		}
@@ -768,10 +864,10 @@ func replayTaskContext(s *Snapshot, e journal.Event) error {
 		// the consumer role. A writer and reviewer may legitimately admit the
 		// same manifest for the same candidate. Role is part of the full task
 		// context identity, so only treat a same-role digest as a duplicate.
-		if existing.Role == rec.Role && existing.ManifestID != "" && existing.ManifestID == rec.ManifestID {
+		if existing.IsolationTaskID == rec.IsolationTaskID && existing.Role == rec.Role && existing.ManifestID != "" && existing.ManifestID == rec.ManifestID {
 			return errors.New("duplicate task context")
 		}
-		if existing.Role == rec.Role && existing.QueryHash == rec.QueryHash && existing.CandidateID == rec.CandidateID {
+		if existing.IsolationTaskID == rec.IsolationTaskID && existing.Role == rec.Role && existing.QueryHash == rec.QueryHash && existing.CandidateID == rec.CandidateID {
 			return errors.New("duplicate task context")
 		}
 	}

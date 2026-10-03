@@ -29,9 +29,13 @@ func RunWriter(ctx context.Context, path string) (WriterRecord, error) {
 	if err := requireCurrentHostAdmission(ctx, s); err != nil {
 		return WriterRecord{}, err
 	}
+	isolatedInitial, err := isolatedInitialWriterForTask(s, graphWriterTaskFromContext(ctx))
+	if err != nil {
+		return WriterRecord{}, err
+	}
 	taskID := graphWriterTaskFromContext(ctx)
-	if taskID != "" && !parallelImplementationEnabled(s) {
-		return WriterRecord{}, errors.New("graph task-bound writer requires the parallel implementation policy")
+	if taskID != "" && !parallelImplementationEnabled(s) && !isolatedImplementationEnabled(s) {
+		return WriterRecord{}, errors.New("graph task-bound writer requires an implementation policy")
 	}
 	if taskID != "" {
 		deactivate := markGraphWriterActive(path, taskID)
@@ -54,7 +58,11 @@ func RunWriter(ctx context.Context, path string) (WriterRecord, error) {
 				return WriterRecord{}, err
 			}
 		}
-		if err := maybeAdmitTaskContext(ctx, path, writerTaskRole(s), question); err != nil {
+		if isolatedInitial {
+			if err := maybeAdmitIsolatedWriterTaskContext(ctx, path, taskID, question); err != nil {
+				return WriterRecord{}, err
+			}
+		} else if err := maybeAdmitTaskContext(ctx, path, writerTaskRole(s), question); err != nil {
 			return WriterRecord{}, err
 		}
 		s, err = Inspect(path)
@@ -62,6 +70,10 @@ func RunWriter(ctx context.Context, path string) (WriterRecord, error) {
 			return WriterRecord{}, err
 		}
 		if err := requireCurrentHostAdmission(ctx, s); err != nil {
+			return WriterRecord{}, err
+		}
+		isolatedInitial, err = isolatedInitialWriterForTask(s, taskID)
+		if err != nil {
 			return WriterRecord{}, err
 		}
 	}
@@ -113,6 +125,16 @@ func RunWriter(ctx context.Context, path string) (WriterRecord, error) {
 		return RecordWriterProposal(ctx, path, expected.Invocation, result)
 	}
 	endedAt := time.Now().UTC()
+	if isolatedInitial {
+		proposal, err := prepareIsolatedGraphWriterProposal(ctx, path, taskID, expected.Invocation, result)
+		if err != nil {
+			return WriterRecord{}, err
+		}
+		if err := recordIsolatedGraphWriterProposal(path, proposal, observedGraphWriterDispatchTiming(startedAt, endedAt)); err != nil {
+			return WriterRecord{}, err
+		}
+		return WriterRecord{Invocation: expected.Invocation, Result: result}, nil
+	}
 	record, err := prepareGraphWriterFiles(ctx, path, taskID, expected.Invocation, result)
 	if err != nil {
 		return WriterRecord{}, err
@@ -128,14 +150,31 @@ func executeWriter(ctx context.Context, path string, s Snapshot, expected Writer
 }
 
 func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected WriterHostIntent, taskID string) (result runtime.Result, err error) {
+	var isolated *isolatedWriterBinding
+	workspace := s.Workspace
+	useIsolated, err := isolatedInitialWriterForTask(s, taskID)
+	if err != nil {
+		return result, err
+	}
+	if useIsolated {
+		binding, bindingErr := isolatedWriterBindingForTask(s, taskID)
+		if bindingErr != nil {
+			return result, bindingErr
+		}
+		isolated = &binding
+		workspace = &binding.Workspace
+	}
+	if workspace == nil {
+		return result, errors.New("writer workspace unavailable")
+	}
 	var lease controllerCandidateLease
 	if taskID == "" {
-		lease, err = worktree.Acquire(s.Workspace.Request)
+		lease, err = worktree.Acquire(workspace.Request)
 	} else {
 		// Opt-in graph writer turns operate against a frozen read-only candidate.
 		// Multiple independent proposals may therefore share candidate reads;
 		// their single aggregate file effect is applied only after all turns end.
-		lease, err = worktree.AcquireRead(s.Workspace.Request)
+		lease, err = worktree.AcquireRead(workspace.Request)
 	}
 	if err != nil {
 		return result, err
@@ -146,6 +185,16 @@ func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected
 		return result, err
 	}
 	s = graphWriterProjectedSnapshot(s, taskID)
+	currentIsolated, modeErr := isolatedInitialWriterForTask(s, taskID)
+	if modeErr != nil || currentIsolated != (isolated != nil) {
+		return result, errors.Join(errors.New("writer isolation mode changed before dispatch"), modeErr)
+	}
+	if isolated != nil {
+		currentBinding, bindingErr := isolatedWriterBindingForTask(s, taskID)
+		if bindingErr != nil || !sameCanonical(currentBinding, *isolated) {
+			return result, errors.Join(errors.New("isolated writer binding changed before dispatch"), bindingErr)
+		}
+	}
 	current, err := expectedWriterHostForTask(s, taskID)
 	if err != nil {
 		return result, err
@@ -164,12 +213,12 @@ func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected
 	}
 	var runtimeRI *codexruntime.RIBinding
 	var runtimeLexical *codexruntime.LexicalBinding
-	lexical, err := roleLexical(s)
+	lexical, err := writerLexicalContext(s, isolated != nil)
 	if err != nil {
 		return result, err
 	}
 	if lexical != nil {
-		binding, err := selectRuntimeLexicalLeased(ctx, path, lexical.Scope == "candidate", *s.Workspace)
+		binding, err := selectRuntimeLexicalLeased(ctx, path, lexical.Scope == "candidate", *workspace)
 		if err != nil {
 			return result, err
 		}
@@ -202,12 +251,20 @@ func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected
 		}
 		runtimeRI = &binding
 	}
-	before, err := observeCandidate(ctx, path, s)
-	if err != nil {
-		return result, err
-	}
-	if s.Candidate == nil || before != *s.Candidate {
-		return result, errors.New("writer base candidate mismatch")
+	var before worktree.Candidate
+	if isolated != nil {
+		before, _, err = worktree.Capture(ctx, *workspace)
+		if err != nil || before != isolated.Candidate {
+			return result, errors.Join(errors.New("isolated writer child candidate mismatch"), err)
+		}
+	} else {
+		before, err = observeCandidate(ctx, path, s)
+		if err != nil {
+			return result, err
+		}
+		if s.Candidate == nil || before != *s.Candidate {
+			return result, errors.New("writer base candidate mismatch")
+		}
 	}
 	if s.WriterHost == nil || s.WriterHost.Intent != expected {
 		if err := appendWriterHostTransition(path, taskID, "writer.host-intent", expected); err != nil {
@@ -262,14 +319,20 @@ func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected
 		if policyErr != nil {
 			return result, policyErr
 		}
-		candidateBinding := &codexruntime.CandidateBinding{Workspace: *s.Workspace, Candidate: before}
+		candidateBinding := &codexruntime.CandidateBinding{Workspace: *workspace, Candidate: before}
 		if s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV2 && (expected.Invocation.Profile.Role == "writer" || expected.Invocation.Profile.Role == "fixer") {
 			candidateBinding.AnchorValidationVersion = candidatetools.AnchorValidationVersion
 		}
-		a := &codexruntime.Adapter{JournalPath: runtimePath, Directory: filepath.Join(l.Root, "workspace"), Source: &s.Creation.Repository, Candidate: candidateBinding, RI: runtimeRI, Lexical: runtimeLexical, UsageBudget: usageBudget, RequireLiveUsage: requireLiveUsage, UsageQualified: usageQualified, UnlimitedTokens: unlimitedTokens}
+		directory := filepath.Join(l.Root, "workspace")
+		threadDirectory := ""
+		if isolated != nil {
+			directory = workspace.Request.Path
+			threadDirectory = directory
+		}
+		a := &codexruntime.Adapter{JournalPath: runtimePath, Directory: directory, Source: &s.Creation.Repository, Candidate: candidateBinding, RI: runtimeRI, Lexical: runtimeLexical, UsageBudget: usageBudget, RequireLiveUsage: requireLiveUsage, UsageQualified: usageQualified, UnlimitedTokens: unlimitedTokens}
 		tools := codexruntime.NewToolSession(ctx, a)
 		defer tools.Close()
-		h, err := startCodexRoleHost(ctx, l, s.Creation.Config.Codex, expected.Invocation.Profile, a.SourceToolsForInvocation(expected.Invocation), tools.HandleTool)
+		h, err := startCodexRoleHostAtThreadDirectory(ctx, l, s.Creation.Config.Codex, expected.Invocation.Profile, a.SourceToolsForInvocation(expected.Invocation), tools.HandleTool, threadDirectory)
 		if err != nil {
 			return result, err
 		}
@@ -318,13 +381,17 @@ func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected
 	if latest.WriterHost == nil || latest.WriterHost.Intent != expected || !latest.WriterHost.Ready || latest.WriterHost.Receipt == nil {
 		return result, errors.New("writer host observation missing")
 	}
-	if state.Intent == nil || state.Intent.Invocation != expected.Invocation || state.Intent.Directory != filepath.Join(l.Root, "workspace") || state.Result == nil || state.Thread == nil || state.TurnStatus != "completed" || state.Source == nil || *state.Source != s.Creation.Repository {
+	directory := filepath.Join(l.Root, "workspace")
+	if isolated != nil {
+		directory = workspace.Request.Path
+	}
+	if state.Intent == nil || state.Intent.Invocation != expected.Invocation || state.Intent.Directory != directory || state.Result == nil || state.Thread == nil || state.TurnStatus != "completed" || state.Source == nil || *state.Source != s.Creation.Repository {
 		return result, errors.New("writer runtime evidence incomplete or substituted")
 	}
 	if (state.RI == nil) != (runtimeRI == nil) || (runtimeRI != nil && *state.RI != *runtimeRI) {
 		return result, errors.New("writer runtime RI binding mismatch")
 	}
-	if state.Candidate == nil || state.Candidate.Workspace != *s.Workspace || state.Candidate.Candidate != before {
+	if state.Candidate == nil || state.Candidate.Workspace != *workspace || state.Candidate.Candidate != before {
 		return result, errors.New("writer runtime candidate mismatch")
 	}
 	candidateID, err := before.ID()
@@ -334,18 +401,31 @@ func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected
 	if err := validateRoleLexicalState(s, runtimeLexical, state, candidateID); err != nil {
 		return result, err
 	}
-	if err := state.Thread.Validate(expected.Invocation.Profile, filepath.Join(l.Root, "workspace")); err != nil {
+	if err := state.Thread.Validate(expected.Invocation.Profile, directory); err != nil {
 		return result, err
 	}
 	if err := runtime.ValidateResult(expected.Invocation, *state.Result, true); err != nil {
 		return result, err
 	}
-	after, err := observeCandidate(ctx, path, s)
-	if err != nil {
-		return result, err
-	}
-	if after != before {
-		return result, errors.New("writer source changed during execution")
+	var after worktree.Candidate
+	if isolated != nil {
+		after, _, err = worktree.Capture(ctx, *workspace)
+		if err != nil || after != before {
+			return result, errors.Join(errors.New("isolated writer child changed during execution"), err)
+		} else {
+			latestBinding, bindingErr := isolatedWriterBindingForTask(latest, taskID)
+			if bindingErr != nil || !sameCanonical(latestBinding, *isolated) {
+				return result, errors.Join(errors.New("isolated writer receipt changed during execution"), bindingErr)
+			}
+		}
+	} else {
+		after, err = observeCandidate(ctx, path, s)
+		if err != nil {
+			return result, err
+		}
+		if after != before {
+			return result, errors.New("writer source changed during execution")
+		}
 	}
 	hash, err := canonical.Hash("harness.writer-result.v1", *state.Result)
 	if err != nil {

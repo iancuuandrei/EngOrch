@@ -14,6 +14,10 @@ import (
 // every role. Strict capability confinement is decided after configuration
 // observation but before login, model-access intent, thread creation or resume.
 func startCodexRoleHost(ctx context.Context, launch codexhost.Launch, hostConfig *config.Codex, profile runtime.Profile, dynamicTools []any, handler codexrpc.ToolHandler) (*codexhost.Host, error) {
+	return startCodexRoleHostAtThreadDirectory(ctx, launch, hostConfig, profile, dynamicTools, handler, "")
+}
+
+func startCodexRoleHostAtThreadDirectory(ctx context.Context, launch codexhost.Launch, hostConfig *config.Codex, profile runtime.Profile, dynamicTools []any, handler codexrpc.ToolHandler, threadDirectory string) (*codexhost.Host, error) {
 	if hostConfig == nil {
 		return nil, errors.New("Codex host configuration required")
 	}
@@ -24,10 +28,10 @@ func startCodexRoleHost(ctx context.Context, launch codexhost.Launch, hostConfig
 			Profile:        profile,
 			DynamicTools:   dynamicTools,
 		}
-		host, _, err := codexhost.StartWithCapabilityConfinementAttested(ctx, launch, hostConfig.CapabilityConfinement, attestation, handler)
+		host, _, err := codexhost.StartWithCapabilityConfinementAttestedAtThreadDirectory(ctx, launch, hostConfig.CapabilityConfinement, threadDirectory, attestation, handler)
 		return host, err
 	}
-	host, _, err := codexhost.StartWithCapabilityConfinement(ctx, launch, hostConfig.CapabilityConfinement, handler)
+	host, _, err := codexhost.StartWithCapabilityConfinementAtThreadDirectory(ctx, launch, hostConfig.CapabilityConfinement, threadDirectory, handler)
 	return host, err
 }
 

@@ -62,3 +62,22 @@ func TestAutonomousGraphParallelImplementationsRejectCollisionsAndMissingGate(t 
 		t.Fatal("dependent implementation siblings accepted", err)
 	}
 }
+
+func TestAutonomousGraphIsolatedValidatorAllowsUpToEightWithoutWideningLegacy(t *testing.T) {
+	g := parallelImplementationGraph()
+	g.Tasks = append(g.Tasks, Task{ID: "impl-docs", Kind: Implementation, Title: "Update docs", Dependencies: []string{"research"}, ScopePaths: []string{"."}, WritePaths: []string{"README.md"}, ExpectedEvidence: []Evidence{{Kind: "file", Description: "docs"}}, EstimatedSeconds: 10})
+	for i := range g.Tasks {
+		if g.Tasks[i].ID == "verify" || g.Tasks[i].ID == "review" {
+			g.Tasks[i].Dependencies = append(g.Tasks[i].Dependencies, "impl-docs")
+		}
+	}
+	if err := ValidateAutonomousGraphWithIsolatedImplementations(g, 3); err != nil {
+		t.Fatal("isolated validator rejected three independent implementations:", err)
+	}
+	if err := ValidateAutonomousGraphWithImplementations(g, 3); err == nil {
+		t.Fatal("legacy parallel validator was widened beyond two implementations")
+	}
+	if err := ValidateAutonomousGraphWithIsolatedImplementations(g, 9); err == nil {
+		t.Fatal("isolated validator accepted a limit above eight")
+	}
+}

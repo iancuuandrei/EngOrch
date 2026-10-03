@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"path"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -275,24 +276,12 @@ func ValidateGoEngineeringGraph(graph GoEngineeringGraph) error {
 			return errors.New("Go engineering graph edges are not strictly ordered")
 		}
 	}
-	content := graph.content()
-	digest, err := canonical.Hash("harness.ri.go-engineering-graph.v1", content)
-	if err != nil {
-		return err
-	}
-	if graph.Digest != digest {
-		return errors.New("Go engineering graph digest mismatch")
-	}
-	sourcePairs := make([]map[string]string, 0, len(graph.Files))
-	for _, file := range graph.Files {
-		sourcePairs = append(sourcePairs, map[string]string{"path": file.Facts.Path, "source_sha256": file.Facts.SourceSHA256})
-	}
-	sourceDigest, err := canonical.Hash("harness.ri.go-engineering-source.v1", sourcePairs)
-	if err != nil || sourceDigest != graph.SourceDigest {
-		return errors.New("Go engineering graph source digest mismatch")
-	}
+	// Reconstruction computes both canonical digests once. Compare the entire
+	// supplied content as well: matching only the supplied digest would permit
+	// altered nodes/edges with an unchanged digest. No validation result is cached
+	// across mutable caller-owned graphs.
 	expected, err := buildGoEngineeringGraph(graph.SourceID, graph.CandidateID, graph.ProducerSHA256, graph.Files, graph.Generators)
-	if err != nil || expected.Digest != graph.Digest {
+	if err != nil || expected.Digest != graph.Digest || !reflect.DeepEqual(expected.content(), graph.content()) {
 		return errors.New("Go engineering graph relations do not match its bound facts")
 	}
 	return nil

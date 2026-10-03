@@ -26,10 +26,14 @@ policy (init defaults to `go test ./...`) and hashed. Native mode runs
 gathering. Fabric and PR5 child calls temporarily prepend the selected Go
 directory and verify bare `go` resolves to that exact executable; caller PATH
 is restored in finally and the executable hash/binding are recorded. The
-`go-source-context-v1` treatment requires an explicit absolute, clean parser
+`go-source-context-v1` and `go-source-context-v2` treatments require an explicit absolute, clean parser
 path and its lowercase SHA-256 via `-PlannerContextRIExecutable` and
 `-PlannerContextRIExecutableSHA256`; no parser is discovered from PATH or the
 environment, and both values are bound in the prepared/evaluated receipts.
+Resource-bounded isolated writers are an optional Native-only treatment:
+`-IsolatedWriters -IsolationPolicyPath ABSOLUTE_PATH -MaxParallel N`. It is
+exclusive with `-ParallelWriters`; the policy path and exact file SHA-256 are
+bound at Prepare and must match at Evaluate.
 PR5Matched mode uses the explicit -PR5BaselineScript with the
 supplied baseline exe (init with baseline exe/model first, inspect+usage
 with the baseline exe, exact run-identity parsing, diff collected from the
@@ -67,6 +71,8 @@ param(
     [string]$PlannerContextRIExecutableSHA256 = '',
     [ValidateSet('', 'cache-prefix-v1')][string]$PromptRecipe = '',
     [switch]$ParallelWriters,
+    [switch]$IsolatedWriters,
+    [string]$IsolationPolicyPath = '',
     [switch]$ValidateWriterEdits,
     [ValidateRange(0, 8)][int]$MaxParallel = 0,
     [string]$PR5BaselineExe,
@@ -79,16 +85,34 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+function Assert-IsolatedRunnerOptionShape([bool]$Enabled, [string]$PolicyPath, [bool]$Parallel, [string]$Mode, [int]$ParallelLimit) {
+    if ($Enabled -ne (-not [string]::IsNullOrWhiteSpace($PolicyPath))) {
+        throw 'IsolatedWriters and IsolationPolicyPath must be supplied together.'
+    }
+    if ($Enabled -and $Parallel) {
+        throw 'IsolatedWriters and ParallelWriters are mutually exclusive.'
+    }
+    if ($Enabled -and $Mode -ne 'Native') {
+        throw 'IsolatedWriters requires Native mode.'
+    }
+    if ($Enabled -and ($ParallelLimit -lt 1 -or $ParallelLimit -gt 8)) {
+        throw 'IsolatedWriters requires an explicit MaxParallel value from 1 through 8.'
+    }
+}
 if ($Action -eq 'Evaluate' -and $EvalMode -eq 'PR5Matched' -and ($ParallelWriters -or $ValidateWriterEdits -or $MaxParallel -ne 0)) {
     throw 'Writer and scheduler overrides require Native mode; PR5Matched retains its original invocation.'
 }
+Assert-IsolatedRunnerOptionShape ([bool]$IsolatedWriters) $IsolationPolicyPath ([bool]$ParallelWriters) $EvalMode $MaxParallel
+function Test-GoSourceContextMode([string]$Mode) {
+    return $Mode -ceq 'go-source-context-v1' -or $Mode -ceq 'go-source-context-v2'
+}
 function Assert-PlannerContextBindingShape([string]$Mode, [string]$Executable, [string]$ExecutableSHA256) {
-    if ($Mode -notin @('', 'source-bounded-v1', 'go-source-context-v1')) {
-        throw 'PlannerContext must be empty, source-bounded-v1, or go-source-context-v1.'
+    if ($Mode -notin @('', 'source-bounded-v1', 'go-source-context-v1', 'go-source-context-v2')) {
+        throw 'PlannerContext must be empty, source-bounded-v1, go-source-context-v1, or go-source-context-v2.'
     }
-    if ($Mode -eq 'go-source-context-v1') {
+    if (Test-GoSourceContextMode $Mode) {
         if ([string]::IsNullOrWhiteSpace($Executable) -or [string]::IsNullOrWhiteSpace($ExecutableSHA256)) {
-            throw 'go-source-context-v1 requires PlannerContextRIExecutable and PlannerContextRIExecutableSHA256.'
+            throw 'Go source context modes require PlannerContextRIExecutable and PlannerContextRIExecutableSHA256.'
         }
         if (-not [IO.Path]::IsPathFullyQualified($Executable) -or [IO.Path]::GetFullPath($Executable) -cne $Executable) {
             throw 'PlannerContextRIExecutable must be an absolute clean path, passed unchanged.'
@@ -99,7 +123,7 @@ function Assert-PlannerContextBindingShape([string]$Mode, [string]$Executable, [
         return
     }
     if ($Executable -ne '' -or $ExecutableSHA256 -ne '') {
-        throw 'PlannerContextRIExecutable and PlannerContextRIExecutableSHA256 require go-source-context-v1.'
+        throw 'PlannerContextRIExecutable and PlannerContextRIExecutableSHA256 require go-source-context-v1 or go-source-context-v2.'
     }
 }
 Assert-PlannerContextBindingShape $PlannerContext $PlannerContextRIExecutable $PlannerContextRIExecutableSHA256
@@ -132,17 +156,21 @@ function Get-NativeInitArgs([string]$TaskPath, [string]$RuntimePath, [string]$Wr
     return $nativeArgs
 }
 
-function Get-NativeRunArgs([string]$TaskPath, [string]$Objective, [bool]$EnableParallelWriters, [int]$ParallelLimit, [string]$PlannerContext = '', [string]$PromptRecipe = '', [string]$PlannerContextRIExecutable = '', [string]$PlannerContextRIExecutableSHA256 = '') {
+function Get-NativeRunArgs([string]$TaskPath, [string]$Objective, [bool]$EnableParallelWriters, [int]$ParallelLimit, [string]$PlannerContext = '', [string]$PromptRecipe = '', [string]$PlannerContextRIExecutable = '', [string]$PlannerContextRIExecutableSHA256 = '', [bool]$EnableIsolatedWriters = $false, [string]$IsolationPolicyPath = '') {
     if ($ParallelLimit -lt 0 -or $ParallelLimit -gt 8) { throw 'Scheduler override must be 0 (default) or 1..8.' }
     if ($PromptRecipe -notin @('', 'cache-prefix-v1')) { throw 'Unsupported prompt recipe.' }
     Assert-PlannerContextBindingShape $PlannerContext $PlannerContextRIExecutable $PlannerContextRIExecutableSHA256
+    if ($EnableParallelWriters -and $EnableIsolatedWriters) { throw 'ParallelWriters and IsolatedWriters are mutually exclusive.' }
+    if ($EnableIsolatedWriters -ne (-not [string]::IsNullOrWhiteSpace($IsolationPolicyPath))) { throw 'IsolatedWriters and IsolationPolicyPath must be supplied together.' }
+    if ($EnableIsolatedWriters -and ($ParallelLimit -lt 1 -or $ParallelLimit -gt 8)) { throw 'IsolatedWriters requires MaxParallel from 1 through 8.' }
     $nativeArgs = @('--root', $TaskPath, 'run', '--autonomous')
     if ($PlannerContext -ne '') { $nativeArgs += @('--planner-context', $PlannerContext) }
-    if ($PlannerContext -eq 'go-source-context-v1') {
+    if (Test-GoSourceContextMode $PlannerContext) {
         $nativeArgs += @('--planner-context-ri-executable', $PlannerContextRIExecutable, '--planner-context-ri-executable-sha256', $PlannerContextRIExecutableSHA256)
     }
     if ($PromptRecipe -ne '') { $nativeArgs += @('--prompt-recipe', $PromptRecipe) }
     if ($EnableParallelWriters) { $nativeArgs += '--parallel-writers' }
+    if ($EnableIsolatedWriters) { $nativeArgs += @('--isolated-writers', '--isolation-policy', $IsolationPolicyPath) }
     if ($ParallelLimit -ne 0) { $nativeArgs += @('--max-parallel', [string]$ParallelLimit) }
     $nativeArgs += $Objective
     return $nativeArgs
@@ -163,7 +191,110 @@ function Get-FileSha256([string]$Path) {
     } finally { $h.Dispose() }
 }
 
-if ($PlannerContext -eq 'go-source-context-v1') {
+function Get-IsolationPolicyBinding([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not [IO.Path]::IsPathFullyQualified($Path) -or [IO.Path]::GetFullPath($Path) -cne $Path) {
+        throw 'IsolationPolicyPath must be an absolute clean path passed unchanged.'
+    }
+    $item = Get-Item -LiteralPath $Path -ErrorAction Stop
+    if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'IsolationPolicyPath must name a regular non-reparse file.'
+    }
+    if ($item.Length -eq 0 -or $item.Length -gt (32 * 1024)) {
+        throw 'Isolation policy must be nonempty and no larger than 32 KiB.'
+    }
+    $bytes = [IO.File]::ReadAllBytes($item.FullName)
+    if ($bytes.Length -eq 0 -or $bytes.Length -gt (32 * 1024)) {
+        throw 'Isolation policy must be nonempty and no larger than 32 KiB.'
+    }
+    $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+    $text = $strictUtf8.GetString($bytes)
+    $document = $text | ConvertFrom-Json
+    if ($document.version -ne 1 -or $null -eq $document.capacity -or $null -eq $document.estimate) {
+        throw 'Isolation policy must contain version 1, capacity, and estimate objects.'
+    }
+    $hasher = [System.Security.Cryptography.SHA256]::Create()
+    try { $sha256 = ([BitConverter]::ToString($hasher.ComputeHash($bytes)) -replace '-', '').ToLowerInvariant() }
+    finally { $hasher.Dispose() }
+    return [ordered]@{
+        Path = $item.FullName
+        Sha256 = $sha256
+        Bytes = $bytes.Length
+        Document = $document
+    }
+}
+
+function Assert-CurrentIsolationPolicyBinding($Binding) {
+    if ($null -eq $Binding) { throw 'Isolation policy binding is missing.' }
+    $current = Get-IsolationPolicyBinding $Binding.Path
+    if ($current.Path -cne $Binding.Path -or $current.Sha256 -cne $Binding.Sha256) {
+        throw 'Isolation policy path or file bytes changed during this evaluation.'
+    }
+}
+
+function Assert-IsolationPolicyObserved($Snapshot, $Binding, [int]$MaxParallel) {
+    $execution = $Snapshot.creation.execution
+    if ($null -eq $execution) { throw 'Inspected run does not include execution policy.' }
+    $parallelVersion = if ($null -eq $execution.parallel_implementation_version) { 0 } else { [int]$execution.parallel_implementation_version }
+    if ($execution.isolated_implementation_version -ne 1 -or
+        $parallelVersion -ne 0 -or $execution.max_parallel -ne $MaxParallel) {
+        throw 'Inspected run does not bind the requested isolated-writer scheduler policy.'
+    }
+    $expectedCapacity = $Binding.Document.capacity
+    $expectedEstimate = $Binding.Document.estimate
+    $observedCapacity = $execution.isolation_capacity
+    $observedEstimate = $execution.isolation_estimate
+    if ($null -eq $observedCapacity -or $null -eq $observedEstimate -or
+        $observedCapacity.cpu_milli -ne $expectedCapacity.cpu_milli -or
+        $observedCapacity.memory_mib -ne $expectedCapacity.memory_mib -or
+        $observedCapacity.verification_slots -ne $expectedCapacity.verification_slots -or
+        $observedCapacity.total_runtime_slots -ne $expectedCapacity.total_runtime_slots -or
+        $observedEstimate.cpu_milli -ne $expectedEstimate.cpu_milli -or
+        $observedEstimate.memory_mib -ne $expectedEstimate.memory_mib -or
+        $observedEstimate.verification_slots -ne $expectedEstimate.verification_slots -or
+        $observedEstimate.runtime_slots -ne $expectedEstimate.runtime_slots) {
+        throw 'Inspected run capacity or estimate differs from the explicit isolation policy.'
+    }
+    $writer = $Snapshot.creation.config.writer
+    if ($null -eq $writer -or $observedCapacity.provider_slots.Count -ne 1 -or
+        $observedCapacity.model_slots.Count -ne 1 -or $observedCapacity.runtime_slots.Count -ne 1 -or
+        $observedCapacity.provider_slots[0].provider -cne $writer.provider -or
+        $observedCapacity.provider_slots[0].slots -ne $expectedCapacity.provider_slots -or
+        $observedCapacity.model_slots[0].model.provider -cne $writer.provider -or
+        $observedCapacity.model_slots[0].model.model -cne $writer.model -or
+        $observedCapacity.model_slots[0].slots -ne $expectedCapacity.model_slots -or
+        [string]::IsNullOrWhiteSpace([string]$observedCapacity.runtime_slots[0].runtime.profile_id) -or
+        $observedCapacity.runtime_slots[0].runtime.provider -cne $writer.provider -or
+        $observedCapacity.runtime_slots[0].runtime.model -cne $writer.model -or
+        $observedCapacity.runtime_slots[0].slots -ne $expectedCapacity.runtime_slots) {
+        throw 'Inspected isolated capacity is not bound to exactly the configured writer route.'
+    }
+    return [ordered]@{
+        isolated_implementation_version = $execution.isolated_implementation_version
+        max_parallel = $execution.max_parallel
+        isolation_capacity = $observedCapacity
+        isolation_estimate = $observedEstimate
+    }
+}
+
+function Assert-IsolationPolicyPreparedBinding($Prior, $Binding, [bool]$Enabled, [int]$MaxParallel) {
+    $preparedEnabled = [bool]$Prior.isolated_writers_requested
+    if ($preparedEnabled -ne $Enabled) {
+        throw 'IsolatedWriters must match the treatment recorded by the prepared run.'
+    }
+    if ($Enabled) {
+        if ($null -eq $Binding -or
+            [string]$Prior.isolation_policy_path_requested -cne $Binding.Path -or
+            [string]$Prior.isolation_policy_sha256_requested -cne $Binding.Sha256 -or
+            [int]$Prior.isolation_policy_version_requested -ne 1 -or
+            [int]$Prior.max_parallel_requested -ne $MaxParallel) {
+            throw 'Isolation policy path/hash, version and MaxParallel must match the explicit prepared treatment.'
+        }
+    } elseif ($null -ne $Prior.isolation_policy_sha256_requested -and $Prior.isolation_policy_sha256_requested -ne '') {
+        throw 'Prepared run unexpectedly contains isolated-writer policy provenance.'
+    }
+}
+
+if (Test-GoSourceContextMode $PlannerContext) {
     if (-not (Test-Path -LiteralPath $PlannerContextRIExecutable -PathType Leaf)) {
         throw 'PlannerContextRIExecutable must name an existing regular file.'
     }
@@ -171,6 +302,11 @@ if ($PlannerContext -eq 'go-source-context-v1') {
     if ($actualPlannerContextRIExecutableSHA256 -cne $PlannerContextRIExecutableSHA256) {
         throw 'PlannerContextRIExecutableSHA256 does not match the selected parser executable bytes.'
     }
+}
+
+$isolationPolicyBinding = $null
+if ($IsolatedWriters) {
+    $isolationPolicyBinding = Get-IsolationPolicyBinding $IsolationPolicyPath
 }
 
 function Get-PinnedGoEnvironmentBinding([string]$GoPath) {
@@ -715,8 +851,8 @@ if ($Action -eq 'Prepare') {
             windows_exclusion      = if ($native.Scope -eq 'windows-scoped') { '^TestNocmpIntegration$ (Windows-only atomic tasks; rationale in manifest native_verification)' } else { $null }
             task_completion        = 'NOT RUN'
             planner_context_requested = $PlannerContext
-            planner_context_ri_executable_requested = if ($PlannerContext -eq 'go-source-context-v1') { $PlannerContextRIExecutable } else { $null }
-            planner_context_ri_executable_sha256_requested = if ($PlannerContext -eq 'go-source-context-v1') { $PlannerContextRIExecutableSHA256 } else { $null }
+            planner_context_ri_executable_requested = if (Test-GoSourceContextMode $PlannerContext) { $PlannerContextRIExecutable } else { $null }
+            planner_context_ri_executable_sha256_requested = if (Test-GoSourceContextMode $PlannerContext) { $PlannerContextRIExecutableSHA256 } else { $null }
             prompt_recipe_requested = $PromptRecipe
             provider_calls         = 0
             input_tokens           = $null
@@ -732,6 +868,14 @@ if ($Action -eq 'Prepare') {
             candidate_sha          = $null
             candidate_tree_sha256  = $null
         }
+        if ($IsolatedWriters) {
+            $records[-1].isolated_writers_requested = $true
+            $records[-1].max_parallel_requested = $MaxParallel
+            $records[-1].isolation_policy_version_requested = 1
+            $records[-1].isolation_policy_path_requested = $isolationPolicyBinding.Path
+            $records[-1].isolation_policy_sha256_requested = $isolationPolicyBinding.Sha256
+            $records[-1].isolation_policy_bytes_requested = $isolationPolicyBinding.Bytes
+        }
     }
     $started.Stop()
     $record = [ordered]@{
@@ -740,9 +884,9 @@ if ($Action -eq 'Prepare') {
         run_id                        = $RunId
         mode                          = 'prepare'
         planner_context_requested  = $PlannerContext
-        planner_context_ri_executable_requested = if ($PlannerContext -eq 'go-source-context-v1') { $PlannerContextRIExecutable } else { $null }
-        planner_context_ri_executable_sha256_requested = if ($PlannerContext -eq 'go-source-context-v1') { $PlannerContextRIExecutableSHA256 } else { $null }
-        planner_context_ri_executable_sha256_verified = if ($PlannerContext -eq 'go-source-context-v1') { $actualPlannerContextRIExecutableSHA256 } else { $null }
+        planner_context_ri_executable_requested = if (Test-GoSourceContextMode $PlannerContext) { $PlannerContextRIExecutable } else { $null }
+        planner_context_ri_executable_sha256_requested = if (Test-GoSourceContextMode $PlannerContext) { $PlannerContextRIExecutableSHA256 } else { $null }
+        planner_context_ri_executable_sha256_verified = if (Test-GoSourceContextMode $PlannerContext) { $actualPlannerContextRIExecutableSHA256 } else { $null }
         prompt_recipe_requested  = $PromptRecipe
         created_utc                   = [DateTime]::UtcNow.ToString('o')
         product_head                  = $productHead
@@ -758,6 +902,14 @@ if ($Action -eq 'Prepare') {
         raw_transcripts_retained      = $false
         credentials_retained          = $false
         task_records                  = $records
+    }
+    if ($IsolatedWriters) {
+        $record.isolated_writers_requested = $true
+        $record.max_parallel_requested = $MaxParallel
+        $record.isolation_policy_version_requested = 1
+        $record.isolation_policy_path_requested = $isolationPolicyBinding.Path
+        $record.isolation_policy_sha256_requested = $isolationPolicyBinding.Sha256
+        $record.isolation_policy_bytes_requested = $isolationPolicyBinding.Bytes
     }
     $record | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 (Join-Path $runPath 'run.json')
     Write-Output "PASS prepared $($records.Count) pinned tasks; provider calls=0"
@@ -821,6 +973,7 @@ $preparedPromptRecipe = [string]$prior.prompt_recipe_requested
 if ($preparedPromptRecipe -ne $PromptRecipe) {
     throw 'PromptRecipe must match the treatment recorded by the prepared run.'
 }
+Assert-IsolationPolicyPreparedBinding $prior $isolationPolicyBinding ([bool]$IsolatedWriters) $MaxParallel
 $taskPins = @($entries | ForEach-Object { [ordered]@{ task_id = $_.id; source_sha = $_.sha; url = $_.url } })
 # Optional known external build receipt: validate binary hash when present,
 # never blindly trust stamped source.
@@ -866,9 +1019,17 @@ foreach ($entry in $entries) {
         task_id = $entry.id; eval_mode = $EvalMode; terminal_state = 'BLOCKED'
         blocked_reason = $null; fail_reason = $null
         planner_context_requested = $PlannerContext
-        planner_context_ri_executable_requested = if ($PlannerContext -eq 'go-source-context-v1') { $PlannerContextRIExecutable } else { $null }
-        planner_context_ri_executable_sha256_requested = if ($PlannerContext -eq 'go-source-context-v1') { $PlannerContextRIExecutableSHA256 } else { $null }
+        planner_context_ri_executable_requested = if (Test-GoSourceContextMode $PlannerContext) { $PlannerContextRIExecutable } else { $null }
+        planner_context_ri_executable_sha256_requested = if (Test-GoSourceContextMode $PlannerContext) { $PlannerContextRIExecutableSHA256 } else { $null }
         prompt_recipe_requested = $PromptRecipe
+    }
+    if ($IsolatedWriters) {
+        $result.isolated_writers_requested = $true
+        $result.max_parallel_requested = $MaxParallel
+        $result.isolation_policy_version_requested = 1
+        $result.isolation_policy_path_requested = $isolationPolicyBinding.Path
+        $result.isolation_policy_sha256_requested = $isolationPolicyBinding.Sha256
+        $result.isolation_policy_bytes_requested = $isolationPolicyBinding.Bytes
     }
     try {
         if (-not (Test-Path -LiteralPath $taskPath)) { throw "Task checkout missing for $($entry.id): $taskPath" }
@@ -895,13 +1056,16 @@ foreach ($entry in $entries) {
             $result.verification_config_sha256 = $verPolicy.ConfigSha
             $result.native_test_scope = $verPolicy.Scope
             Set-Content -NoNewline -Encoding utf8 (Join-Path $taskOutDir 'verification-argv.log') $verPolicy.ArgvText
-            $runArgs = @(Get-NativeRunArgs $taskPath $entry.task ([bool]$ParallelWriters) $MaxParallel $PlannerContext $PromptRecipe $PlannerContextRIExecutable $PlannerContextRIExecutableSHA256)
+            $runArgs = @(Get-NativeRunArgs $taskPath $entry.task ([bool]$ParallelWriters) $MaxParallel $PlannerContext $PromptRecipe $PlannerContextRIExecutable $PlannerContextRIExecutableSHA256 ([bool]$IsolatedWriters) $isolationPolicyBinding.Path)
             $result.parallel_writers_requested = [bool]$ParallelWriters
+            if ($IsolatedWriters) { $result.isolated_writers_requested = $true }
             $result.writer_edit_validation_requested = [bool]$ValidateWriterEdits
             $result.max_parallel_requested = if ($MaxParallel -eq 0) { $null } else { $MaxParallel }
             Invoke-WithPinnedGo $GoExe {
+                if ($IsolatedWriters) { Assert-CurrentIsolationPolicyBinding $isolationPolicyBinding }
                 & $FabricExe @runArgs 1> (Join-Path $taskOutDir 'fabric-run.stdout.log') 2> (Join-Path $taskOutDir 'fabric-run.stderr.log')
                 if ($LASTEXITCODE -ne 0) { throw "fabric run --autonomous failed for $($entry.id); see fabric-run.*.log" }
+                if ($IsolatedWriters) { Assert-CurrentIsolationPolicyBinding $isolationPolicyBinding }
             }
             $runOut = Get-Content -Raw -LiteralPath (Join-Path $taskOutDir 'fabric-run.stdout.log')
             if ([string]::IsNullOrWhiteSpace($runOut)) { throw "fabric run produced no output for $($entry.id)" }
@@ -928,8 +1092,8 @@ foreach ($entry in $entries) {
             if ($observedPlannerContext -ne $PlannerContext) { throw 'Inspected run planner_context does not match the requested treatment.' }
             $observedPlannerContextRIExecutable = [string]$snap.creation.execution.planner_context_ri_executable
             $observedPlannerContextRIExecutableSHA256 = [string]$snap.creation.execution.planner_context_ri_executable_sha256
-            $result.planner_context_ri_executable_observed = if ($PlannerContext -eq 'go-source-context-v1') { $observedPlannerContextRIExecutable } else { $null }
-            $result.planner_context_ri_executable_sha256_observed = if ($PlannerContext -eq 'go-source-context-v1') { $observedPlannerContextRIExecutableSHA256 } else { $null }
+            $result.planner_context_ri_executable_observed = if (Test-GoSourceContextMode $PlannerContext) { $observedPlannerContextRIExecutable } else { $null }
+            $result.planner_context_ri_executable_sha256_observed = if (Test-GoSourceContextMode $PlannerContext) { $observedPlannerContextRIExecutableSHA256 } else { $null }
             if ($observedPlannerContextRIExecutable -cne $PlannerContextRIExecutable -or
                 $observedPlannerContextRIExecutableSHA256 -cne $PlannerContextRIExecutableSHA256) {
                 throw 'Inspected run RI parser path/hash does not match the requested treatment.'
@@ -937,6 +1101,12 @@ foreach ($entry in $entries) {
             $observedPromptRecipe = [string]$snap.creation.execution.prompt_recipe
             $result.prompt_recipe_observed = $observedPromptRecipe
             if ($observedPromptRecipe -ne $PromptRecipe) { throw 'Inspected run prompt_recipe does not match the requested treatment.' }
+            if ($IsolatedWriters) {
+                $isolationObserved = Assert-IsolationPolicyObserved $snap $isolationPolicyBinding $MaxParallel
+                $result.isolated_implementation_version_observed = $isolationObserved.isolated_implementation_version
+                $result.isolation_capacity_observed = $isolationObserved.isolation_capacity
+                $result.isolation_estimate_observed = $isolationObserved.isolation_estimate
+            }
             $usage = (Get-Content -Raw -LiteralPath (Join-Path $taskOutDir 'fabric-usage.stdout.log') | ConvertFrom-Json)
             $diffOut = (Get-Content -Raw -LiteralPath (Join-Path $taskOutDir 'fabric-diff.stdout.log') | ConvertFrom-Json)
             $diffCandidateId = $diffOut.candidate_id
@@ -1234,9 +1404,9 @@ $evalRecord = [ordered]@{
     model                  = $Model
     effort                 = $Effort
     planner_context_requested = $PlannerContext
-    planner_context_ri_executable_requested = if ($PlannerContext -eq 'go-source-context-v1') { $PlannerContextRIExecutable } else { $null }
-    planner_context_ri_executable_sha256_requested = if ($PlannerContext -eq 'go-source-context-v1') { $PlannerContextRIExecutableSHA256 } else { $null }
-    planner_context_ri_executable_sha256_verified = if ($PlannerContext -eq 'go-source-context-v1') { $actualPlannerContextRIExecutableSHA256 } else { $null }
+    planner_context_ri_executable_requested = if (Test-GoSourceContextMode $PlannerContext) { $PlannerContextRIExecutable } else { $null }
+    planner_context_ri_executable_sha256_requested = if (Test-GoSourceContextMode $PlannerContext) { $PlannerContextRIExecutableSHA256 } else { $null }
+    planner_context_ri_executable_sha256_verified = if (Test-GoSourceContextMode $PlannerContext) { $actualPlannerContextRIExecutableSHA256 } else { $null }
     prompt_recipe_requested = $PromptRecipe
     parallel_writers_requested = [bool]$ParallelWriters
     writer_edit_validation_requested = [bool]$ValidateWriterEdits
@@ -1272,6 +1442,14 @@ $evalRecord = [ordered]@{
     raw_transcripts_retained = $false
     credentials_retained   = $false
     results                = $results
+}
+if ($IsolatedWriters) {
+    $evalRecord.isolated_writers_requested = $true
+    $evalRecord.max_parallel_requested = $MaxParallel
+    $evalRecord.isolation_policy_version_requested = 1
+    $evalRecord.isolation_policy_path_requested = $isolationPolicyBinding.Path
+    $evalRecord.isolation_policy_sha256_requested = $isolationPolicyBinding.Sha256
+    $evalRecord.isolation_policy_bytes_requested = $isolationPolicyBinding.Bytes
 }
 $evalRecord | ConvertTo-Json -Depth 10 | Set-Content -Encoding utf8 (Join-Path $evalRoot 'eval.json')
 Write-Output "Evaluate complete ($EvalMode): $(@($results | Where-Object { $_.terminal_state -eq 'PASS' }).Count)/$($results.Count) PASS. See $evalRoot\eval.json"

@@ -158,7 +158,7 @@ func lifecycleReconciliationEvent(kind string) bool {
 		"writer.host-ready", "writer.host-observed", "writer.runtime-observed", "writer.proposed",
 		"graph.writer.host-ready", "graph.writer.host-observed", "graph.writer.runtime-observed", "graph.writer.proposed",
 		"review.host-ready", "review.host-observed", "review.runtime-observed", "review.recorded",
-		"role.provider-observed", "workspace.confirmed", "files.observed",
+		"role.provider-observed", "workspace.confirmed", "graph.isolate-confirmed", "files.observed",
 		"verification.observed", "verification.closed",
 		"commit.observed", "commit.lease-observed",
 		"push.observed", "push.lease-observed",
@@ -311,6 +311,11 @@ func lifecycleUnresolved(s Snapshot) []string {
 	}
 	if s.WorkspaceOutcome == "UNKNOWN" {
 		result = append(result, "workspace")
+	}
+	for taskID, isolation := range s.GraphIsolations {
+		if isolation.Outcome == "UNKNOWN" {
+			result = append(result, "graph-isolation:"+taskID)
+		}
 	}
 	if s.FileOutcome == "UNKNOWN" {
 		result = append(result, "files")

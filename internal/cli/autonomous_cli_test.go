@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/control"
 )
 
@@ -152,13 +153,18 @@ func TestAutonomousGoSourcePlannerContextRequiresAndBindsPinnedParser(t *testing
 	if err := validateAutonomousPlannerContext(autonomousPlannerContextGoSourceV1, parser, parserHash); err != nil {
 		t.Fatalf("valid pinned parser binding rejected: %v", err)
 	}
+	if err := validateAutonomousPlannerContext(autonomousPlannerContextGoSourceV2, parser, parserHash); err != nil {
+		t.Fatalf("valid v2 pinned parser binding rejected: %v", err)
+	}
 
 	for _, test := range []struct {
 		name, mode, path, hash string
 	}{
 		{name: "go context missing binding", mode: autonomousPlannerContextGoSourceV1},
+		{name: "go context v2 missing binding", mode: autonomousPlannerContextGoSourceV2},
 		{name: "go context missing hash", mode: autonomousPlannerContextGoSourceV1, path: parser},
 		{name: "relative parser path", mode: autonomousPlannerContextGoSourceV1, path: "ri.exe", hash: parserHash},
+		{name: "v2 relative parser path", mode: autonomousPlannerContextGoSourceV2, path: "ri.exe", hash: parserHash},
 		{name: "unclean parser path", mode: autonomousPlannerContextGoSourceV1, path: filepath.Dir(parser) + string(os.PathSeparator) + "." + string(os.PathSeparator) + filepath.Base(parser), hash: parserHash},
 		{name: "uppercase hash", mode: autonomousPlannerContextGoSourceV1, path: parser, hash: strings.ToUpper(parserHash)},
 		{name: "binding with legacy mode", mode: autonomousPlannerContextSourceBoundedV1, path: parser, hash: parserHash},
@@ -196,6 +202,31 @@ func TestAutonomousGoSourcePlannerContextRequiresAndBindsPinnedParser(t *testing
 		policy.PlannerContextRIExecutable != parser ||
 		policy.PlannerContextRIExecutableSHA256 != parserHash {
 		t.Fatalf("explicit parser provenance was not bound unchanged in run creation: %#v", policy)
+	}
+
+	v2Root := autonomousCLIFixture(t)
+	var v2Out bytes.Buffer
+	v2Err := Execute(context.Background(), []string{
+		"run", "--autonomous", "--prepare-only", "--max-parallel", "1",
+		"--planner-context", autonomousPlannerContextGoSourceV2,
+		"--planner-context-ri-executable", parser,
+		"--planner-context-ri-executable-sha256", parserHash,
+		"A bounded v2 fixture objective",
+	}, v2Root, &v2Out)
+	if v2Err == nil {
+		t.Fatal("fixture should stop before external role dispatch")
+	}
+	var v2Failure autonomousFailure
+	if decodeErr := json.Unmarshal(v2Out.Bytes(), &v2Failure); decodeErr != nil || v2Failure.RunID == "" {
+		t.Fatalf("v2 failure did not identify the locally prepared run: %s (%v)", v2Out.String(), decodeErr)
+	}
+	v2Snapshot, err := control.Inspect(filepath.Join(v2Root, ".harness", "runs", v2Failure.RunID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2Policy := v2Snapshot.Creation.Execution
+	if v2Policy == nil || v2Policy.PlannerContext != autonomousPlannerContextGoSourceV2 || v2Policy.PlannerContextRIExecutable != parser || v2Policy.PlannerContextRIExecutableSHA256 != parserHash {
+		t.Fatalf("v2 parser provenance was not bound unchanged in run creation: %#v", v2Policy)
 	}
 }
 
@@ -475,6 +506,184 @@ func TestAutonomousParallelWritersRejectsUnsupportedRoutesBeforeRunCreation(t *t
 	}
 	if entries, err := filepath.Glob(filepath.Join(root, ".harness", "runs", "*.jsonl")); err != nil || len(entries) != 0 {
 		t.Fatalf("unsupported parallel writer route created a run: %v, %v", entries, err)
+	}
+}
+
+func isolatedWriterPolicyJSON() string {
+	return `{"version":1,"capacity":{"cpu_milli":2000,"memory_mib":2048,"verification_slots":1,"total_runtime_slots":2,"provider_slots":2,"model_slots":2,"runtime_slots":2},"estimate":{"cpu_milli":500,"memory_mib":512,"verification_slots":0,"runtime_slots":1}}`
+}
+
+func TestReadIsolatedWriterPolicyStrictVersionedBounds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "isolation-policy.json")
+	if err := os.WriteFile(path, []byte(isolatedWriterPolicyJSON()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := readIsolatedWriterPolicy(path)
+	if err != nil || policy.Version != 1 || policy.Capacity.ProviderSlots != 2 || policy.Estimate.VerificationSlots != 0 {
+		t.Fatalf("valid explicit resource policy rejected: %#v, %v", policy, err)
+	}
+
+	for name, raw := range map[string]string{
+		"duplicate member": strings.Replace(isolatedWriterPolicyJSON(), `"version":1,`, `"version":1,"version":1,`, 1),
+		"unknown member":   strings.Replace(isolatedWriterPolicyJSON(), `"version":1,`, `"version":1,"host_cpu":4,`, 1),
+		"missing slot":     strings.Replace(isolatedWriterPolicyJSON(), `,"runtime_slots":2`, ``, 1),
+		"null estimate":    strings.Replace(isolatedWriterPolicyJSON(), `"estimate":{"cpu_milli":500,"memory_mib":512,"verification_slots":0,"runtime_slots":1}`, `"estimate":null`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := readIsolatedWriterPolicy(path); err == nil {
+				t.Fatal("invalid versioned isolation policy accepted")
+			}
+		})
+	}
+	if err := os.WriteFile(path, []byte(strings.Replace(isolatedWriterPolicyJSON(), `"version":1`, `"version":2`, 1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readIsolatedWriterPolicy(path); err == nil {
+		t.Fatal("unsupported isolation policy version accepted")
+	}
+	if err := os.WriteFile(path, []byte(strings.Replace(isolatedWriterPolicyJSON(), `"runtime_slots":1`, `"runtime_slots":0`, 1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readIsolatedWriterPolicy(path); err == nil {
+		t.Fatal("zero per-task runtime estimate accepted")
+	}
+	if _, err := readIsolatedWriterPolicy(t.TempDir()); err == nil {
+		t.Fatal("directory accepted as isolation policy")
+	}
+	if err := os.WriteFile(path, []byte(strings.Repeat(" ", isolatedWriterPolicyMaxBytes+1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readIsolatedWriterPolicy(path); err == nil {
+		t.Fatal("oversized isolation policy accepted")
+	}
+}
+
+func TestIsolatedWritersRequirePolicyAndRejectParallelWritersCombination(t *testing.T) {
+	root := autonomousCLIFixture(t)
+	policyPath := filepath.Join(root, "isolation-policy.json")
+	if err := os.WriteFile(policyPath, []byte(isolatedWriterPolicyJSON()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"run", "--autonomous", "--isolated-writers", "objective"},
+		{"run", "--autonomous", "--isolation-policy", policyPath, "objective"},
+		{"run", "--autonomous", "--parallel-writers", "--isolated-writers", "--isolation-policy", policyPath, "objective"},
+	} {
+		var out bytes.Buffer
+		if err := Execute(context.Background(), args, root, &out); err == nil {
+			t.Errorf("accepted invalid isolated-writer invocation %q", strings.Join(args, " "))
+		}
+	}
+	if entries, err := filepath.Glob(filepath.Join(root, ".harness", "runs", "*.jsonl")); err != nil || len(entries) != 0 {
+		t.Fatalf("invalid isolated-writer arguments created runs: %v, %v", entries, err)
+	}
+}
+
+func TestAutonomousIsolatedWritersBindExplicitCapacityAndDerivedWriterRoute(t *testing.T) {
+	root := autonomousCLIFixture(t)
+	configPath := filepath.Join(root, "harness.toml")
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Replace(string(content), "\n[planner]", "\nwriter_contract = \"anchored-edits-v1\"\nexplorer_contract = \"json-v2\"\n\n[planner]", 1)
+	text += `
+
+[writer]
+runtime = "fake"
+provider = "deterministic"
+model = "fixture-v1"
+effort = "none"
+role = "writer"
+
+[explorer]
+runtime = "fake"
+provider = "deterministic"
+model = "fixture-v1"
+effort = "none"
+role = "explorer"
+`
+	if err := os.WriteFile(configPath, []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	policyPath := filepath.Join(root, "isolation-policy.json")
+	if err := os.WriteFile(policyPath, []byte(isolatedWriterPolicyJSON()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	err = Execute(context.Background(), []string{"run", "--autonomous", "--isolated-writers", "--isolation-policy", policyPath, "--max-parallel", "2", "--prepare-only", "Isolate the initial source tasks"}, root, &out)
+	if err == nil {
+		t.Fatal("fixture planner should stop before accepting a production task graph")
+	}
+	var failure autonomousFailure
+	if decodeErr := json.Unmarshal(out.Bytes(), &failure); decodeErr != nil || failure.RunID == "" {
+		t.Fatalf("isolated run failure omitted durable run identity: output=%s decode=%v execute=%v", out.String(), decodeErr, err)
+	}
+	s, err := control.Inspect(filepath.Join(root, ".harness", "runs", failure.RunID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution := s.Creation.Execution
+	if execution == nil || execution.IsolatedImplementationVersion != 1 || execution.ParallelImplementationVersion != 0 || execution.MaxParallel != 2 || execution.IsolationCapacity == nil || execution.IsolationEstimate == nil {
+		t.Fatalf("isolated resource policy not durably bound: %#v", execution)
+	}
+	capacity := execution.IsolationCapacity
+	if capacity.CPUMilli != 2000 || capacity.MemoryMiB != 2048 || capacity.VerificationSlots != 1 || capacity.TotalRuntimeSlots != 2 || len(capacity.ProviderSlots) != 1 || len(capacity.ModelSlots) != 1 || len(capacity.RuntimeSlots) != 1 {
+		t.Fatalf("capacity fields differ from explicit file: %#v", capacity)
+	}
+	profileID, err := canonical.Hash("harness.isolation-writer-profile.v1", *s.Creation.Config.Writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := capacity.RuntimeSlots[0].Runtime
+	if capacity.ProviderSlots[0].Provider != s.Creation.Config.Writer.Provider || capacity.ProviderSlots[0].Slots != 2 || capacity.ModelSlots[0].Model.Provider != s.Creation.Config.Writer.Provider || capacity.ModelSlots[0].Model.Model != s.Creation.Config.Writer.Model || route.ProfileID != profileID || route.Provider != s.Creation.Config.Writer.Provider || route.Model != s.Creation.Config.Writer.Model || capacity.RuntimeSlots[0].Slots != 2 {
+		t.Fatalf("capacity was not bound to the configured writer route: %#v", capacity)
+	}
+	if execution.IsolationEstimate.CPUMilli != 500 || execution.IsolationEstimate.MemoryMiB != 512 || execution.IsolationEstimate.VerificationSlots != 0 || execution.IsolationEstimate.RuntimeSlots != 1 {
+		t.Fatalf("per-writer estimate differs from explicit file: %#v", execution.IsolationEstimate)
+	}
+	if s.Creation.Config.PlannerContract != "plan-graph-v7" {
+		t.Fatalf("isolated mode did not bind the multi-implementation graph contract: %q", s.Creation.Config.PlannerContract)
+	}
+
+	// Reuse the recorded fake planner invocation identity in a fresh run, but
+	// replace its deliberately invalid fixture text with a valid direct graph.
+	// This drives the real controller cohort admission against the route derived
+	// by the CLI without contacting a provider or creating writer worktrees.
+	creation := s.Creation
+	creation.Nonce = "cli-isolation-cohort-route-regression"
+	cloneID, err := canonical.Hash("harness.run.v1", creation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clonePath, err := initializeRunPath(root, cloneID, creation.Config, creation.Repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := control.Append(clonePath, "run.created", creation); err != nil {
+		t.Fatal(err)
+	}
+	if err := control.Append(clonePath, "planning.started", struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	plannerResult := *s.Plan
+	plannerResult.Output = `{"version":1,"mode":"direct","summary":"isolated route regression","tasks":[{"id":"impl","kind":"implementation","title":"change fixture","scope_paths":["source.txt"],"write_paths":["source.txt"],"expected_evidence":[{"kind":"file","description":"source change"}],"estimated_seconds":10}]}`
+	if err := control.Append(clonePath, "plan.recorded", plannerResult); err != nil {
+		t.Fatal(err)
+	}
+	preparedSnapshot, err := control.PrepareAutonomous(context.Background(), clonePath)
+	if err != nil {
+		t.Fatalf("could not prepare the fixture graph: %v", err)
+	}
+	cohort, err := control.PrepareGraphIsolationCohort(context.Background(), clonePath)
+	if err != nil {
+		t.Fatalf("CLI-derived resource route did not admit the graph cohort: %v", err)
+	}
+	if len(cohort.Demands) != 1 || len(cohort.SelectedTaskIDs) != 1 || cohort.SelectedTaskIDs[0] != "impl" || cohort.Demands[0].Runtime.ProfileID != profileID || cohort.Demands[0].Runtime.Provider != preparedSnapshot.Creation.Config.Writer.Provider || cohort.Demands[0].Runtime.Model != preparedSnapshot.Creation.Config.Writer.Model {
+		t.Fatalf("prepared cohort route differs from CLI-bound writer profile: cohort=%#v writer=%#v", cohort, preparedSnapshot.Creation.Config.Writer)
 	}
 }
 

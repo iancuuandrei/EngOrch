@@ -18,6 +18,7 @@ const plannerContractGraphV3 = "plan-graph-v3"
 const plannerContractGraphV4 = "plan-graph-v4"
 const plannerContractGraphV5 = "plan-graph-v5"
 const plannerContractGraphV6 = "plan-graph-v6"
+const plannerContractGraphV7 = "plan-graph-v7"
 
 const plannerAssignmentV1 = "As planner, produce an implementation plan using read-only source tools. Editing and testing belong to later roles. Read-only access is expected and is not a blocker. Return the plan without requesting additional capability."
 
@@ -67,6 +68,7 @@ func plannerInvocationWithContextsAndRecipe(c config.Config, objective string, p
 		assignment := plannerAssignmentV1
 		var schema json.RawMessage
 		var verificationChecks []config.Check
+		var isolatedConstraints *plannerIsolationConstraints
 		switch c.PlannerContract {
 		case "":
 		case plannerContractV1:
@@ -104,8 +106,19 @@ func plannerInvocationWithContextsAndRecipe(c config.Config, objective string, p
 			}
 			assignment = plannerGraphAssignmentV4 + fmt.Sprintf(" Use at most %d research/design tasks in total. Keep the initial plan to at most 32 tasks and at most %d research/design tasks, reserving worst-case capacity for eight four-task repair slots.", readBudget, readBudget) + " expected_evidence MUST contain objects with nonempty kind and description strings, never plain strings. scope_paths may use a single dot for the repository root; write_paths must name concrete relative files or directories, never dot or parent paths. The review gate must depend on verification. For the initial implementation, treat scope_paths as the maximum repair area and write_paths as only the initial change. Inspect generated-source directives, templates, and extension points, and include relevant files in scope_paths even when they are not initially changed; do not add them to write_paths unless the first implementation edits them. Generated outputs alone are not independent: assign a generator/template and its generated outputs to one owner, or add an explicit dependency. Verify decomposition assumptions."
 			schema = engineeringplan.PlannerJSONSchema()
+		case plannerContractGraphV7:
+			if recipe == nil || recipe.IsolatedImplementationVersion != 1 || recipe.Validate() != nil {
+				return runtime.Invocation{}, errors.New("isolated planner contract requires a valid isolated execution policy")
+			}
+			readBudget := max(c.MaxExplorationRecords()-8, 0)
+			assignment = fmt.Sprintf("As planner, return only strict engineeringplan v1 JSON with version, mode direct|graph, summary and tasks. Use kinds research, design, implementation, verification and review; expected_evidence contains objects with nonempty kind and description. Plan at most %d initial implementation tasks, at most %d research/design tasks and at most 32 tasks total. Use one implementation for a coupled change; split only genuinely independent concrete disjoint write_paths. Every initial implementation must be ready after shared read-only research/design tasks; initial implementations cannot depend on each other. Assign shared hubs, generator tools/templates and their outputs to one owner. Inspect actual ownership before partitioning, and do not invent files or split solely to occupy capacity. scope_paths bound future repairs; write_paths describe only actual initial edits and must be concrete relative paths, never dot or parents. Each task consumes the declared per-writer resource estimate; the complete initial cohort must fit every supplied capacity before execution. Both verification and review must depend transitively on every initial implementation, with review depending on verification. Direct mode contains exactly one implementation and no gate tasks; the runner adds native gates. Never emit completed or attempts. Preserve public API representations and behavior outside the requested change, including return collection shape and line-ending conventions; expose any ambiguous assumption for verification rather than silently changing it.", recipe.EffectiveMaxParallel(), readBudget)
+			schema = engineeringplan.PlannerJSONSchema()
+			isolatedConstraints = &plannerIsolationConstraints{MaxParallel: recipe.EffectiveMaxParallel(), Capacity: recipe.IsolationCapacity, Estimate: recipe.IsolationEstimate}
 		default:
 			return runtime.Invocation{}, errors.New("unsupported planner contract")
+		}
+		if recipe != nil && recipe.PlannerContext == plannerContextGoSourceV2 {
+			assignment += " Preserve observable public API behavior and representations outside the requested change. Resolve ambiguous compatibility assumptions from existing callers and tests before editing. Generated code must follow its observed directive, tool sources and templates; plan one owner for that chain and do not invent an inactive generator. Partial evidence never proves absence."
 		}
 		if c.ReviewerContract == "json-v1" {
 			verificationChecks = append([]config.Check(nil), c.Verification...)
@@ -113,14 +126,15 @@ func plannerInvocationWithContextsAndRecipe(c config.Config, objective string, p
 			assignment += " Prefer direct mode for localized changes with known scope. Use graph mode for substantial or dependent work; independent read-only tasks may run concurrently, and research/design tasks are not mandatory for every small change."
 		}
 		wrapped, err := promptRecipeBytes(recipe, struct {
-			OutputSchema       json.RawMessage         `json:"output_schema,omitempty"`
-			Role               string                  `json:"role"`
-			Instruction        string                  `json:"instruction"`
-			Objective          string                  `json:"objective"`
-			VerificationChecks []config.Check          `json:"verification_checks,omitempty"`
-			PlannerContext     *PlannerContextRecord   `json:"planner_context,omitempty"`
-			PlannerGoContext   *plannerGoContextPrompt `json:"planner_go_context,omitempty"`
-		}{schema, "planner", assignment, objective, verificationChecks, plannerContext, plannerGoContextPromptFor(plannerGoContext)})
+			OutputSchema       json.RawMessage              `json:"output_schema,omitempty"`
+			Role               string                       `json:"role"`
+			Instruction        string                       `json:"instruction"`
+			Objective          string                       `json:"objective"`
+			VerificationChecks []config.Check               `json:"verification_checks,omitempty"`
+			PlannerContext     *PlannerContextRecord        `json:"planner_context,omitempty"`
+			PlannerGoContext   *plannerGoContextPrompt      `json:"planner_go_context,omitempty"`
+			Isolation          *plannerIsolationConstraints `json:"isolation,omitempty"`
+		}{schema, "planner", assignment, objective, verificationChecks, plannerContext, plannerGoContextPromptFor(plannerGoContext), isolatedConstraints})
 		if err != nil {
 			return runtime.Invocation{}, err
 		}
@@ -131,4 +145,10 @@ func plannerInvocationWithContextsAndRecipe(c config.Config, objective string, p
 		return runtime.Invocation{}, err
 	}
 	return runtime.NewInvocation(profile, input)
+}
+
+type plannerIsolationConstraints struct {
+	MaxParallel int                               `json:"max_parallel"`
+	Capacity    *engineeringplan.ResourceCapacity `json:"capacity"`
+	Estimate    *IsolationEstimateTemplate        `json:"estimate"`
 }

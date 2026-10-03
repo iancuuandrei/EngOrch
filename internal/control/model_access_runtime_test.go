@@ -242,6 +242,8 @@ func runFixtureAppServer() int {
 				path := "alpha.txt"
 				if input.ImplementationTask.ID == "impl-beta" {
 					path = "beta.txt"
+				} else if input.ImplementationTask.ID == "impl-gamma" {
+					path = "gamma.txt"
 				} else if strings.HasPrefix(input.ImplementationTask.ID, "impl-repair-") {
 					path = "repair.go"
 				}

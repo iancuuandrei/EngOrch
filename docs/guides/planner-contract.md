@@ -18,7 +18,7 @@ The option is independent of role task context and does not create a workspace, 
 
 ### Opt-in Go source graph
 
-`go-source-context-v1` is a separate opt-in mode for repositories with committed Go source. Invoke it with both `--planner-context go-source-context-v1` and explicit `--planner-context-ri-executable PATH --planner-context-ri-executable-sha256 SHA256` flags. The path must be absolute and clean; the digest must be 64 lowercase hexadecimal characters. The selected parser path and digest are immutable run inputs, and admission verifies the executable bytes before planner dispatch. No executable is discovered from PATH or environment variables.
+`go-source-context-v1` and `go-source-context-v2` are separate opt-in modes for repositories with committed Go source. Invoke either with the matching `--planner-context` value and explicit `--planner-context-ri-executable PATH --planner-context-ri-executable-sha256 SHA256` flags. Both require the same absolute clean parser path and 64 lowercase hexadecimal digest; the selected path and digest are immutable run inputs, and admission verifies executable bytes before planner dispatch. No executable is discovered from PATH or environment variables. The v1 planner evidence contract remains unchanged; v2 is a separately versioned controller contract. With no mode selected, legacy behavior remains unchanged.
 
 Admission uses the pinned parser to build bounded evidence from committed Go files before planning. The resulting graph/context is partial and source-bound; missing, omitted, or unresolved files do not prove absence or correctness. This mode leaves the existing `source-bounded-v1` behavior unchanged and remains independent of role context, prompt ordering, and scheduler settings.
 
@@ -30,9 +30,17 @@ omit additional whole files; counts and reasons remain in the durable record.
 Package identities are explicitly source-local namespaces, including test
 associations. They do not establish module ownership or resolve imports.
 
-Context v2 uses bounded syntax-based caller hints and separated contract
-excerpts. Selected excerpts and contract excerpts together contain at most
-48 KiB of source. Calls remain unresolved; hinted callers are not type-checked
+Both modes use context schema v2 with bounded syntax-based caller hints and
+separated contract excerpts. The `go-source-context-v1` recipe allows 48 KiB
+of Go excerpts; `go-source-context-v2` allows 24 KiB plus at most 8 KiB of
+committed generation owner/tool/template/build files. Generation context admits
+only whole files whose content hash can be checked from persisted JSON; sources
+that do not fit are explicitly omitted while ownership paths remain visible.
+V2 records retain
+literal directive and output bindings, exact supporting source digests and
+discovery omissions; the prompt receives a compact ownership view. Discovery
+uses a narrow literal command/Makefile/embed recipe and never executes it.
+Missing bindings or omitted sources remain partial evidence. Calls remain unresolved; hinted callers are not type-checked
 references. The planner receives this compact view, not the complete graph.
 The graph, source digests, context and objective remain bound in the journal
 for inspection and replay. Parsing does not execute generators or grant write

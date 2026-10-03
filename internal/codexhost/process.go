@@ -109,13 +109,23 @@ func Start(ctx context.Context, l Launch) (host *Host, err error) {
 
 // StartWithToolHandler installs the caller's scoped handler on an admitted host.
 func StartWithToolHandler(ctx context.Context, l Launch, handler codexrpc.ToolHandler) (host *Host, err error) {
-	return startWithToolHandlerAndConstraint(ctx, l, handler, "", "", "", runtime.Profile{}, nil, time.Time{})
+	return startWithToolHandlerAndConstraint(ctx, l, handler, "", "", "", runtime.Profile{}, nil, time.Time{}, "")
 }
 
-func startWithToolHandlerAndConstraint(ctx context.Context, l Launch, handler codexrpc.ToolHandler, catalogSource, catalogHash, cliIdentity string, profile runtime.Profile, dynamicTools []any, expires time.Time) (host *Host, err error) {
+// StartWithToolHandlerAtThreadDirectory starts an ordinary host while binding
+// any installed capability constraint to the exact caller-validated thread
+// working directory. The host process itself retains its private workspace cwd.
+func StartWithToolHandlerAtThreadDirectory(ctx context.Context, l Launch, handler codexrpc.ToolHandler, threadDirectory string) (host *Host, err error) {
+	return startWithToolHandlerAndConstraint(ctx, l, handler, "", "", "", runtime.Profile{}, nil, time.Time{}, threadDirectory)
+}
+
+func startWithToolHandlerAndConstraint(ctx context.Context, l Launch, handler codexrpc.ToolHandler, catalogSource, catalogHash, cliIdentity string, profile runtime.Profile, dynamicTools []any, expires time.Time, threadDirectory string) (host *Host, err error) {
 	id, err := l.ID()
 	if err != nil {
 		return nil, err
+	}
+	if threadDirectory != "" && (!filepath.IsAbs(threadDirectory) || filepath.Clean(threadDirectory) != threadDirectory || safepath.Directory(threadDirectory) != nil) {
+		return nil, errors.New("invalid constrained thread working directory")
 	}
 	args := launchArguments()
 	if catalogSource != "" {
@@ -150,7 +160,11 @@ func startWithToolHandlerAndConstraint(ctx context.Context, l Launch, handler co
 	}
 	client := codexrpc.NewWithToolHandler(&processStream{input: input, output: output, command: cmd}, handler)
 	if catalogSource != "" {
-		if err := client.ConstrainThread(profile, cmd.Dir, dynamicTools, expires); err != nil {
+		constrainedDirectory := threadDirectory
+		if constrainedDirectory == "" {
+			constrainedDirectory = cmd.Dir
+		}
+		if err := client.ConstrainThread(profile, constrainedDirectory, dynamicTools, expires); err != nil {
 			_ = client.Close()
 			return nil, err
 		}

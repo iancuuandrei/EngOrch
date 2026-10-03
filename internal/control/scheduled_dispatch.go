@@ -236,7 +236,7 @@ func ExecuteScheduledClaim(ctx context.Context, controllerPath string, claim tas
 			_, err = ensureAcceptedExplorerResult(ctx, controllerPath, claim, invocation, &record)
 		}
 	case taskscheduler.OperationWriter:
-		if parallelImplementationEnabled(s) {
+		if graphWriterCohortEnabled(s) {
 			ctx = withGraphWriterTask(ctx, claim.Task.ID)
 		}
 		_, err = RunWriter(ctx, controllerPath)
@@ -452,7 +452,7 @@ func scheduledInvocation(task taskscheduler.TaskSpec, turn *taskscheduler.AgentT
 		// initial implementation writers. V1 TaskPool remains forbidden;
 		// PumpOptions.Workers bounds cohort concurrency instead.
 		v1GraphExplorer := task.Operation == taskscheduler.OperationExplorer && v1StaticGraphExplorerStateAllowed(s) && isStaticGraphExplorerCohort(s, taskscheduler.Claim{Task: task})
-		v1GraphWriter := task.Operation == taskscheduler.OperationWriter && s.State == "IMPLEMENTING" && parallelImplementationEnabled(s) && isStaticGraphWriterCohort(s, taskscheduler.Claim{Task: task})
+		v1GraphWriter := task.Operation == taskscheduler.OperationWriter && s.State == "IMPLEMENTING" && graphWriterCohortEnabled(s) && isStaticGraphWriterCohort(s, taskscheduler.Claim{Task: task})
 		if !(s.Creation.Config.Version == 1 && turn == nil && s.Creation.Execution.GraphEnabled() && s.Creation.Execution.Context == taskContextBoundedV1 &&
 			s.Workspace != nil && s.Candidate != nil && s.Plan != nil && s.Graph != nil && s.Creation.Config.TaskPool == nil && (v1GraphExplorer || v1GraphWriter)) {
 			return s, "", runtime.Invocation{}, errors.New("scheduled dispatch requires configuration v2")
@@ -466,7 +466,7 @@ func scheduledInvocation(task taskscheduler.TaskSpec, turn *taskscheduler.AgentT
 	case taskscheduler.OperationExplorer:
 		invocation, err = explorerInvocation(s, task.Input)
 	case taskscheduler.OperationWriter:
-		if parallelImplementationEnabled(s) {
+		if graphWriterCohortEnabled(s) {
 			if task.ID == "" {
 				err = errors.New("graph writer task ID required")
 			} else {
@@ -613,8 +613,8 @@ func scheduledEvidence(s Snapshot, head string, invocation runtime.Invocation, t
 		}
 	}
 	complete = complete || task.Operation == taskscheduler.OperationWriter && s.WriterProposal != nil && s.WriterProposal.Invocation.ID == invocation.ID
-	if task.Operation == taskscheduler.OperationWriter && parallelImplementationEnabled(s) {
-		if record, ok := s.GraphWriterResults[task.ID]; ok && record.Writer.Invocation.ID == invocation.ID {
+	if task.Operation == taskscheduler.OperationWriter && graphWriterCohortEnabled(s) {
+		if record, ok := s.GraphWriterResults[task.ID]; ok && graphWriterRecordInvocation(record).ID == invocation.ID {
 			complete = true
 		}
 	}
@@ -628,7 +628,7 @@ func scheduledEvidence(s Snapshot, head string, invocation runtime.Invocation, t
 		s.Creation.Config.Version == 1 && s.Creation.Execution.GraphEnabled() {
 		evidence.AdmissionID = invocation.ID
 	}
-	if complete && evidence.AdmissionID == "" && task.Operation == taskscheduler.OperationWriter && parallelImplementationEnabled(s) && s.Creation.Config.Version == 1 {
+	if complete && evidence.AdmissionID == "" && task.Operation == taskscheduler.OperationWriter && graphWriterCohortEnabled(s) && s.Creation.Config.Version == 1 {
 		evidence.AdmissionID = invocation.ID
 	}
 	if complete && evidence.AdmissionID != "" {

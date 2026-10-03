@@ -133,8 +133,31 @@ integrated increment, without resurrecting a G0 promotion ladder.
   focused actual-Rust integration tests pass. Full clean suite/hosted checks
   still gate public integration.
 - `v1.0.3` completed its full clean Go suite. Its frozen eight-task evaluation
-  remains in progress; interim READY states do not establish held-out PASS.
+  completed 6/8 PASS: fixed suite 5/6 and godotenv PASS, difflib held-out FAIL,
+  numeric generator task BLOCKED after two repairs and final review rejection.
+  Matched-five token usage increased; the mode is not promoted to public main.
 - Isolated writer/resource-vector integration is separate uncommitted work.
   Its new policy preserves legacy JSON with omitted pointer fields; runtime
   dispatch, combined verification and real topology A/B still require evidence.
   No v1.2 or v2 completion is claimed.
+
+## Candidate checkpoint — isolated writers and bounded generation context
+
+- Exact clean `v1.0.4` (`514616c4a31be65f5d71e127c395255b22ec9536`)
+  passed the full Go suite and hosted run `37139837155`. Public dev contains
+  it; public main retains `v1.0.2` while coding acceptance benefit remains unmet.
+- The next candidate has explicit resource-vector admission, confirmed child
+  worktrees, child-bound proposals, one parent aggregate, and serial parent
+  repairs. Three-child combined gates and rejection/repair/restart fixtures
+  reach READY. Independent isolation review approves the code. Accepted
+  R17/R19 process qualification remains NOT RUN without a configured fixture.
+- `go-source-context-v2` preserves old recipes and uses a separate record
+  identity, at most 24 KiB Go context plus 8 KiB complete generation-supporting
+  files. Source/seed/commit/graph bindings and durable JSON forgery regressions
+  pass with the actual pinned RI engine. Large files remain explicit omissions.
+- Fresh graph validation reconstruction avoids duplicate hashing, with about
+  25% less allocation in bounded synthetic benchmarks and unchanged identities.
+  This is not peak-RAM or model-token evidence.
+- Full clean final-candidate suite, hosted checks, fresh unchanged eight-task
+  evaluation, real topology A/B and remaining intelligence/cache/routing/horizon
+  capabilities are still required. No v1.1, v1.2 or v2 completion is claimed.

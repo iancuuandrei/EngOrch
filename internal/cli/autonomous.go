@@ -15,6 +15,7 @@ import (
 
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/control"
+	"harness.local/engorch/internal/engineeringplan"
 	"harness.local/engorch/internal/repository"
 )
 
@@ -25,6 +26,29 @@ const defaultAutonomousMaxParallel = 3
 const autonomousPlannerContextSourceBoundedV1 = "source-bounded-v1"
 
 const autonomousPlannerContextGoSourceV1 = "go-source-context-v1"
+
+const autonomousPlannerContextGoSourceV2 = "go-source-context-v2"
+
+const isolatedWriterPolicyMaxBytes = 32 << 10
+
+type isolatedWriterPolicyFile struct {
+	Version  int                               `json:"version"`
+	Capacity isolatedWriterLimits              `json:"capacity"`
+	Estimate control.IsolationEstimateTemplate `json:"estimate"`
+}
+
+// These scalar ceilings are expanded to the exact configured writer provider,
+// model and runtime keys after configuration is loaded. Callers never provide
+// opaque profile IDs or route identities in this policy file.
+type isolatedWriterLimits struct {
+	CPUMilli          int64 `json:"cpu_milli"`
+	MemoryMiB         int64 `json:"memory_mib"`
+	VerificationSlots int   `json:"verification_slots"`
+	TotalRuntimeSlots int   `json:"total_runtime_slots"`
+	ProviderSlots     int   `json:"provider_slots"`
+	ModelSlots        int   `json:"model_slots"`
+	RuntimeSlots      int   `json:"runtime_slots"`
+}
 
 // runCommand retains the original `run RUN` operation and adds the explicit
 // autonomous objective form. The latter creates the immutable execution policy
@@ -64,8 +88,10 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	maxRepairs := fs.Int("max-repairs", defaultAutonomousMaxRepairs, "maximum bounded repair attempts")
 	maxParallel := fs.Int("max-parallel", defaultAutonomousMaxParallel, "maximum bounded parallel task workers (1 sequential, 2..8 parallel)")
 	parallelWriters := fs.Bool("parallel-writers", false, "allow two independent initial implementation tasks when justified")
-	plannerContext := fs.String("planner-context", "", "planner evidence mode: source-bounded-v1 or pinned go-source-context-v1")
-	plannerContextRIExecutable := fs.String("planner-context-ri-executable", "", "absolute path to the pinned Go-source RI parser (required for go-source-context-v1)")
+	isolatedWriters := fs.Bool("isolated-writers", false, "run an explicitly resource-bounded initial implementation cohort in separate worktrees")
+	isolationPolicyPath := fs.String("isolation-policy", "", "strict versioned JSON resource capacity and per-writer estimate file (required with --isolated-writers)")
+	plannerContext := fs.String("planner-context", "", "planner evidence mode: source-bounded-v1 or pinned go-source-context-v1/go-source-context-v2")
+	plannerContextRIExecutable := fs.String("planner-context-ri-executable", "", "absolute path to the pinned Go-source RI parser (required for either go-source-context mode)")
 	plannerContextRIExecutableSHA256 := fs.String("planner-context-ri-executable-sha256", "", "lowercase SHA-256 of the pinned Go-source RI parser")
 	promptRecipe := fs.String("prompt-recipe", "", "opt in to cache-prefix-v1 prompt ordering")
 	prepareOnly := fs.Bool("prepare-only", false, "accept the graph and confirm its workspace, then return before explorer or writer dispatch")
@@ -78,6 +104,20 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	}
 	if *maxParallel < 1 || *maxParallel > 8 {
 		return errors.New("max-parallel must be between 1 and 8")
+	}
+	if *parallelWriters && *isolatedWriters {
+		return errors.New("parallel-writers and isolated-writers are mutually exclusive")
+	}
+	if *isolatedWriters != (*isolationPolicyPath != "") {
+		return errors.New("isolated-writers requires exactly one --isolation-policy PATH")
+	}
+	var isolationPolicy *isolatedWriterPolicyFile
+	if *isolatedWriters {
+		policy, err := readIsolatedWriterPolicy(*isolationPolicyPath)
+		if err != nil {
+			return err
+		}
+		isolationPolicy = &policy
 	}
 	if err := validateAutonomousPlannerContext(*plannerContext, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256); err != nil {
 		return err
@@ -96,7 +136,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 		if err := validateAutonomousObjective(objective); err != nil {
 			return err
 		}
-		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *parallelWriters, *plannerContext, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *prepareOnly, out)
+		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *prepareOnly, out)
 	}
 	if fs.NArg() != 1 || fs.Arg(0) == "" {
 		return errors.New("run --autonomous requires one objective or --file PATH")
@@ -104,18 +144,67 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	if err := validateAutonomousObjective(fs.Arg(0)); err != nil {
 		return err
 	}
-	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *parallelWriters, *plannerContext, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *prepareOnly, out)
+	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *prepareOnly, out)
+}
+
+func readIsolatedWriterPolicy(path string) (isolatedWriterPolicyFile, error) {
+	var policy isolatedWriterPolicyFile
+	file, err := os.Open(path)
+	if err != nil {
+		return policy, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return policy, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > isolatedWriterPolicyMaxBytes {
+		return policy, errors.New("isolation policy must be a regular JSON file no larger than 32 KiB")
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, isolatedWriterPolicyMaxBytes+1))
+	if err != nil || len(raw) > isolatedWriterPolicyMaxBytes {
+		return policy, errors.New("isolation policy exceeds 32 KiB or could not be read")
+	}
+	normal, err := canonical.Normalize(raw)
+	if err != nil {
+		return policy, fmt.Errorf("invalid isolation policy encoding: %w", err)
+	}
+	if err := canonical.Decode(normal, &policy); err != nil {
+		return policy, fmt.Errorf("invalid isolation policy: %w", err)
+	}
+	if err := validateIsolatedWriterPolicy(policy); err != nil {
+		return policy, err
+	}
+	return policy, nil
+}
+
+func validateIsolatedWriterPolicy(policy isolatedWriterPolicyFile) error {
+	c := policy.Capacity
+	e := policy.Estimate
+	if policy.Version != 1 {
+		return errors.New("isolation policy version must be 1")
+	}
+	if c.CPUMilli < 1 || c.CPUMilli > 1<<20 || c.MemoryMiB < 1 || c.MemoryMiB > 1<<30 ||
+		c.VerificationSlots < 1 || c.VerificationSlots > 64 || c.TotalRuntimeSlots < 1 || c.TotalRuntimeSlots > 64 ||
+		c.ProviderSlots < 1 || c.ProviderSlots > 64 || c.ModelSlots < 1 || c.ModelSlots > 64 || c.RuntimeSlots < 1 || c.RuntimeSlots > 64 {
+		return errors.New("isolation capacity must provide positive bounded CPU, memory, verification, global runtime, provider, model and route limits")
+	}
+	if e.CPUMilli < 1 || e.CPUMilli > 1<<20 || e.MemoryMiB < 1 || e.MemoryMiB > 1<<30 ||
+		e.VerificationSlots < 0 || e.VerificationSlots > 64 || e.RuntimeSlots < 1 || e.RuntimeSlots > 64 {
+		return errors.New("per-writer isolation estimate must provide bounded positive CPU, memory and runtime slots; verification slots may be zero")
+	}
+	return nil
 }
 
 func validateAutonomousPlannerContext(mode, executable, executableSHA256 string) error {
 	switch mode {
 	case "", autonomousPlannerContextSourceBoundedV1:
 		if executable != "" || executableSHA256 != "" {
-			return errors.New("planner-context RI executable binding requires go-source-context-v1")
+			return errors.New("planner-context RI executable binding requires go-source-context-v1 or go-source-context-v2")
 		}
-	case autonomousPlannerContextGoSourceV1:
+	case autonomousPlannerContextGoSourceV1, autonomousPlannerContextGoSourceV2:
 		if executable == "" || executableSHA256 == "" {
-			return errors.New("go-source-context-v1 requires planner-context-ri-executable and planner-context-ri-executable-sha256")
+			return errors.New("go-source-context-v1 and go-source-context-v2 require planner-context-ri-executable and planner-context-ri-executable-sha256")
 		}
 		if !filepath.IsAbs(executable) || filepath.Clean(executable) != executable {
 			return errors.New("planner-context-ri-executable must be an absolute clean path")
@@ -124,7 +213,7 @@ func validateAutonomousPlannerContext(mode, executable, executableSHA256 string)
 			return errors.New("planner-context-ri-executable-sha256 must be 64 lowercase hexadecimal characters")
 		}
 	default:
-		return errors.New("planner-context must be empty, source-bounded-v1, or go-source-context-v1")
+		return errors.New("planner-context must be empty, source-bounded-v1, go-source-context-v1, or go-source-context-v2")
 	}
 	return nil
 }
@@ -157,9 +246,12 @@ func validateAutonomousObjective(objective string) error {
 	return nil
 }
 
-func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, parallelWriters bool, plannerContext, plannerContextRIExecutable, plannerContextRIExecutableSHA256, promptRecipe string, prepareOnly bool, out io.Writer) error {
+func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, parallelWriters bool, isolationPolicy *isolatedWriterPolicyFile, plannerContext, plannerContextRIExecutable, plannerContextRIExecutableSHA256, promptRecipe string, prepareOnly bool, out io.Writer) error {
 	if err := validateAutonomousObjective(objective); err != nil {
 		return err
+	}
+	if parallelWriters && isolationPolicy != nil {
+		return errors.New("parallel-writers and isolated-writers are mutually exclusive")
 	}
 	if err := validateAutonomousPlannerContext(plannerContext, plannerContextRIExecutable, plannerContextRIExecutableSHA256); err != nil {
 		return err
@@ -189,6 +281,9 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 	// compatible and replay with their historical repair behavior.
 	cfg.PlannerContract = "plan-graph-v5"
 	parallelImplementationVersion := 0
+	isolatedImplementationVersion := 0
+	var isolationCapacity *engineeringplan.ResourceCapacity
+	var isolationEstimate *control.IsolationEstimateTemplate
 	if parallelWriters {
 		cfg.PlannerContract = "plan-graph-v6"
 		parallelImplementationVersion = 1
@@ -197,6 +292,33 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 		if err := cfg.Validate(); err != nil {
 			return err
 		}
+	}
+	if isolationPolicy != nil {
+		if cfg.Writer == nil {
+			return errors.New("isolated-writers requires an explicitly configured writer route")
+		}
+		cfg.PlannerContract = "plan-graph-v7"
+		if err := cfg.Validate(); err != nil {
+			return err
+		}
+		// Keep this identity domain and the complete bound profile in sync with
+		// control's admission-time route derivation in graph_isolation.go.
+		profileID, err := canonical.Hash("harness.isolation-writer-profile.v1", *cfg.Writer)
+		if err != nil {
+			return err
+		}
+		route := engineeringplan.RuntimeResourceKey{ProfileID: profileID, Provider: cfg.Writer.Provider, Model: cfg.Writer.Model}
+		limits := isolationPolicy.Capacity
+		isolationCapacity = &engineeringplan.ResourceCapacity{
+			CPUMilli: limits.CPUMilli, MemoryMiB: limits.MemoryMiB,
+			VerificationSlots: limits.VerificationSlots, TotalRuntimeSlots: limits.TotalRuntimeSlots,
+			ProviderSlots: []engineeringplan.ProviderSlotLimit{{Provider: cfg.Writer.Provider, Slots: limits.ProviderSlots}},
+			ModelSlots:    []engineeringplan.ModelSlotLimit{{Model: engineeringplan.ProviderModelKey{Provider: cfg.Writer.Provider, Model: cfg.Writer.Model}, Slots: limits.ModelSlots}},
+			RuntimeSlots:  []engineeringplan.RuntimeSlotLimit{{Runtime: route, Slots: limits.RuntimeSlots}},
+		}
+		estimate := isolationPolicy.Estimate
+		isolationEstimate = &estimate
+		isolatedImplementationVersion = 1
 	}
 	if cfg.Reviewer != nil {
 		cfg.ReviewerContract = "json-v1"
@@ -213,6 +335,7 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 			PlannerContextRIExecutableSHA256: plannerContextRIExecutableSHA256,
 			GraphVersion:                     1, MaxParallel: maxParallel, RepairPlanningVersion: 1,
 			ParallelImplementationVersion: parallelImplementationVersion,
+			IsolatedImplementationVersion: isolatedImplementationVersion, IsolationCapacity: isolationCapacity, IsolationEstimate: isolationEstimate,
 		},
 	}
 	creation, err = bindCurrentHost(ctx, creation)

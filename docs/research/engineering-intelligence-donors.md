@@ -98,3 +98,17 @@ receipts establish only the scopes stated in their own evidence; they do not
 measure donor ranking quality, cold/warm index cost, broad language coverage,
 or end-user coding-task improvement.
 
+
+## Go module ownership follow-up
+
+The committed corpus currently emits source-local package identities. Those
+identities do not resolve import paths. Automatic module ownership must read
+the complete bounded inventory of committed `go.mod` files, choose the deepest
+containing module and account for nested modules before deriving package paths.
+The [Go module reference](https://go.dev/ref/mod#modules) defines module roots
+and package paths; the official [modfile parser](https://pkg.go.dev/golang.org/x/mod/modfile)
+is the candidate parser rather than a guessed text regular expression. Workspaces,
+replacements, vendor metadata and build constraints require explicit provenance;
+an observed path match alone does not establish active dependency resolution or
+Go type/call resolution. This is an outstanding v1.1 requirement, not a claim
+that the existing source-local graph already implements it.

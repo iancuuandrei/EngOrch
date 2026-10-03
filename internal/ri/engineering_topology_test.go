@@ -1,10 +1,68 @@
 package ri
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
+
+	"harness.local/engorch/internal/canonical"
 )
+
+func TestGoGraphValidationRejectsAlteredContentAndDigests(t *testing.T) {
+	for _, rehash := range []bool{false, true} {
+		for _, mutation := range []string{"node", "edge", "source_digest", "generator"} {
+			t.Run(fmt.Sprintf("%s/rehash_%v", mutation, rehash), func(t *testing.T) {
+				graph := topologyFixture(t)
+				switch mutation {
+				case "node":
+					graph.Nodes[0].Label += "altered"
+				case "edge":
+					graph.Edges[0].Resolution = "invented"
+				case "source_digest":
+					graph.SourceDigest = strings.Repeat("e", 64)
+				case "generator":
+					graph.Generators[0].Directive += " altered"
+				}
+				if rehash {
+					var err error
+					graph.Digest, err = canonical.Hash("harness.ri.go-engineering-graph.v1", graph.content())
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := ValidateGoEngineeringGraph(graph); err == nil {
+					t.Fatal("altered graph accepted")
+				}
+			})
+		}
+	}
+}
+
+func BenchmarkGoTopologyObservedPackages(b *testing.B) {
+	for _, count := range []int{24, 256, 512} {
+		b.Run(fmt.Sprintf("files_%d", count), func(b *testing.B) {
+			producer := strings.Repeat("b", 64)
+			files := make([]GoGraphFileInput, 0, count)
+			for i := 0; i < count; i++ {
+				pkg := fmt.Sprintf("example.com/m/p%d", i/8)
+				source := "package p\n"
+				files = append(files, graphInput(fmt.Sprintf("p%d/f%d.go", i/8, i), source, GoPackageBinding{ImportPath: pkg, ModulePath: "example.com/m"}, nil, nil, nil, nil, producer))
+			}
+			graph, err := BuildGoEngineeringGraph(GoGraphSnapshotInput{SourceID: strings.Repeat("0", 64), ProducerSHA256: producer, Files: files})
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := QueryGoTopology(graph, []string{"p0/f0.go"}, 8); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
 
 func topologyFixture(t *testing.T) GoEngineeringGraph {
 	t.Helper()

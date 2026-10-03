@@ -439,6 +439,20 @@ func ValidateAutonomousGraphWithImplementations(g Graph, maxInitial int) error {
 	if maxInitial < 1 || maxInitial > 2 {
 		return errors.New("initial implementation limit must be 1 or 2")
 	}
+	return validateAutonomousGraphWithImplementationLimit(g, maxInitial)
+}
+
+// ValidateAutonomousGraphWithIsolatedImplementations validates the bounded
+// initial implementation cohort admitted by the isolated-worktree policy.
+// The legacy parallel validator remains capped at two and unchanged.
+func ValidateAutonomousGraphWithIsolatedImplementations(g Graph, maxInitial int) error {
+	if maxInitial < 1 || maxInitial > 8 {
+		return errors.New("isolated initial implementation limit must be 1..8")
+	}
+	return validateAutonomousGraphWithImplementationLimit(g, maxInitial)
+}
+
+func validateAutonomousGraphWithImplementationLimit(g Graph, maxInitial int) error {
 	if err := g.Validate(); err != nil {
 		return err
 	}

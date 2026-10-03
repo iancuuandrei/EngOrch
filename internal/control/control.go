@@ -10,6 +10,7 @@ import (
 	"harness.local/engorch/internal/codexhost"
 	"harness.local/engorch/internal/config"
 	"harness.local/engorch/internal/effects"
+	"harness.local/engorch/internal/engineeringplan"
 	"harness.local/engorch/internal/fileeffects"
 	"harness.local/engorch/internal/journal"
 	"harness.local/engorch/internal/repository"
@@ -71,6 +72,11 @@ type ExecutionPolicy struct {
 	// cohort of at most two independent implementation writers. Their proposals
 	// are collected on one candidate and applied through one aggregate effect.
 	ParallelImplementationVersion int `json:"parallel_implementation_version,omitempty"`
+	// IsolatedImplementationVersion opts ready graph implementation tasks into
+	// separate pristine source worktrees. It carries no writer authority.
+	IsolatedImplementationVersion int                               `json:"isolated_implementation_version,omitempty"`
+	IsolationCapacity             *engineeringplan.ResourceCapacity `json:"isolation_capacity,omitempty"`
+	IsolationEstimate             *IsolationEstimateTemplate        `json:"isolation_estimate,omitempty"`
 }
 
 // Validate admits only the bounded autonomous workflow with a repair budget
@@ -90,10 +96,10 @@ func (p ExecutionPolicy) Validate() error {
 	if p.Context != "" && p.Context != taskContextBoundedV1 {
 		return errors.New("invalid execution task context")
 	}
-	if p.PlannerContext != "" && p.PlannerContext != plannerContextSourceBoundedV1 && p.PlannerContext != plannerContextGoSourceV1 {
+	if p.PlannerContext != "" && p.PlannerContext != plannerContextSourceBoundedV1 && p.PlannerContext != plannerContextGoSourceV1 && p.PlannerContext != plannerContextGoSourceV2 {
 		return errors.New("invalid execution planner context")
 	}
-	if p.PlannerContext == plannerContextGoSourceV1 {
+	if p.PlannerContext == plannerContextGoSourceV1 || p.PlannerContext == plannerContextGoSourceV2 {
 		if p.PlannerContextRIExecutable == "" || !filepath.IsAbs(p.PlannerContextRIExecutable) || filepath.Clean(p.PlannerContextRIExecutable) != p.PlannerContextRIExecutable || safepath.RequireDigest(p.PlannerContextRIExecutableSHA256) != nil {
 			return errors.New("Go planner context requires a pinned RI executable")
 		}
@@ -123,6 +129,21 @@ func (p ExecutionPolicy) Validate() error {
 	}
 	if p.ParallelImplementationVersion == 1 && (p.GraphVersion != 1 || p.RepairPlanningVersion != 1 || p.Context != taskContextBoundedV1) {
 		return errors.New("parallel implementation requires graph execution, bounded task context, and repair planning")
+	}
+	if p.IsolatedImplementationVersion != 0 && p.IsolatedImplementationVersion != 1 {
+		return errors.New("invalid isolated implementation version")
+	}
+	if p.IsolatedImplementationVersion == 1 && (p.GraphVersion != 1 || p.RepairPlanningVersion != 1 || p.Context != taskContextBoundedV1) {
+		return errors.New("isolated implementation requires graph execution, bounded task context, and repair planning")
+	}
+	if p.IsolatedImplementationVersion == 1 && (p.IsolationCapacity == nil || p.IsolationEstimate == nil || p.IsolationEstimate.Validate() != nil) {
+		return errors.New("isolated implementation requires capacity and estimate template")
+	}
+	if p.IsolatedImplementationVersion == 0 && (p.IsolationCapacity != nil || p.IsolationEstimate != nil) {
+		return errors.New("isolation capacity requires isolated implementation")
+	}
+	if p.IsolatedImplementationVersion == 1 && p.ParallelImplementationVersion == 1 {
+		return errors.New("parallel aggregate and isolated implementation modes are exclusive")
 	}
 	return nil
 }
@@ -163,57 +184,59 @@ type MachineApproval struct {
 
 // Snapshot is reconstructed state, never independent authority to append effects.
 type Snapshot struct {
-	CandidateIndex     *CandidateIndexObservation         `json:"candidate_index,omitempty"`
-	PlannerAccess      *access.Intent                     `json:"planner_access,omitempty"`
-	ModelAccess        []ModelAccessState                 `json:"model_access,omitempty"`
-	Draft              *DraftState                        `json:"draft,omitempty"`
-	Push               *PushState                         `json:"push,omitempty"`
-	Explorations       []ExplorerRecord                   `json:"explorations,omitempty"`
-	ExplorerHost       *ExplorerHostState                 `json:"explorer_host,omitempty"`
-	ExplorerRuns       map[string]ExplorerHostState       `json:"explorer_runs,omitempty"`
-	Commit             *CommitState                       `json:"commit,omitempty"`
-	ReviewHost         *ReviewHostState                   `json:"review_host,omitempty"`
-	Review             *ReviewRecord                      `json:"review,omitempty"`
-	WriterHost         *WriterHostState                   `json:"writer_host,omitempty"`
-	WriterProposal     *WriterRecord                      `json:"writer_proposal,omitempty"`
-	GraphWriterHosts   map[string]WriterHostState         `json:"graph_writer_hosts,omitempty"`
-	GraphWriterResults map[string]GraphWriterRecord       `json:"graph_writer_results,omitempty"`
-	GraphWriterBatch   *GraphWriterBatchRecord            `json:"graph_writer_batch,omitempty"`
-	RIProducer         *RIProducerState                   `json:"ri_producer"`
-	RIPublish          *RIPublishState                    `json:"ri_publish"`
-	RIImport           *RIImportState                     `json:"ri_import"`
-	RILexical          *RILexicalState                    `json:"ri_lexical,omitempty"`
-	RILexicalOverlay   *RILexicalOverlayState             `json:"ri_lexical_overlay,omitempty"`
-	RunID              string                             `json:"run_id"`
-	State              string                             `json:"state"`
-	Creation           Creation                           `json:"creation"`
-	PlanID             string                             `json:"plan_id"`
-	Plan               *runtime.Result                    `json:"plan"`
-	ApprovedBy         string                             `json:"approved_by"`
-	MachineApproval    *MachineApproval                   `json:"machine_approval,omitempty"`
-	RepairAttempts     int                                `json:"repair_attempts,omitempty"`
-	RepairCandidateID  string                             `json:"repair_candidate_id,omitempty"`
-	WorkspaceIntent    *worktree.Request                  `json:"workspace_intent"`
-	Workspace          *worktree.Binding                  `json:"workspace"`
-	Candidate          *worktree.Candidate                `json:"candidate"`
-	WorkspaceOutcome   string                             `json:"workspace_outcome"`
-	FileIntent         *FileIntent                        `json:"file_intent"`
-	FileReceipt        *FileReceipt                       `json:"file_receipt"`
-	FileOutcome        string                             `json:"file_outcome"`
-	FileRecovery       *RecoveryIntent                    `json:"file_recovery"`
-	Verification       *VerificationState                 `json:"verification"`
-	PlannerHost        *codexhost.Launch                  `json:"planner_host"`
-	PlannerHostReady   bool                               `json:"planner_host_ready"`
-	PlannerHostReceipt *codexhost.Receipt                 `json:"planner_host_receipt"`
-	PlannerReceipt     *PlannerReceipt                    `json:"planner_receipt"`
-	PlannerProvider    *providerDispatchReceipt           `json:"planner_provider,omitempty"`
-	ProviderRuntime    map[string]providerDispatchReceipt `json:"provider_runtime,omitempty"`
-	AgentDispatch      map[string]AgentDispatchState      `json:"agent_dispatch,omitempty"`
-	TaskContexts       []TaskContextRecord                `json:"task_contexts,omitempty"`
-	PlannerContext     *PlannerContextRecord              `json:"planner_context,omitempty"`
-	PlannerGoContext   *PlannerGoContextRecord            `json:"planner_go_context,omitempty"`
-	Graph              *GraphState                        `json:"graph,omitempty"`
-	Lifecycle          LifecycleState                     `json:"lifecycle"`
+	CandidateIndex            *CandidateIndexObservation         `json:"candidate_index,omitempty"`
+	PlannerAccess             *access.Intent                     `json:"planner_access,omitempty"`
+	ModelAccess               []ModelAccessState                 `json:"model_access,omitempty"`
+	Draft                     *DraftState                        `json:"draft,omitempty"`
+	Push                      *PushState                         `json:"push,omitempty"`
+	Explorations              []ExplorerRecord                   `json:"explorations,omitempty"`
+	ExplorerHost              *ExplorerHostState                 `json:"explorer_host,omitempty"`
+	ExplorerRuns              map[string]ExplorerHostState       `json:"explorer_runs,omitempty"`
+	Commit                    *CommitState                       `json:"commit,omitempty"`
+	ReviewHost                *ReviewHostState                   `json:"review_host,omitempty"`
+	Review                    *ReviewRecord                      `json:"review,omitempty"`
+	WriterHost                *WriterHostState                   `json:"writer_host,omitempty"`
+	WriterProposal            *WriterRecord                      `json:"writer_proposal,omitempty"`
+	GraphWriterHosts          map[string]WriterHostState         `json:"graph_writer_hosts,omitempty"`
+	GraphWriterResults        map[string]GraphWriterRecord       `json:"graph_writer_results,omitempty"`
+	GraphWriterBatch          *GraphWriterBatchRecord            `json:"graph_writer_batch,omitempty"`
+	RIProducer                *RIProducerState                   `json:"ri_producer"`
+	RIPublish                 *RIPublishState                    `json:"ri_publish"`
+	RIImport                  *RIImportState                     `json:"ri_import"`
+	RILexical                 *RILexicalState                    `json:"ri_lexical,omitempty"`
+	RILexicalOverlay          *RILexicalOverlayState             `json:"ri_lexical_overlay,omitempty"`
+	RunID                     string                             `json:"run_id"`
+	State                     string                             `json:"state"`
+	Creation                  Creation                           `json:"creation"`
+	PlanID                    string                             `json:"plan_id"`
+	Plan                      *runtime.Result                    `json:"plan"`
+	ApprovedBy                string                             `json:"approved_by"`
+	MachineApproval           *MachineApproval                   `json:"machine_approval,omitempty"`
+	RepairAttempts            int                                `json:"repair_attempts,omitempty"`
+	RepairCandidateID         string                             `json:"repair_candidate_id,omitempty"`
+	WorkspaceIntent           *worktree.Request                  `json:"workspace_intent"`
+	Workspace                 *worktree.Binding                  `json:"workspace"`
+	Candidate                 *worktree.Candidate                `json:"candidate"`
+	WorkspaceOutcome          string                             `json:"workspace_outcome"`
+	FileIntent                *FileIntent                        `json:"file_intent"`
+	FileReceipt               *FileReceipt                       `json:"file_receipt"`
+	FileOutcome               string                             `json:"file_outcome"`
+	FileRecovery              *RecoveryIntent                    `json:"file_recovery"`
+	Verification              *VerificationState                 `json:"verification"`
+	PlannerHost               *codexhost.Launch                  `json:"planner_host"`
+	PlannerHostReady          bool                               `json:"planner_host_ready"`
+	PlannerHostReceipt        *codexhost.Receipt                 `json:"planner_host_receipt"`
+	PlannerReceipt            *PlannerReceipt                    `json:"planner_receipt"`
+	PlannerProvider           *providerDispatchReceipt           `json:"planner_provider,omitempty"`
+	ProviderRuntime           map[string]providerDispatchReceipt `json:"provider_runtime,omitempty"`
+	AgentDispatch             map[string]AgentDispatchState      `json:"agent_dispatch,omitempty"`
+	TaskContexts              []TaskContextRecord                `json:"task_contexts,omitempty"`
+	PlannerContext            *PlannerContextRecord              `json:"planner_context,omitempty"`
+	PlannerGoContext          *PlannerGoContextRecord            `json:"planner_go_context,omitempty"`
+	Graph                     *GraphState                        `json:"graph,omitempty"`
+	GraphIsolations           map[string]GraphIsolationState     `json:"graph_isolations,omitempty"`
+	GraphIsolationPreparation *GraphIsolationPreparation         `json:"graph_isolation_preparation,omitempty"`
+	Lifecycle                 LifecycleState                     `json:"lifecycle"`
 }
 
 // Approval is explicit human input for one exact plan, not a model decision.
@@ -439,7 +462,11 @@ func Replay(events []journal.Event) (Snapshot, error) {
 			if c.Config.Repository != c.Repository.Name {
 				return s, errors.New("configuration binding mismatch")
 			}
-			if _, err := plannerInvocation(c.Config, c.Objective); err != nil {
+			if c.Config.PlannerContract == "plan-graph-v7" {
+				if _, err := plannerInvocationWithContextsAndRecipe(c.Config, c.Objective, nil, nil, c.Execution); err != nil {
+					return s, err
+				}
+			} else if _, err := plannerInvocation(c.Config, c.Objective); err != nil {
 				return s, err
 			}
 			id, err := canonical.Hash("harness.run.v1", c)
@@ -739,6 +766,10 @@ func Replay(events []journal.Event) (Snapshot, error) {
 			if err := replayGraph(&s, e); err != nil {
 				return s, err
 			}
+		case "graph.isolation-prepared", "graph.isolate-intent", "graph.isolate-confirmed":
+			if err := replayGraphIsolation(&s, e); err != nil {
+				return s, err
+			}
 		default:
 			return s, errors.New("unknown controller event")
 		}
@@ -752,11 +783,23 @@ func validateRepairPlanningBinding(c Creation) error {
 		version = c.Execution.RepairPlanningVersion
 	}
 	parallelVersion := 0
+	isolationVersion := 0
 	if c.Execution != nil {
 		parallelVersion = c.Execution.ParallelImplementationVersion
+		isolationVersion = c.Execution.IsolatedImplementationVersion
 	}
 	serialContract := c.Config.PlannerContract == plannerContractGraphV3 || c.Config.PlannerContract == plannerContractGraphV5
 	parallelContract := c.Config.PlannerContract == plannerContractGraphV4 || c.Config.PlannerContract == plannerContractGraphV6
+	isolationContract := c.Config.PlannerContract == "plan-graph-v7"
+	if isolationVersion == 1 {
+		if version != 1 || parallelVersion != 0 || !isolationContract {
+			return errors.New("isolated implementation policy requires plan-graph-v7")
+		}
+		return nil
+	}
+	if isolationContract {
+		return errors.New("plan-graph-v7 requires isolated implementation policy")
+	}
 	if version == 1 && !(serialContract && parallelVersion == 0 || parallelContract && parallelVersion == 1) ||
 		version == 0 && (serialContract || parallelContract || parallelVersion != 0) {
 		return errors.New("repair planning policy and planner contract must be enabled together")
