@@ -134,14 +134,22 @@ func (c Config) Validate() error {
 	if c.CandidateIdentity != "" && c.CandidateIdentity != "semantic-index-v2" {
 		return errors.New("unsupported candidate identity contract")
 	}
-	if c.WriterContract != "" && c.WriterContract != "nonempty-v1" && c.WriterContract != "utf8-v2" && c.WriterContract != writercontract.ContractChangesJSONV1 && c.WriterContract != writercontract.ContractUTF8ReplaceV3 && c.WriterContract != writercontract.ContractUTF8ScopedV4 && c.WriterContract != writercontract.ContractAnchoredEditsV1 {
+	if c.WriterContract != "" && c.WriterContract != "nonempty-v1" && c.WriterContract != "utf8-v2" && c.WriterContract != writercontract.ContractChangesJSONV1 && c.WriterContract != writercontract.ContractUTF8ReplaceV3 && c.WriterContract != writercontract.ContractUTF8ScopedV4 && c.WriterContract != writercontract.ContractAnchoredEditsV1 && c.WriterContract != writercontract.ContractAnchoredEditsV2 {
 		return errors.New("unsupported writer contract")
+	}
+	if c.WriterContract == writercontract.ContractAnchoredEditsV2 {
+		if c.Writer == nil || c.Writer.Runtime != "codex-app-server" {
+			return errors.New("anchored-edits-v2 requires a Codex writer runtime")
+		}
+		if c.Fixer != nil && c.Fixer.Runtime != "codex-app-server" {
+			return errors.New("anchored-edits-v2 requires a Codex fixer runtime")
+		}
 	}
 	if c.PlannerContract != "" && c.PlannerContract != "plan-v1" && c.PlannerContract != plannerContractGraphV1 && c.PlannerContract != "plan-graph-v2" && c.PlannerContract != "plan-graph-v3" && c.PlannerContract != "plan-graph-v4" {
 		return errors.New("unsupported planner contract")
 	}
 	if c.PlannerContract == "plan-graph-v4" {
-		if c.WriterContract != writercontract.ContractAnchoredEditsV1 || c.ExplorerContract != "json-v2" || c.Writer == nil || c.Explorer == nil {
+		if !writercontract.IsAnchoredEdits(c.WriterContract) || c.ExplorerContract != "json-v2" || c.Writer == nil || c.Explorer == nil {
 			return errors.New("plan-graph-v4 requires anchored-edits writer and json-v2 explorer contracts")
 		}
 		// The production parallel writer route is deliberately limited to the

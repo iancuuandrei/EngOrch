@@ -8,33 +8,18 @@ import (
 	"strings"
 	"testing"
 
+	"harness.local/engorch/internal/anchoredit"
+	"harness.local/engorch/internal/candidatetools"
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/journal"
+	"harness.local/engorch/internal/runtime"
+	"harness.local/engorch/internal/testsupport"
 	"harness.local/engorch/internal/worktree"
 )
 
 func TestCandidateBrokerReadsModifiedStateAndRejectsDrift(t *testing.T) {
 	a := sourceAdapter(t)
-	r, err := worktree.Prepare(strings.Repeat("a", 64), *a.Source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lease, err := worktree.Acquire(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lease.Close()
-	b, err := worktree.Create(context.Background(), r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(r.Path, "source.txt"), []byte("modified"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	c, err := worktree.Fingerprint(context.Background(), b)
-	if err != nil {
-		t.Fatal(err)
-	}
+	b, c := testsupport.CandidateWorkspace(t, *a.Source, strings.Repeat("a", 64), map[string][]byte{"source.txt": []byte("modified")})
 	a.Candidate = &CandidateBinding{Workspace: b, Candidate: c}
 	events, err := journal.Read(a.JournalPath)
 	if err != nil {
@@ -91,10 +76,109 @@ func TestCandidateBrokerReadsModifiedStateAndRejectsDrift(t *testing.T) {
 	if chunk.ContentUTF8 == nil || *chunk.ContentUTF8 != "modified" || chunk.CandidateID != page.CandidateID || chunk.SHA256 != page.Files[0].Hash {
 		t.Fatal("candidate read used base or wrong hash")
 	}
-	if err := os.WriteFile(filepath.Join(r.Path, "extra"), []byte("drift"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(b.Request.Path, "extra"), []byte("drift"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if call("candidate_read", "drift", `{"path":"source.txt","offset":0,"limit":32}`).Success {
 		t.Fatal("drift admitted")
+	}
+}
+
+func TestAnchoredEditValidationIsDurableAndInvocationBound(t *testing.T) {
+	a := sourceAdapter(t)
+	i, err := runtime.NewInvocation(runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "explicit-model", Effort: "high", Role: "writer"}, "edit candidate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, candidate := testsupport.CandidateWorkspace(t, *a.Source, strings.Repeat("c", 64), map[string][]byte{"source.txt": []byte("anchor source")})
+	binding := CandidateBinding{Workspace: workspace, Candidate: candidate, AnchorValidationVersion: candidatetools.AnchorValidationVersion}
+	candidateID, err := candidate.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, files, err := worktree.Capture(context.Background(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var beforeHash string
+	for _, file := range files {
+		if file.Path == "source.txt" {
+			beforeHash = file.Hash
+		}
+	}
+
+	events, err := journal.Read(a.JournalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "anchored.jsonl")
+	for _, event := range events {
+		payload := event.Payload
+		if event.Kind == "runtime.intent" {
+			payload, err = canonical.Bytes(Intent{i, a.Directory})
+		}
+		if event.Kind == "runtime.turn-intent" {
+			payload, err = canonical.Bytes(map[string]any{"invocation_id": i.ID})
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := appendEvent(path, event.Kind, payload); err != nil {
+			t.Fatal(err)
+		}
+		if event.Kind == "runtime.source" {
+			if err := appendEvent(path, "runtime.candidate", binding); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	a.JournalPath, a.Candidate = path, &binding
+	edits := []anchoredit.Edit{{Before: "anchor", After: "checked"}}
+	args, err := canonical.Bytes(candidatetools.AnchoredEditArgs{CandidateID: candidateID, Path: "source.txt", BeforeHash: beforeHash, Edits: edits})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestBytes, err := canonical.Bytes(ToolRequest{Arguments: args, CallID: "anchor-check", ThreadID: "thread-1", TurnID: "turn-1", Tool: candidatetools.ValidateAnchoredEditsName})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, err := a.HandleTool(context.Background(), requestBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(wire), "anchor source") {
+		t.Fatal("candidate bytes were returned")
+	}
+	state, err := Inspect(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.PendingTool != nil || len(state.ToolResponses) != 1 || !state.ToolResponses[0].Success {
+		t.Fatal("tool response was not replayed", state.PendingTool, state.ToolResponses)
+	}
+	var validation candidatetools.AnchoredEditValidation
+	if err := canonical.Decode([]byte(state.ToolResponses[0].Content), &validation); err != nil {
+		t.Fatal(err)
+	}
+	if validation.CandidateID != candidateID || validation.Path != "source.txt" || validation.BeforeHash != beforeHash || !validation.Valid || validation.ResultHash == "" {
+		t.Fatal("anchored edit validation output mismatch", validation)
+	}
+}
+
+func TestV0RuntimeBindingRejectsAnchoredTool(t *testing.T) {
+	a := sourceAdapter(t)
+	raw, err := canonical.Bytes(ToolRequest{Arguments: json.RawMessage(`{}`), CallID: "v0", ThreadID: "thread-1", TurnID: "turn-1", Tool: candidatetools.ValidateAnchoredEditsName})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.HandleTool(context.Background(), raw); err == nil {
+		t.Fatal("v0 invocation admitted v1 tool")
+	}
+	state, err := Inspect(a.JournalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.ToolResponses) != 0 {
+		t.Fatal("rejected v1 tool received response")
 	}
 }

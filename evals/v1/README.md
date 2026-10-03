@@ -1,6 +1,6 @@
 # Fabric v1 real-repository evaluation: pinned custom tasks
 
-This suite defines seven custom real-repository tasks, each pinned to an
+This suite defines eight custom real-repository tasks, each pinned to an
 audited upstream commit. It is not a SWE-bench score and it is not a general
 full-v1 proof; it reports per-task behavioral acceptance on the selected
 repositories only. `manifest.json` is the authoritative source, commit,
@@ -15,6 +15,15 @@ upstream tests pass before the change; its held-out multiline assertions fail
 before the feature. A [fresh public-main attempt](results/godotenv-main10-20261003.json)
 was blocked before file application because a proposed source anchor did not
 match the current file. Actual Fabric completion is still pending.
+
+`go-atomic-numeric-text` uses the same pinned MIT go-atomic source for two
+independent text-encoding API extensions: Int64 and Uint64. Native baseline
+tests pass; the held-out baseline builds and fails runtime interface
+assertions for both missing APIs. The [preflight receipt](results/atomic-numeric-preflight-20261003.json)
+records zero provider calls. This task is intended for serial/parallel
+qualification, separately from the original six-task PR #5 comparison.
+Its Windows native check has the same narrow NocmpIntegration exclusion as
+go-atomic; its held-out check never excludes a test.
 
 Held-out acceptance sources live in `evals/v1/heldout/` and the classifier in
 `evals/v1/harness/Classify-CheckOutput.ps1` with regression fixtures under
@@ -131,6 +140,14 @@ single-task acceptance is not treated as a six-repository result.
 ## Controlled parallel-writer comparison
 
 Native evaluations accept `-ParallelWriters` and `-MaxParallel 1..8`.
+`-ValidateWriterEdits` additionally selects the experimental
+`anchored-edits-v2` contract during initialization of a fresh Codex task.
+It enables read-only anchor validation during the writer/fixer turn; it does
+not authorize files or replace final proposal validation. The default init
+arguments remain unchanged. PR5Matched rejects these newer policy overrides
+before effects. The evaluation and native task row record
+`writer_edit_validation_requested`; this records a request, not proof that the
+model used the tool or completed the task.
 Omitting both preserves the original invocation; these overrides reject in
 `PR5Matched` mode before any evaluation effects. The runner records requested
 policy separately from observed execution. A requested flag is not evidence

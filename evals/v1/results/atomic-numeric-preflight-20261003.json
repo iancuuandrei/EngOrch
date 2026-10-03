@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "task_id": "go-atomic-numeric-text",
+  "created_utc": "2026-10-03T03:19:38.9109537Z",
+  "source": {
+    "repository": "https://github.com/uber-go/atomic.git",
+    "commit": "2d2bdbd262f95d0a890c696fb6f91d4776cb142c",
+    "license": "MIT"
+  },
+  "fixture": {
+    "path": "evals/v1/heldout/atomic_numeric.heldout_test.go",
+    "sha256": "fd4da7690116bdb5b14ab542bec6b449ae56985eb74d20875d5b0b0542d93f2e",
+    "manifest_sha256": "4de9132444500072d8bf75efb22da806db362b1408119ed482e3445d8489d181"
+  },
+  "toolchain": {
+    "go": "go version go1.27.1 windows/amd64",
+    "executable_sha256": "d3ccdb604eafa6031133aefe1a3db24f0bb7362b857bc2125ac4e4c178b4b490"
+  },
+  "native_preflight": {
+    "checkout_commit": "2d2bdbd262f95d0a890c696fb6f91d4776cb142c",
+    "argv": [
+      "go",
+      "test",
+      "-count=1",
+      "-skip",
+      "^TestNocmpIntegration$",
+      "."
+    ],
+    "exit_code": 0,
+    "classification": "PASS",
+    "stdout_sha256": "f555ba8ef7adaada2f23b6284acb7dbc58672c4d91c797ca347fc01b517ce7cb",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "checkout_clean": true,
+    "windows_only_skip": "^TestNocmpIntegration$"
+  },
+  "heldout_baseline": {
+    "checkout_commit": "2d2bdbd262f95d0a890c696fb6f91d4776cb142c",
+    "argv": [
+      "go",
+      "test",
+      "-run=^TestFabricV1Heldout$",
+      "-count=1",
+      "."
+    ],
+    "exit_code": 1,
+    "classification": "targeted_assertion",
+    "runtime_test_failure": true,
+    "compiler_diagnostic": false,
+    "stdout_sha256": "bbc448f786f350a1c67c9957c1555f466a014a85fe06db9e073426b5f250af0d",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "diagnosis": "Both Int64 and Uint64 subtests ran and failed the runtime assertion that TextMarshaler must be implemented; there were no compiler diagnostics."
+  },
+  "harness": {
+    "heldout_mapping_present": true,
+    "windows_native_exclusion_includes_new_task": true,
+    "heldout_command_has_no_skip_flag": true,
+    "no_provider_calls": true,
+    "no_candidate_edit": true
+  },
+  "logs": {
+    "native_stdout": "native.stdout.log",
+    "native_stderr": "native.stderr.log",
+    "heldout_stdout": "heldout.stdout.log",
+    "heldout_stderr": "heldout.stderr.log"
+  }
+}

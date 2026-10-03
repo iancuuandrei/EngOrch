@@ -14,6 +14,7 @@ import (
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/journal"
 	"harness.local/engorch/internal/repository"
+	"harness.local/engorch/internal/testsupport"
 	"harness.local/engorch/internal/worktree"
 )
 
@@ -73,26 +74,7 @@ func TestSourceBrokerPersistsExactRequestAndResponse(t *testing.T) {
 
 func TestCandidateBrokerSnapshotsBindingAndCatalog(t *testing.T) {
 	source := contextSourceFixture(t)
-	request, err := worktree.Prepare(strings.Repeat("b", 64), source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lease, err := worktree.Acquire(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lease.Close()
-	workspace, err := worktree.Create(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(request.Path, "source.txt"), []byte("candidate"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	candidate, err := worktree.Fingerprint(context.Background(), workspace)
-	if err != nil {
-		t.Fatal(err)
-	}
+	workspace, candidate := testsupport.CandidateWorkspace(t, source, strings.Repeat("b", 64), map[string][]byte{"source.txt": []byte("candidate")})
 	original := candidatetools.Binding{Workspace: workspace, Candidate: candidate}
 	binding, err := NewBinding(strings.Repeat("c", 64), source, &original, fixtureLimits())
 	if err != nil {

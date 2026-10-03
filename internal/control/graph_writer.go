@@ -288,7 +288,7 @@ func replayGraphWriterProposal(s *Snapshot, e journal.Event, seen map[string]boo
 		return err
 	}
 	var reply WriterProposal
-	if s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV1 {
+	if writercontract.IsAnchoredEdits(s.Creation.Config.WriterContract) {
 		anchored, err := decodeAnchoredProposal(record.Writer.Result.Output)
 		if err != nil || anchored.CandidateID != candidateID {
 			return errors.Join(errors.New("graph writer candidate mismatch"), err)
@@ -593,7 +593,7 @@ func prepareGraphWriterFiles(ctx context.Context, path string, taskID string, in
 	}
 	task, _ := s.Graph.Graph.Task(taskID)
 	var reply WriterProposal
-	if s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV1 {
+	if writercontract.IsAnchoredEdits(s.Creation.Config.WriterContract) {
 		anchored, err := decodeAnchoredProposal(result.Output)
 		if err != nil {
 			return WriterRecord{}, err
