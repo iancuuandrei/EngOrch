@@ -134,6 +134,50 @@ This command is read-only and deterministic for the committed source, graph
 spec, parser binary, and query. Partial graph input or omitted items do not
 prove that declarations, references, callers, or impacts are absent.
 
+## Candidate graph query
+
+`fabric ri candidate-query RUN EXE EXE_SHA256 BASE_SPEC_JSON QUERY_JSON [CACHE_DIR]`
+applies a bounded Go-source overlay from one exact confirmed controller run
+candidate to a committed base graph, then runs the same semantic query. `RUN`
+must name a replay-valid journal whose confirmed workspace and candidate are
+bound to the currently configured repository identity. A stale source, missing
+candidate, uncertain workspace/file outcome, changed candidate, or candidate
+from another source is rejected. This command does not advance the run or
+change its journal.
+
+`BASE_SPEC_JSON` has the `ri graph` format and must include a committed v1
+`module_inventory`. The inventory is revalidated against the configured Git
+source. Candidate module inventory v2 is collected separately from the exact
+candidate and bound to that base inventory and candidate ID. The candidate
+collector compares the candidate with the bounded base graph, parses at most
+eight eligible changed/new Go files (up to 1 MiB each), applies deletions, and
+retains only unchanged declared generator links. `changed_path_count` covers
+changed paths from the base graph; `admitted_path_count` covers successfully
+parsed candidate Go paths outside that base graph. Omissions appear in the
+bounded report. A changed base file omitted from parsing is removed from the
+candidate graph, so old declarations cannot appear as current candidate facts.
+If no admitted Go facts remain, the query rejects without a result instead of
+returning an old graph or claiming complete absence.
+New or changed generator directives are not inferred. The
+candidate graph uses the pinned parser digest from `EXE_SHA256`; `CACHE_DIR`, if
+supplied, applies only to committed base parsing, while candidate parsing is
+uncached.
+
+The output identifies the run, repository, candidate, base and candidate graph
+digests, both module-inventory digests, candidate-manifest coverage and
+omissions, changed/admitted/deleted counts, bounded safe Go-source omissions
+and the semantic `result`. It does not include source bytes or the
+full candidate graph. Coverage remains `PARTIAL`; a bounded omission, absent
+item, unresolved call, or unsupported semantic vocabulary is not proof of
+absence. `references` and `implementations` remain unsupported by this
+graph-only query. The command is read-only and makes no provider calls.
+
+Example:
+
+```powershell
+fabric --root D:\src\project ri candidate-query <run-id> D:\tools\engorch-ri.exe <exe-sha256> go-graph-spec.json candidate-query.json
+```
+
 ## Advisory topology query
 
 `fabric ri topology EXE EXE_SHA256 SPEC_JSON CHANGED_PATHS_JSON MAX_GROUP_FILES [CACHE_DIR]`

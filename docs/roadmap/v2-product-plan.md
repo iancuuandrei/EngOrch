@@ -237,3 +237,48 @@ integrated increment, without resurrecting a G0 promotion ladder.
   (0.308 s). The cache benchmark excludes priming and setup: 24 cold misses
   versus 24 warm hits, similar allocation, and only a small fixture timing
   improvement. CPU and RSS are not yet measured; no general speedup is claimed.
+
+## Checkpoint — v1.0.7 qualification and candidate graph work
+
+- `v1.0.7` originally froze at `9762199f2a7b72bcc821974ca9b914b94a4c2265`.
+  Its complete clean Go suite passed: control 786.264 s, CLI 95.519 s,
+  RI 26.195 s. Hosted run `37149671650` passed all three checks.
+- A direct Sonar issue query nevertheless found one PowerShell null-order
+  issue. The same increment was amended to
+  `09f71df18af1c86a8442b44f78a67d2809104256`, changing only that harness
+  comparison. The harness rerun passed and independent review approved.
+  All Go/product trees are identical; hosted checks for the amendment are
+  tracked separately. This is not a rerun of the full Go suite at the new SHA.
+- The separate Sol High experiment finished 1/2 PASS: numeric generated
+  ownership passed with two repairs, difflib failed held-out acceptance.
+  [Typed measurements](../evaluation/v1.0.5-generation-and-isolation.md)
+  do not establish a calibrated routing default.
+- Candidate module inventory and graph overlays now bind observations to
+  actual candidate manifest hashes, files closure and committed base digest.
+  Independent review approves these bounded library slices. CLI exposure and
+  final combined qualification remain pending; no v1.1/v2 completion is claimed.
+- [Public objective v2](../evaluation/public-objective-v2.md) repairs a missing
+  pre-existing public difflib requirement. Historical results remain unchanged;
+  fresh comparisons must use the same new objective on both arms.
+- The amended v1.0.7 hosted run `37149801709` passed all three checks;
+  direct PR #16 Sonar issue enumeration returned zero unresolved issues.
+  Public main and dev now both contain `09f71df18af1c86a8442b44f78a67d2809104256`;
+  bot-authored PR #16 is merged. This integrates the reviewed optional
+  capabilities and normal-use preflight fix, without adopting experimental
+  context defaults or claiming any milestone acceptance increase.
+- The v1.0.8 candidate exposes `ri candidate-query` over a confirmed run's
+  exact candidate, with module ownership rebuilt from candidate manifests.
+  Omitted changed files cannot retain old base facts. Candidate reads are
+  bounded to eight one-MiB Go files, held under verified read leases, with
+  explicit PARTIAL coverage and redacted sensitive omissions.
+  Independent combined review approves the module/overlay/corpus/CLI and
+  objective clarification. Pinned-engine full CLI passed (99.699 s), candidate
+  corpus regressions passed (26.815 s), vet and doccheck (0.308 s) passed, and objective/native-argument/usage
+  PowerShell harnesses passed. Clean full-suite and hosted checks remain
+  required before integration. New cache/checkpoint work is a later increment.
+- The increment's Sonar duplication gate required extracting shared test setup.
+  A real pinned run also exposed an invalid empty-graph expectation in one
+  fixture. The amended regression separately proves omitted changed facts are
+  removed while unrelated facts survive, and an all-omitted candidate rejects
+  with no usable graph. Independent review approves both changes. The original
+  full-suite run does not qualify this amendment; a clean rerun is required.

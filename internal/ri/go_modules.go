@@ -20,15 +20,22 @@ import (
 )
 
 const (
-	goModuleInventoryVersion = 1
-	goModuleMaxRecords       = 128
-	goModuleMaxFileBytes     = 128 << 10
-	goModuleMaxTotalBytes    = 1 << 20
+	// GoModuleInventoryVersionCommitted identifies inventories read from the
+	// immutable Git tree. Its canonical shape and digest domain are stable.
+	GoModuleInventoryVersionCommitted = 1
+	// GoModuleInventoryVersionCandidate identifies inventories read from one
+	// exact admitted worktree candidate.
+	GoModuleInventoryVersionCandidate = 2
+	goModuleInventoryVersion          = GoModuleInventoryVersionCommitted
+	goModuleMaxRecords                = 128
+	goModuleMaxFileBytes              = 128 << 10
+	goModuleMaxTotalBytes             = 1 << 20
 )
 
 // GoModuleInventory is a bounded observation of module-related files in one
-// committed tree. It records declarations; it does not claim that a Go command
-// would select a workspace, replacement, vendor tree, or dependency version.
+// committed tree or one exact candidate. It records declarations; it does not
+// claim that a Go command would select a workspace, replacement, vendor tree,
+// or dependency version.
 type GoModuleInventory struct {
 	Version                int                     `json:"version"`
 	RepositoryID           string                  `json:"repository_id"`
@@ -39,6 +46,9 @@ type GoModuleInventory struct {
 	TruncatedManifestCount int                     `json:"truncated_manifest_count"`
 	Files                  []GoManifestObservation `json:"files"`
 	Omissions              []GoManifestOmission    `json:"omissions"`
+	CandidateID            string                  `json:"candidate_id,omitempty"`
+	CandidateFilesHash     string                  `json:"candidate_files_hash,omitempty"`
+	BaseInventoryDigest    string                  `json:"base_inventory_digest,omitempty"`
 	Digest                 string                  `json:"digest"`
 }
 
@@ -51,8 +61,8 @@ type GoManifestOmission struct {
 }
 
 // GoManifestObservation binds a parsed declaration or omission to its exact
-// committed Git blob. SHA256 is empty only when content was deliberately not
-// read (for example, an oversized file or the inventory budget was exhausted).
+// committed Git blob (v1) or candidate file hash (v2). Candidate observations
+// never invent Git blob IDs.
 type GoManifestObservation struct {
 	Kind       string                `json:"kind"`
 	Path       string                `json:"path"`
@@ -373,14 +383,21 @@ func finalizeGoModuleInventory(inventory *GoModuleInventory) error {
 	if len(data) > canonical.MaxBytes {
 		return errors.New("Go module inventory exceeds canonical size bound")
 	}
-	// Use the domain-separated canonical hash used by other RI artifacts.
-	inventory.Digest, err = canonical.Hash("harness.ri.go-module-inventory.v1", copyValue)
+	// Keep committed v1 bytes stable; candidate records use a separate domain.
+	domain := "harness.ri.go-module-inventory.v1"
+	if inventory.Version == GoModuleInventoryVersionCandidate {
+		domain = "harness.ri.go-module-inventory.v2"
+	}
+	inventory.Digest, err = canonical.Hash(domain, copyValue)
 	return err
 }
 
 // ValidateGoModuleInventory checks canonical structure/digest and binding to
 // the supplied immutable repository identity. It performs no Git or Go command.
 func ValidateGoModuleInventory(inventory GoModuleInventory, identity repository.Identity) error {
+	if inventory.Version != GoModuleInventoryVersionCommitted || inventory.CandidateID != "" || inventory.CandidateFilesHash != "" || inventory.BaseInventoryDigest != "" {
+		return errors.New("committed Go module inventory required")
+	}
 	repositoryID, err := identity.ID()
 	if err != nil {
 		return err
@@ -394,12 +411,21 @@ func ValidateGoModuleInventory(inventory GoModuleInventory, identity repository.
 	return nil
 }
 
-// ValidateGoModuleInventoryRecord validates a serialized inventory without
-// filesystem access. Call ValidateGoModuleInventory as well when the exact
-// repository identity is available.
+// ValidateGoModuleInventoryRecord validates a serialized v1 committed or v2
+// candidate inventory without filesystem access. Use ValidateGoModuleInventory
+// for exact committed identity, or ValidateCandidateGoModuleInventory for an
+// exact candidate and its committed base inventory.
 func ValidateGoModuleInventoryRecord(inventory GoModuleInventory) error {
-	if inventory.Version != goModuleInventoryVersion || inventory.RepositoryID == "" || inventory.Commit == "" || inventory.Tree == "" || (inventory.Coverage != "complete" && inventory.Coverage != "partial") || inventory.ObservedManifestCount < len(inventory.Files)+len(inventory.Omissions) || inventory.TruncatedManifestCount < 0 || inventory.TruncatedManifestCount != inventory.ObservedManifestCount-len(inventory.Files)-len(inventory.Omissions) {
+	candidate := inventory.Version == GoModuleInventoryVersionCandidate
+	if (inventory.Version != GoModuleInventoryVersionCommitted && !candidate) || inventory.RepositoryID == "" || inventory.Commit == "" || inventory.Tree == "" || (inventory.Coverage != "complete" && inventory.Coverage != "partial") || inventory.ObservedManifestCount < len(inventory.Files)+len(inventory.Omissions) || inventory.TruncatedManifestCount < 0 || inventory.TruncatedManifestCount != inventory.ObservedManifestCount-len(inventory.Files)-len(inventory.Omissions) {
 		return errors.New("Go module inventory source or counts are invalid")
+	}
+	if candidate {
+		if safepath.RequireDigest(inventory.CandidateID) != nil || safepath.RequireDigest(inventory.CandidateFilesHash) != nil || safepath.RequireDigest(inventory.BaseInventoryDigest) != nil {
+			return errors.New("candidate Go module inventory binding is invalid")
+		}
+	} else if inventory.CandidateID != "" || inventory.CandidateFilesHash != "" || inventory.BaseInventoryDigest != "" {
+		return errors.New("committed Go module inventory contains candidate binding")
 	}
 	if inventory.TruncatedManifestCount > 0 && inventory.Coverage != "partial" {
 		return errors.New("truncated Go module inventory cannot be complete")
@@ -408,7 +434,11 @@ func ValidateGoModuleInventoryRecord(inventory GoModuleInventory) error {
 	readBytes := int64(0)
 	incomplete := inventory.TruncatedManifestCount > 0 || len(inventory.Omissions) > 0
 	for _, file := range inventory.Files {
-		if file.Kind != "go_mod" && file.Kind != "go_work" && file.Kind != "vendor_modules" || goManifestKind(file.Path) != file.Kind || file.Blob == "" || len(file.Blob) != len(inventory.Commit) || strings.Trim(file.Blob, "0123456789abcdef") != "" || file.Bytes < 0 || !goManifestStatusValid(file.Status) || (previous != "" && file.Path <= previous) {
+		blobValid := file.Blob != "" && len(file.Blob) == len(inventory.Commit) && strings.Trim(file.Blob, "0123456789abcdef") == ""
+		if candidate && file.Blob == "" {
+			blobValid = true
+		}
+		if file.Kind != "go_mod" && file.Kind != "go_work" && file.Kind != "vendor_modules" || goManifestKind(file.Path) != file.Kind || !blobValid || candidate && file.Blob != "" || file.Bytes < 0 || !goManifestStatusValid(file.Status) || (previous != "" && file.Path <= previous) {
 			return errors.New("Go module inventory file record is invalid")
 		}
 		previous = file.Path
@@ -418,17 +448,21 @@ func ValidateGoModuleInventoryRecord(inventory GoModuleInventory) error {
 			}
 		}
 		if file.SHA256 != "" {
-			if safepath.RequireDigest(file.SHA256) != nil || file.Status != "parsed" && file.Status != "invalid" && file.Status != "invalid_utf8" {
+			fullContent := file.Status == "parsed" || file.Status == "invalid" || file.Status == "invalid_utf8"
+			candidateFingerprint := candidate && (file.Status == "oversized" || file.Status == "budget_omitted")
+			if safepath.RequireDigest(file.SHA256) != nil || !fullContent && !candidateFingerprint {
 				return errors.New("manifest content digest/status is invalid")
 			}
-			readBytes += file.Bytes
+			if fullContent {
+				readBytes += file.Bytes
+			}
 		}
 		if file.Status == "parsed" || file.Status == "invalid" || file.Status == "invalid_utf8" {
-			if file.SHA256 == "" || file.Bytes > goModuleMaxFileBytes {
+			if file.SHA256 == "" || file.Bytes > goModuleMaxFileBytes || candidate && file.Blob != "" {
 				return errors.New("read manifest is missing bounded content evidence")
 			}
 		}
-		if file.Status == "oversized" && file.Bytes <= goModuleMaxFileBytes || file.Status == "budget_omitted" && file.Bytes > goModuleMaxFileBytes {
+		if file.Status == "oversized" && file.Bytes <= goModuleMaxFileBytes || file.Status == "budget_omitted" && file.Bytes > goModuleMaxFileBytes || candidate && (file.Status == "oversized" || file.Status == "budget_omitted") && file.SHA256 == "" {
 			return errors.New("manifest omission status does not match its size")
 		}
 		if file.Status == "unsafe_path" || file.Status == "unsupported_kind" || file.Status == "protected_path" || file.Status == "sensitive_path" {

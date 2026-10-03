@@ -166,6 +166,9 @@ type GoGraphOverlayInput struct {
 	Replacements   []GoGraphFileInput   `json:"replacements"`
 	Deleted        []string             `json:"deleted"`
 	Generators     []GoGeneratorBinding `json:"generators"`
+	// ModuleInventory closes declared-module ownership over a candidate
+	// overlay. It is optional to preserve legacy source-local overlays.
+	ModuleInventory *GoModuleInventory `json:"module_inventory,omitempty"`
 }
 
 // GoGraphFile retains syntax facts and explicit package identity, but not
@@ -260,13 +263,17 @@ func ApplyGoEngineeringOverlay(base GoEngineeringGraph, overlay GoGraphOverlayIn
 	if overlay.BaseDigest != base.Digest || (overlay.SourceID != "" && overlay.SourceID != base.SourceID) || !lowerDigest(overlay.CandidateID) || (base.CandidateID != "" && overlay.CandidateID == base.CandidateID) || overlay.ProducerSHA256 != base.ProducerSHA256 {
 		return GoEngineeringGraph{}, errors.New("Go graph overlay binding mismatch")
 	}
-	if base.ModuleInventory != nil {
-		return GoEngineeringGraph{}, errors.New("module-backed Go graph overlays require a candidate manifest inventory")
+	inventory, err := validateGoGraphOverlayModuleInventory(base, overlay)
+	if err != nil {
+		return GoEngineeringGraph{}, err
 	}
 	var replacements []GoGraphFile
 	if len(overlay.Replacements) > 0 {
-		var err error
-		replacements, err = validateGoGraphInputs(overlay.Replacements, overlay.ProducerSHA256, base.SourceID, nil)
+		if inventory != nil {
+			replacements, err = rebindGoGraphInputs(overlay.Replacements, overlay.ProducerSHA256, base.SourceID, inventory)
+		} else {
+			replacements, err = validateGoGraphInputs(overlay.Replacements, overlay.ProducerSHA256, base.SourceID, nil)
+		}
 		if err != nil {
 			return GoEngineeringGraph{}, err
 		}
@@ -307,7 +314,13 @@ func ApplyGoEngineeringOverlay(base GoEngineeringGraph, overlay GoGraphOverlayIn
 		files = append(files, file)
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Facts.Path < files[j].Facts.Path })
-	return buildGoEngineeringGraph(base.SourceID, overlay.CandidateID, overlay.ProducerSHA256, files, overlay.Generators, nil)
+	if inventory != nil {
+		files, err = rebindGoGraphFiles(files, base.SourceID, inventory)
+		if err != nil {
+			return GoEngineeringGraph{}, err
+		}
+	}
+	return buildGoEngineeringGraph(base.SourceID, overlay.CandidateID, overlay.ProducerSHA256, files, overlay.Generators, inventory)
 }
 
 // ValidateGoEngineeringGraph checks graph structure and its deterministic
@@ -606,14 +619,41 @@ func validateGoGraphModuleInventory(inventory *GoModuleInventory, sourceID, cand
 	if inventory == nil {
 		return nil, nil
 	}
-	if candidateID != "" {
-		return nil, errors.New("module-backed Go graph requires a committed base source")
-	}
 	if inventory.RepositoryID != sourceID || ValidateGoModuleInventoryRecord(*inventory) != nil {
 		return nil, errors.New("Go graph module inventory is invalid or source-substituted")
 	}
+	if candidateID == "" {
+		if inventory.Version != GoModuleInventoryVersionCommitted || inventory.CandidateID != "" || inventory.CandidateFilesHash != "" || inventory.BaseInventoryDigest != "" {
+			return nil, errors.New("base Go graph requires a committed module inventory")
+		}
+	} else if inventory.Version != GoModuleInventoryVersionCandidate || inventory.CandidateID != candidateID || !lowerDigest(inventory.CandidateFilesHash) || !lowerDigest(inventory.BaseInventoryDigest) {
+		return nil, errors.New("candidate Go graph module inventory is invalid or candidate-substituted")
+	}
 	copy := cloneGoModuleInventory(*inventory)
 	return &copy, nil
+}
+
+// validateGoGraphOverlayModuleInventory admits only an explicit v2 candidate
+// inventory over a committed v1 base. A committed inventory cannot be reused
+// for modified candidate source because go.mod/go.work ownership may differ.
+func validateGoGraphOverlayModuleInventory(base GoEngineeringGraph, overlay GoGraphOverlayInput) (*GoModuleInventory, error) {
+	if overlay.ModuleInventory == nil {
+		if base.ModuleInventory != nil {
+			return nil, errors.New("module-backed Go graph overlays require a candidate manifest inventory")
+		}
+		return nil, nil
+	}
+	if base.CandidateID != "" || base.ModuleInventory == nil || base.ModuleInventory.Version != GoModuleInventoryVersionCommitted {
+		return nil, errors.New("candidate module inventory requires a committed module-backed base graph")
+	}
+	inventory, err := validateGoGraphModuleInventory(overlay.ModuleInventory, base.SourceID, overlay.CandidateID)
+	if err != nil {
+		return nil, err
+	}
+	if inventory.BaseInventoryDigest != base.ModuleInventory.Digest || inventory.Commit != base.ModuleInventory.Commit || inventory.Tree != base.ModuleInventory.Tree {
+		return nil, errors.New("candidate module inventory is not bound to the base inventory")
+	}
+	return inventory, nil
 }
 
 func cloneGoModuleInventory(inventory GoModuleInventory) GoModuleInventory {
@@ -658,6 +698,39 @@ func validateGoGraphInputs(inputs []GoGraphFileInput, producer, sourceID string,
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Facts.Path < files[j].Facts.Path })
 	return files, nil
+}
+
+// rebindGoGraphInputs ignores caller-supplied module binding fields and derives
+// fresh package ownership from a candidate inventory plus the replacement's
+// explicit package clause. Facts still bind each replacement to exact source.
+func rebindGoGraphInputs(inputs []GoGraphFileInput, producer, sourceID string, inventory *GoModuleInventory) ([]GoGraphFile, error) {
+	bound := append([]GoGraphFileInput(nil), inputs...)
+	for i := range bound {
+		binding, err := DeclaredGoPackageBinding(*inventory, bound[i].Facts.Path, bound[i].Package.PackageName)
+		if err != nil {
+			return nil, err
+		}
+		bound[i].Package = binding
+	}
+	return validateGoGraphInputs(bound, producer, sourceID, inventory)
+}
+
+// rebindGoGraphFiles derives fresh ownership for retained facts. Their package
+// clauses were already source-bound by the immutable base graph; no stale base
+// module mapping survives a candidate manifest change.
+func rebindGoGraphFiles(files []GoGraphFile, sourceID string, inventory *GoModuleInventory) ([]GoGraphFile, error) {
+	bound := cloneGoGraphFiles(files)
+	for i := range bound {
+		binding, err := DeclaredGoPackageBinding(*inventory, bound[i].Facts.Path, bound[i].Package.PackageName)
+		if err != nil {
+			return nil, err
+		}
+		bound[i].Package = binding
+		if err := validateGoGraphFile(bound[i], bound[i].Facts.ProducerSHA256, sourceID, inventory); err != nil {
+			return nil, err
+		}
+	}
+	return bound, nil
 }
 
 func validateGoGraphFile(file GoGraphFile, producer, sourceID string, inventory *GoModuleInventory) error {

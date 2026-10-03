@@ -668,6 +668,7 @@ function Get-RunnerSourceHashes() {
         'evals/v1/harness/Test-CopyFixtures.ps1',
         'evals/v1/harness/Test-TomlArgvPolicy.ps1',
         'evals/v1/harness/Test-NativeRunArgs.ps1',
+        'evals/v1/harness/Test-PublicObjectiveContract.ps1',
         'evals/v1/harness/Test-UsageMetrics.ps1',
         'evals/v1/manifest.json'
     )
