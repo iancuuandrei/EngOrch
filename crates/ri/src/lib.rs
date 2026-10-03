@@ -7,6 +7,7 @@ pub mod canonical;
 pub mod changed;
 pub mod graph;
 pub mod identifiers;
+pub mod intelligence;
 pub mod import;
 pub mod lexical;
 pub mod lexical_disk;

@@ -57,13 +57,14 @@ func (l Limits) validate() error {
 // Input contains task text plus an already admitted corpus. ChangedPaths and
 // PathHints are path-only evidence; neither causes a filesystem read.
 type Input struct {
-	Version      int      `json:"version"`
-	Scope        Scope    `json:"scope"`
-	Objective    string   `json:"objective"`
-	Files        []File   `json:"-"`
-	ChangedPaths []string `json:"changed_paths,omitempty"`
-	PathHints    []string `json:"path_hints,omitempty"`
-	Limits       Limits   `json:"limits"`
+	Version      int            `json:"version"`
+	Scope        Scope          `json:"scope"`
+	Objective    string         `json:"objective"`
+	Files        []File         `json:"-"`
+	ChangedPaths []string       `json:"changed_paths,omitempty"`
+	PathHints    []string       `json:"path_hints,omitempty"`
+	Anchors      map[string]int `json:"anchors,omitempty"`
+	Limits       Limits         `json:"limits"`
 }
 
 // SelectedFile is an exact half-open byte excerpt. Hash binds all admitted
@@ -141,6 +142,13 @@ func Select(in Input) (Manifest, error) {
 			continue
 		}
 		score, first, reason := rank(file, terms, changed, hints)
+		if pivot, anchored := in.Anchors[file.Path]; anchored {
+			first = pivot
+			score += 700
+			if reason == "" {
+				reason = "graph_anchor"
+			}
+		}
 		candidates = append(candidates, scoredFile{file: file, score: score, first: first, reason: reason})
 	}
 	sort.Slice(candidates, func(i, j int) bool {
@@ -213,6 +221,7 @@ func validateInput(in Input) error {
 		return err
 	}
 	seen := map[string]bool{}
+	filesByPath := make(map[string]File, len(in.Files))
 	total := 0
 	for _, f := range in.Files {
 		if safepath.Relative(f.Path) != nil || safepath.RequireDigest(f.Hash) != nil || !sameHash(f.Hash, f.Content) {
@@ -223,9 +232,19 @@ func validateInput(in Input) error {
 			return errors.New("task context path alias")
 		}
 		seen[key] = true
+		filesByPath[f.Path] = f
 		total += len(f.Content)
 		if total > in.Limits.MaxInputBytes {
 			return errors.New("task context input byte limit")
+		}
+	}
+	if len(in.Anchors) > len(in.Files) {
+		return errors.New("too many task context anchors")
+	}
+	for path, offset := range in.Anchors {
+		file, exists := filesByPath[path]
+		if safepath.Relative(path) != nil || !exists || offset < 0 || offset >= len(file.Content) || !utf8.Valid(file.Content) || !utf8.RuneStart(file.Content[offset]) {
+			return errors.New("invalid task context anchor")
 		}
 	}
 	for _, paths := range [][]string{in.ChangedPaths, in.PathHints} {
@@ -254,14 +273,15 @@ func inputID(in Input, files []File) (string, error) {
 	sort.Strings(changed)
 	sort.Strings(hints)
 	return canonical.Hash("harness.task-context-input.v1", struct {
-		Version   int         `json:"version"`
-		Scope     Scope       `json:"scope"`
-		Objective string      `json:"objective"`
-		Files     []inputFile `json:"files"`
-		Changed   []string    `json:"changed"`
-		Hints     []string    `json:"hints"`
-		Limits    Limits      `json:"limits"`
-	}{in.Version, in.Scope, in.Objective, bound, changed, hints, in.Limits})
+		Version   int            `json:"version"`
+		Scope     Scope          `json:"scope"`
+		Objective string         `json:"objective"`
+		Files     []inputFile    `json:"files"`
+		Changed   []string       `json:"changed"`
+		Hints     []string       `json:"hints"`
+		Anchors   map[string]int `json:"anchors,omitempty"`
+		Limits    Limits         `json:"limits"`
+	}{in.Version, in.Scope, in.Objective, bound, changed, hints, in.Anchors, in.Limits})
 }
 
 func sameHash(want string, content []byte) bool {

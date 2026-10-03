@@ -81,3 +81,26 @@ must satisfy review/integration as well as executable verification.
 This checkpoint is not v1.1 or v2 completion. Record implemented capabilities,
 exact candidate/check identities, failures and remaining work after each
 integrated increment, without resurrecting a G0 promotion ladder.
+
+## Increment checkpoint — v1.0.1 and intelligence foundation
+
+- `v1.0.1`, `61ed719c951e50b5d416ff6d73b36edbf6edcc78`, is integrated
+  on public main. Author and committer are the automation identity above.
+  Its clean full Go suite passed, as did independent review, SonarCloud and
+  GitGuardian. PR #14 was created by `github-actions[bot]`.
+- Fresh native evaluation `20261003T151841Z-919a36f9` /
+  `eval-20261003T151947Z-fdd8d561` completed **5/6 PASS**, with unchanged
+  held-out acceptance and two repairs. Difflib exhausted its budget; its final
+  native failures are `ExampleGetUnifiedDiffCode` and
+  `ExampleGetContextDiffCode`. No infrastructure fault or uncertain effect was
+  observed. This journal remains terminal and is not resumed.
+- The next increment is an opt-in RI foundation: Go syntax facts with explicit
+  trusted-local derived caching; immutable source/candidate graphs; bounded
+  symbol/import/call/impact queries; compact context compilation and committed
+  source CLI commands. Rust, Go and cross-language fixtures and independent
+  review qualify this foundation only. Calls remain unresolved and coverage
+  partial. Automatic package discovery and planner integration, real task
+  benefit and the v1.1 6/6 gate remain outstanding.
+- Earlier frozen evaluations and release tags retain their identities. The
+  workflow-file selection failure in the previous 0/6 run is repaired; the
+  newer 5/6 result does not erase the older result or establish v1.1 completion.

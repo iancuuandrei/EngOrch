@@ -47,6 +47,9 @@ func TestSelectIsDeterministicRelevantAndBounded(t *testing.T) {
 	if !reflect.DeepEqual(first, second) {
 		t.Fatalf("selection depends on input order:\n%+v\n%+v", first, second)
 	}
+	if first.InputHash != "69beccd08a7a02e5754064bf355c0c24cc90460e418e72357f8b1cc799e21158" {
+		t.Fatalf("empty anchors changed the legacy input identity: %s", first.InputHash)
+	}
 	if len(first.Selected) != 3 || first.Selected[0].Path != "internal/greeting/greeting.go" || first.Selected[0].Reason != "changed_path" || first.SelectedBytes > fixtureInput().Limits.MaxBytes {
 		t.Fatal("unexpected relevance or bounds", first)
 	}
@@ -60,6 +63,88 @@ func TestSelectIsDeterministicRelevantAndBounded(t *testing.T) {
 	}
 	if _, err := first.ID(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSelectUsesBoundGraphAnchorBeyondLexicalSample(t *testing.T) {
+	prefix := strings.Repeat("// padding keeps the target beyond lexical sample\n", 900)
+	content := prefix + "func LateTarget() string { return \"late\" }\n"
+	pivot := strings.Index(content, "LateTarget")
+	in := fixtureInput()
+	in.Objective = "Fix a small unrelated issue"
+	in.Files = []File{admitted("pkg/large.go", content)}
+	in.ChangedPaths = nil
+	in.PathHints = []string{"pkg/large.go"}
+	in.Anchors = map[string]int{"pkg/large.go": pivot}
+	in.Limits = Limits{MaxFiles: 1, MaxBytes: 4096, MaxBytesPerFile: 2048, MaxInputBytes: len(content) + 1, MaxOmissions: 8}
+	got, err := Select(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Selected) != 1 {
+		t.Fatalf("anchored file not selected: %+v", got)
+	}
+	selected := got.Selected[0]
+	if selected.Start <= 32<<10 || int64(pivot) < selected.Start || int64(pivot) >= selected.End || !strings.Contains(selected.Content, "LateTarget") {
+		t.Fatalf("excerpt did not pivot to the bound late declaration: %+v", selected)
+	}
+}
+
+func TestSelectRejectsInvalidGraphAnchors(t *testing.T) {
+	for name, anchor := range map[string]struct {
+		path   string
+		offset int
+		file   File
+	}{
+		"foreign path": {path: "src/other.go", offset: 0, file: admitted("src/a.go", "func A() {}")},
+		"negative":     {path: "src/a.go", offset: -1, file: admitted("src/a.go", "func A() {}")},
+		"out of range": {path: "src/a.go", offset: len("func A() {}"), file: admitted("src/a.go", "func A() {}")},
+		"split rune":   {path: "src/a.go", offset: 1, file: admitted("src/a.go", "é")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := fixtureInput()
+			in.Files = []File{anchor.file}
+			in.ChangedPaths, in.PathHints = nil, nil
+			in.Anchors = map[string]int{anchor.path: anchor.offset}
+			if _, err := Select(in); err == nil {
+				t.Fatal("invalid graph anchor accepted")
+			}
+		})
+	}
+}
+
+func TestSelectAnchorHashOrderingAndEmptyCompatibility(t *testing.T) {
+	in := fixtureInput()
+	in.Files = []File{admitted("a.go", "func Alpha() {}"), admitted("b.go", "func Beta() {}")}
+	in.ChangedPaths = nil
+	in.PathHints = []string{"a.go", "b.go"}
+	in.Anchors = map[string]int{"b.go": 5, "a.go": 5}
+	first, err := Select(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Anchors = map[string]int{}
+	in.Anchors["a.go"] = 5
+	in.Anchors["b.go"] = 5
+	second, err := Select(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.InputHash != second.InputHash || !reflect.DeepEqual(first, second) {
+		t.Fatal("anchor map insertion order changed selection")
+	}
+	in.Anchors = nil
+	without, err := Select(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Anchors = map[string]int{}
+	empty, err := Select(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if without.InputHash != empty.InputHash || !reflect.DeepEqual(without, empty) {
+		t.Fatal("nil and empty anchors changed legacy selection")
 	}
 }
 
