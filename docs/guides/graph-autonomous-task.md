@@ -7,8 +7,9 @@ development trial on pinned go-humanize completed planning, exploration,
 writing, native verification and approving review; its exact reviewed candidate
 also passed independent held-out checks. An installed Afero development task
 also passed acceptance after two useful investigations overlapped by 21.890
-seconds. A matched speed improvement and final release acceptance remain
-unproven; see the real-repository evaluation report.
+seconds. A fresh matched Humanize pair also passed both acceptance paths:
+484.962 seconds serial versus 304.622 seconds parallel. This is one observed
+pair, not a general speedup guarantee; see the real-repository evaluation report.
 
 ## Defaults
 
@@ -109,9 +110,15 @@ tasks with disjoint concrete write paths. A small objective does not need a
 second writer. `--max-parallel 1` remains valid with the opt-in, allowing the
 same two-task shape to execute serially for comparison.
 
-Real-provider parallel implementation acceptance is pending. Local Codex
-app-server fixtures cover two overlapping writers, one aggregate application,
-serial repair after review, and journal replay before fresh verification.
+Two real Humanize writers overlapped, and the retained run subsequently reached
+READY with native and held-out acceptance after a minimal Fabric aggregate-path
+sorting repair. That source intervention prevents treating it as an
+intervention-free latency comparison. See the
+[combined-task acceptance](../../evals/v1/results/humanize-feature-performance-accepted-20261003.json)
+and [evaluation comparison](../evaluation/v1-real-repository-comparison.md).
+Local Codex app-server fixtures also cover two overlapping writers, one
+aggregate application, serial repair after review, and journal replay before
+fresh verification.
 A fresh real-model godotenv trial selected one implementation task and was
 blocked on a missing source anchor before any file effect. It proves neither
 successful parallel acceptance nor improved real-task latency; see the
@@ -206,14 +213,14 @@ reader path and SHA-256 supplied by the operator, save each preview unchanged,
 and authorize its displayed intent ID:
 
 ```text
-harness run --autonomous --prepare-only "OBJECTIVE"
-harness ri prepare-lexical RUN EXE EXE_SHA256 STAGE_ROOT 67108864 10000
-harness ri lexical RUN BASE_PREVIEW_JSON BASE_INTENT_ID ACTOR
-harness ri lexical-ref RUN
-harness ri prepare-overlay RUN OVERLAY_STAGE_ROOT
-harness ri overlay RUN OVERLAY_PREVIEW_JSON OVERLAY_INTENT_ID ACTOR
-harness ri overlay-ref RUN
-harness resume --autonomous RUN
+fabric run --autonomous --prepare-only "OBJECTIVE"
+fabric ri prepare-lexical RUN EXE EXE_SHA256 STAGE_ROOT 67108864 10000
+fabric ri lexical RUN BASE_PREVIEW_JSON BASE_INTENT_ID ACTOR
+fabric ri lexical-ref RUN
+fabric ri prepare-overlay RUN OVERLAY_STAGE_ROOT
+fabric ri overlay RUN OVERLAY_PREVIEW_JSON OVERLAY_INTENT_ID ACTOR
+fabric ri overlay-ref RUN
+fabric resume --autonomous RUN
 ```
 
 Both lexical effects are bound to this run; the overlay requires its confirmed
@@ -230,5 +237,8 @@ acceptance or `READY`.
   verification/review.
 - Actual development trials and the matched six-task evaluation are recorded
   in [the evaluation report](../evaluation/v1-real-repository-comparison.md).
-  Explorer overlap has been observed; a controlled wall-clock improvement
-  and parallel implementation acceptance remain unproven.
+  Explorer overlap, resumed parallel acceptance and a fresh matched accepted
+  pair have been observed. The fresh pair measured 484.962 seconds serial
+  versus 304.622 seconds parallel, including differing repair outcomes; see
+  `evals/v1/results/humanize-matched-a4ca056-20261003.json`. One pair does not
+  establish a general causal speedup.

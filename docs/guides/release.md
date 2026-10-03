@@ -1,13 +1,19 @@
-# Release builds (native-host only)
+# v1.0.0 distribution and native-host release builds
 
 Local release artifacts are unsigned integrity-checked bundles. Every
 `release.json` and per-archive `manifest.json` produced here carries
-`release_qualified = false`. That flag stays `false` until a real,
-separately recorded acceptance; nothing in these scripts tags, uploads,
-publishes, or qualifies a release. No build described below has been
-executed by this guide.
+`release_qualified = false`. The build scripts do not set that field from a
+separate acceptance record and do not tag, upload, publish, sign or qualify a
+release. The v1.0.0 Windows package has separate recorded technical acceptance;
+its artifact metadata remains unsigned and `release_qualified = false`. No build
+command described below has been executed by this guide.
 
 ## Platform rule
+
+For the user-facing installed v1.0.0 flow, see the
+[Windows installed-task guide](../getting-started/installed-autonomous-task.md).
+The accepted package and task evidence are summarized in
+[Accepted v1.0.0 Windows distribution](#accepted-v100-windows-distribution).
 
 `scripts/release-build.ps1` builds only explicitly declared platforms:
 
@@ -30,7 +36,7 @@ versions used are recorded into each manifest under `toolchain`.
 
 ```powershell
 pwsh -File scripts/release-build.ps1 `
-  -Version v0.1.0 `
+  -Version v1.0.0 `
   -OutputDirectory C:\tmp\fabric-rel-win `
   -Platforms windows-amd64
 ```
@@ -49,7 +55,7 @@ The same PowerShell script runs under `pwsh` on Linux. Prerequisites:
 
 ```sh
 pwsh -File scripts/release-build.ps1 \
-  -Version v0.1.0 \
+  -Version v1.0.0 \
   -OutputDirectory /tmp/fabric-rel-linux \
   -Platforms linux-amd64
 ```
@@ -90,6 +96,40 @@ exact per-archive component identities (`fabric[.exe]`,
 target, and the artifact filename carrying the exact release version.
 It checks integrity only, and `release_qualified` must remain `false`.
 
+## Accepted v1.0.0 Windows distribution
+
+The v1.0.0 Windows amd64 package was independently reproduced twice from clean
+source commit `a4ca05692465bedc6b98d6ffbb8219b6d076f5d1`, with
+`SOURCE_DATE_EPOCH=1791012510`, Go 1.27.1 and Rust 1.94.1. Both archive builds
+matched SHA-256
+`7add99a1146bfe8a780dd38238904cf74f9fdb7dffd1a36e5211d045988a21e6`.
+The artifact is `fabric_1.0.0_windows_amd64.zip` and contains `fabric.exe` and
+`engorch-ri.exe`. Its manifest intentionally says `release_qualified: false`:
+the package is unsigned, and the checksum establishes byte integrity rather
+than publisher authenticity.
+
+The installed package completed a real autonomous repository task: the run
+reached `READY`, reviewer decision was `approve` with zero findings, and the
+candidate passed independent native and held-out checks. An explorer used the
+installed RI executable for four successful searches, three with validated
+nonempty results; those observations are bound to the installed executable
+hash. The run used stock Codex with `gpt-6-luna` at high effort; its ID is
+`7465e3271f8f13d754edaa0fe41f00866963997f02984274bf1ff274a67d7a86`. The exact
+run, package, source and acceptance evidence are in the
+[v1.0.0 acceptance record](../evaluation/v1-release-acceptance.md) and its
+[machine-readable receipt](../../evals/v1/results/release-v1.0.0-acceptance-20261003.json).
+
+This acceptance applies to Windows amd64 only. Linux amd64 is an optional build
+target whose actual installation and task path are not qualified here. The
+recorded run demonstrates the tested configuration and task; it does not
+establish general model quality, unrestricted task success, an operating-system
+sandbox, signed-release authenticity or performance across repositories.
+
+For the user-facing installed workflow, see the
+[Windows installed-task guide](../getting-started/installed-autonomous-task.md).
+The commands above remain the local source-build and verification procedure;
+they do not publish or qualify a release.
+
 ## Install and run a Windows bundle
 
 Keep `release.json`, `SHA256SUMS`, and the Windows ZIP together in the
@@ -100,7 +140,7 @@ before starting a real task.
 
 ```powershell
 $release = 'C:\tmp\fabric-rel-win'
-$install = "$env:LOCALAPPDATA\Fabric\v0.1.0"
+$install = "$env:LOCALAPPDATA\Fabric\v1.0.0"
 New-Item -ItemType Directory -Force (Split-Path $install) | Out-Null
 pwsh -File scripts/release-verify.ps1 -ReleaseDirectory $release
 pwsh -File scripts/install-fabric.ps1 -ReleaseDirectory $release -InstallDirectory $install
