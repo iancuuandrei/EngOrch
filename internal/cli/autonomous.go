@@ -128,11 +128,11 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 		return err
 	}
 	// New autonomous runs use hierarchical task graph execution with bounded
-	// task context by default. GraphVersion 1 enables graph parsing, digest
-	// binding and bounded parallel explorers; MaxParallel defaults to 3 with a
-	// 1 sequential override. Nil/old policies (GraphVersion 0, empty context)
-	// remain compatible and replay sequentially.
-	cfg.PlannerContract = "plan-graph-v2"
+	// task context and design-planned repairs. The planner contract reserves a
+	// conservative initial implementation scope; repair design may refine only
+	// never-started repair writes within that scope. Nil/old policies remain
+	// compatible and replay with their historical repair behavior.
+	cfg.PlannerContract = "plan-graph-v3"
 	if cfg.Reviewer != nil {
 		cfg.ReviewerContract = "json-v1"
 	}
@@ -142,7 +142,7 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 		Repository: identity,
 		Objective:  objective,
 		Config:     cfg,
-		Execution:  &control.ExecutionPolicy{Mode: "autonomous-v1", MaxRepairs: maxRepairs, Context: "bounded-v1", GraphVersion: 1, MaxParallel: maxParallel},
+		Execution:  &control.ExecutionPolicy{Mode: "autonomous-v1", MaxRepairs: maxRepairs, Context: "bounded-v1", GraphVersion: 1, MaxParallel: maxParallel, RepairPlanningVersion: 1},
 	}
 	creation, err = bindCurrentHost(ctx, creation)
 	if err != nil {

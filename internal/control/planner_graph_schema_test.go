@@ -3,6 +3,7 @@ package control
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"harness.local/engorch/internal/canonical"
@@ -51,5 +52,24 @@ func TestPlannerGraphV2BindsSchemaWithoutChangingLegacyRecipes(t *testing.T) {
 	want, _ := canonical.Hash("schema", engineeringplan.PlannerJSONSchema())
 	if got != want {
 		t.Fatal("strict graph schema not bound to planner invocation")
+	}
+	c.PlannerContract = plannerContractGraphV3
+	i, err = plannerInvocation(c, "objective")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var repairPayload struct {
+		Instruction string          `json:"instruction"`
+		Schema      json.RawMessage `json:"output_schema"`
+	}
+	if err := json.Unmarshal([]byte(i.Input), &repairPayload); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(repairPayload.Instruction, "maximum repair area") || !strings.Contains(repairPayload.Instruction, "generated-source directives") {
+		t.Fatal("repair planner contract omitted conservative-scope and generated-source guidance")
+	}
+	got, _ = canonical.Hash("schema", repairPayload.Schema)
+	if got != want {
+		t.Fatal("repair planner contract schema differs from strict graph schema")
 	}
 }

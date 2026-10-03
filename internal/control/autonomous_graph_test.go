@@ -58,6 +58,10 @@ func graphCreation(t *testing.T, maxParallel int) Creation {
 // this fixture, then persists its accepted graph before any authorization.
 // The deterministic result is constructed locally; no provider is invoked.
 func graphAwaitingApproval(t *testing.T, c Creation) (string, Snapshot) {
+	return graphAwaitingApprovalWithGraph(t, c, validGraphFixture())
+}
+
+func graphAwaitingApprovalWithGraph(t *testing.T, c Creation, graph engineeringplan.Graph) (string, Snapshot) {
 	t.Helper()
 	root := c.Repository.Root
 	autonomousGitInit(t, root)
@@ -78,7 +82,7 @@ func graphAwaitingApproval(t *testing.T, c Creation) (string, Snapshot) {
 		t.Fatal(err)
 	}
 	model := inv.Profile.Model
-	result := runtime.Result{Version: 1, InvocationID: inv.ID, Requested: inv.Profile, ObservedModel: &model, Output: mustGraphJSON(t, validGraphFixture())}
+	result := runtime.Result{Version: 1, InvocationID: inv.ID, Requested: inv.Profile, ObservedModel: &model, Output: mustGraphJSON(t, graph)}
 	if err := Append(path, "plan.recorded", result); err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +91,7 @@ func graphAwaitingApproval(t *testing.T, c Creation) (string, Snapshot) {
 		t.Fatal(err)
 	}
 	accepted, err := parseAcceptedGraph(s)
-	if err != nil || accepted.Summary != validGraphFixture().Summary {
+	if err != nil || accepted.Summary != graph.Summary {
 		t.Fatalf("accepted graph fixture is invalid: graph=%+v err=%v", accepted, err)
 	}
 	return path, s
@@ -168,7 +172,7 @@ func TestExecutionPolicyGraphValidationAndLegacyIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(legacyRaw), "graph_version") || strings.Contains(string(legacyRaw), "max_parallel") {
+	if strings.Contains(string(legacyRaw), "graph_version") || strings.Contains(string(legacyRaw), "max_parallel") || strings.Contains(string(legacyRaw), "repair_planning_version") {
 		t.Fatal("empty graph policy changed legacy serialization")
 	}
 	graph := ExecutionPolicy{Mode: "autonomous-v1", MaxRepairs: 2, Context: taskContextBoundedV1, GraphVersion: 1, MaxParallel: 3}
@@ -178,11 +182,18 @@ func TestExecutionPolicyGraphValidationAndLegacyIdentity(t *testing.T) {
 	if !graph.GraphEnabled() || graph.EffectiveMaxParallel() != 3 {
 		t.Fatal("graph policy not enabled")
 	}
+	repairPlanning := graph
+	repairPlanning.RepairPlanningVersion = 1
+	if err := repairPlanning.Validate(); err != nil {
+		t.Fatalf("repair planning policy rejected: %v", err)
+	}
 	for _, bad := range []ExecutionPolicy{
 		{Mode: "autonomous-v1", MaxRepairs: 2, GraphVersion: 2, MaxParallel: 3},
 		{Mode: "autonomous-v1", MaxRepairs: 2, GraphVersion: 1, MaxParallel: 0},
 		{Mode: "autonomous-v1", MaxRepairs: 2, GraphVersion: 1, MaxParallel: 9},
 		{Mode: "autonomous-v1", MaxRepairs: 2, GraphVersion: 0, MaxParallel: 3},
+		{Mode: "autonomous-v1", MaxRepairs: 2, GraphVersion: 0, RepairPlanningVersion: 1},
+		{Mode: "autonomous-v1", MaxRepairs: 2, GraphVersion: 1, MaxParallel: 3, RepairPlanningVersion: 2},
 	} {
 		if err := bad.Validate(); err == nil {
 			t.Fatalf("invalid graph policy admitted: %+v", bad)

@@ -575,6 +575,17 @@ func ValidateAutonomousRevision(previous, next Graph) error {
 // nodes carrying the actual failed evidence. It never rewrites completed
 // history; callers persist the result as a validated revision.
 func RepairExtension(g Graph, failedTaskID, failedEvidence string, seq int) (Graph, error) {
+	return repairExtension(g, failedTaskID, failedEvidence, seq, false)
+}
+
+// RepairDesignExtension inserts a bounded read-only design task before a
+// repair implementation. The implementation starts with no write paths;
+// callers may refine only those paths after recording the exact design result.
+func RepairDesignExtension(g Graph, failedTaskID, failedEvidence string, seq int) (Graph, error) {
+	return repairExtension(g, failedTaskID, failedEvidence, seq, true)
+}
+
+func repairExtension(g Graph, failedTaskID, failedEvidence string, seq int, withDesign bool) (Graph, error) {
 	if err := g.Validate(); err != nil {
 		return Graph{}, err
 	}
@@ -595,22 +606,29 @@ func RepairExtension(g Graph, failedTaskID, failedEvidence string, seq int) (Gra
 		return candidate
 	}
 	implID := mkID("impl")
+	designID := mkID("design")
 	verifyID := mkID("verify")
 	reviewID := mkID("review")
 	// Planner IDs are not reserved. Pick a deterministic unused trio for
 	// this repair attempt without changing its bounded slot identity.
 	for suffix := 0; ; suffix++ {
 		_, implExists := g.Task(implID)
+		_, designExists := g.Task(designID)
 		_, verifyExists := g.Task(verifyID)
 		_, reviewExists := g.Task(reviewID)
-		if !implExists && !verifyExists && !reviewExists {
+		if !implExists && (!withDesign || !designExists) && !verifyExists && !reviewExists {
 			break
 		}
 		implID = fmt.Sprintf("impl-repair-%d-%d", seq, suffix+1)
+		designID = fmt.Sprintf("design-repair-%d-%d", seq, suffix+1)
 		verifyID = fmt.Sprintf("verify-repair-%d-%d", seq, suffix+1)
 		reviewID = fmt.Sprintf("review-repair-%d-%d", seq, suffix+1)
 	}
-	for _, id := range []string{implID, verifyID, reviewID} {
+	ids := []string{implID, verifyID, reviewID}
+	if withDesign {
+		ids = append(ids, designID)
+	}
+	for _, id := range ids {
 		if _, exists := g.Task(id); exists {
 			return Graph{}, fmt.Errorf("repair task %q already exists", id)
 		}
@@ -648,11 +666,86 @@ func RepairExtension(g Graph, failedTaskID, failedEvidence string, seq int) (Gra
 			}
 		}
 	}
+	implDeps := repairDeps
+	if withDesign {
+		implDeps = []string{designID}
+		design := Task{ID: designID, Kind: Design, ParentID: failedTaskID, Title: "Design repair after " + failedTaskID, Dependencies: repairDeps, ScopePaths: scope, ExpectedEvidence: []Evidence{{Kind: "failure", Description: failedEvidence}, {Kind: "repair-attempt", Description: fmt.Sprintf("%d", seq)}, {Kind: "paths", Description: "candidate-bound repair paths within the original implementation scope"}}, EstimatedSeconds: 180}
+		next.Tasks = append(next.Tasks, design)
+		writes = nil
+	}
 	next.Tasks = append(next.Tasks,
-		Task{ID: implID, Kind: Implementation, ParentID: failedTaskID, Title: "Repair after " + failedTaskID, Dependencies: repairDeps, ScopePaths: scope, WritePaths: writes, ExpectedEvidence: []Evidence{{Kind: "file", Description: "repaired source for " + failedTaskID}, {Kind: "failure", Description: failedEvidence}, {Kind: "repair-attempt", Description: fmt.Sprintf("%d", seq)}}, EstimatedSeconds: 600},
+		Task{ID: implID, Kind: Implementation, ParentID: failedTaskID, Title: "Repair after " + failedTaskID, Dependencies: implDeps, ScopePaths: scope, WritePaths: writes, ExpectedEvidence: []Evidence{{Kind: "file", Description: "repaired source for " + failedTaskID}, {Kind: "failure", Description: failedEvidence}, {Kind: "repair-attempt", Description: fmt.Sprintf("%d", seq)}}, EstimatedSeconds: 600},
 		Task{ID: verifyID, Kind: Verification, Title: "Verify repair " + implID, Dependencies: []string{implID}, ScopePaths: scope, ExpectedEvidence: []Evidence{{Kind: "test", Description: "fresh verification for " + implID}}, EstimatedSeconds: 300},
 		Task{ID: reviewID, Kind: Review, Title: "Review repair " + implID, Dependencies: []string{verifyID}, ScopePaths: scope, ExpectedEvidence: []Evidence{{Kind: "review", Description: "fresh review for " + implID}}, EstimatedSeconds: 300},
 	)
+	if err := next.Validate(); err != nil {
+		return Graph{}, err
+	}
+	return next, nil
+}
+
+// RefineRepairWritePaths fills the previously-empty write list of one
+// never-started repair implementation. Paths must remain within the original
+// implementation ceiling supplied by the runner.
+func RefineRepairWritePaths(g Graph, implementationID string, writePaths, originalScope []string) (Graph, error) {
+	if err := g.Validate(); err != nil {
+		return Graph{}, err
+	}
+	for _, task := range g.Tasks {
+		if len(task.Attempts) > 0 && task.Attempts[len(task.Attempts)-1].Outcome == AttemptUnknown {
+			return Graph{}, errors.New("repair write refinement blocked by unresolved UNKNOWN task")
+		}
+	}
+	if err := validatePaths(writePaths, false); err != nil || len(writePaths) == 0 {
+		return Graph{}, errors.New("repair design requires concrete unique write paths")
+	}
+	if err := validatePaths(originalScope, true); err != nil || len(originalScope) == 0 {
+		return Graph{}, errors.New("invalid original repair scope")
+	}
+	var target *Task
+	for i := range g.Tasks {
+		if g.Tasks[i].ID == implementationID {
+			target = &g.Tasks[i]
+			break
+		}
+	}
+	if target == nil || target.Kind != Implementation || target.ParentID == "" || len(target.WritePaths) != 0 || target.Completed || len(target.Attempts) != 0 {
+		return Graph{}, errors.New("repair implementation is not an unstarted design slot")
+	}
+	if !stringListEqual(target.ScopePaths, originalScope) {
+		return Graph{}, errors.New("repair implementation changed its original scope ceiling")
+	}
+	designFound := false
+	for _, dep := range target.Dependencies {
+		design, ok := g.Task(dep)
+		if !ok || design.Kind != Design || !design.Completed || len(design.Attempts) == 0 || design.Attempts[len(design.Attempts)-1].Outcome != AttemptCompleted {
+			continue
+		}
+		for _, expected := range target.ExpectedEvidence {
+			if expected.Kind == "repair-attempt" {
+				for _, designExpected := range design.ExpectedEvidence {
+					if designExpected.Kind == "repair-attempt" && designExpected.Description == expected.Description {
+						designFound = true
+					}
+				}
+			}
+		}
+	}
+	if !designFound {
+		return Graph{}, errors.New("repair implementation lacks completed matching design evidence")
+	}
+	for _, p := range writePaths {
+		if !withinAny(p, originalScope) {
+			return Graph{}, fmt.Errorf("repair path %q outside original implementation scope", p)
+		}
+	}
+	next := g
+	next.Tasks = append([]Task(nil), g.Tasks...)
+	for i := range next.Tasks {
+		if next.Tasks[i].ID == implementationID {
+			next.Tasks[i].WritePaths = append([]string(nil), writePaths...)
+		}
+	}
 	if err := next.Validate(); err != nil {
 		return Graph{}, err
 	}

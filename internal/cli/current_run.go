@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"harness.local/engorch/internal/control"
 	"harness.local/engorch/internal/controllerstate"
@@ -54,6 +55,9 @@ func selectLatestValidatedRun(root string, eligible runEligibility, noneErr, tie
 	}
 	candidates := make([]latestRunCandidate, 0, len(entries))
 	for _, path := range entries {
+		if graphSchedulerSidecar(path) {
+			continue
+		}
 		info, err := os.Stat(path)
 		if err != nil {
 			return "", err
@@ -83,6 +87,18 @@ func selectLatestValidatedRun(root string, eligible runEligibility, noneErr, tie
 		return "", errors.New(tieErr)
 	}
 	return candidates[0].id, nil
+}
+
+// Graph scheduler journals share the runs directory but have a separate event
+// contract. Ignore only their canonical names; other entries still fail replay
+// or repository binding validation rather than silently hiding corrupt runs.
+func graphSchedulerSidecar(path string) bool {
+	runID, cohort, found := strings.Cut(filepath.Base(path), ".jsonl.graph-schedule-")
+	if !found || len(runID) != 64 || strings.Trim(runID, "0123456789abcdef") != "" || !strings.HasSuffix(cohort, ".jsonl") {
+		return false
+	}
+	cohortID := strings.TrimSuffix(cohort, ".jsonl")
+	return len(cohortID) == 16 && strings.Trim(cohortID, "0123456789abcdef") == ""
 }
 
 // latestRunID selects only a journal which fully replays and is bound to this
