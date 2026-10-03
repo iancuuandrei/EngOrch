@@ -34,7 +34,13 @@ flowchart TD
 An autonomous run uses a dependency graph with research/design, implementation,
 verification and review tasks. Independent ready research/design tasks can
 overlap within the configured concurrency bound. Initial implementation uses
-one writer; independent implementation branches do not yet run concurrently.
+one writer by default. `--parallel-writers` permits up to two initial
+implementation tasks with disjoint declared write ownership; `--max-parallel`
+controls the worker bound. Both proposals bind to the same initial candidate,
+and one combined file effect applies their accepted changes before verification.
+Overlapping ownership is rejected. A requested parallel policy alone does not
+prove concurrent execution or faster completion; inspect the recorded task and
+runtime evidence. Real end-to-end parallel acceptance remains pending.
 The graph and recorded evidence determine readiness, rather than agent claims.
 
 The current repair policy adds a read-only design task after a failed gate.

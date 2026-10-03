@@ -1,0 +1,194 @@
+{
+  "schema": "fabric.real_serial_observation.v1",
+  "run_id": "afd7f6883150796cb748e2e206df9cc658969441db166e461ceee821a933c414",
+  "source_commit": "25dbde632f7d0af7d4b0e9328dc3e9c8750db166",
+  "binary_sha256": "d4364dcc60a6b8367edbf7c19f8245670ba66b884c808998e3ba9cb0604a001f",
+  "evaluation": {
+    "repair_attempts": 1,
+    "runtime_invocations_completed": 7,
+    "native_verification": {
+      "argv": "go test -count=1 ./...",
+      "exit_code": 0
+    },
+    "heldout": {
+      "candidate_id": "6ad46c7ba7f26b2292b9a9f672d9e73757cfc818970dc5eb3505f6cfcf3d0338",
+      "classification": "pass",
+      "exit_code": 0
+    },
+    "total_input_tokens": 1631060,
+    "provider_calls": null,
+    "total_output_tokens": 18055,
+    "elapsed_ms": 596299,
+    "accepted_candidate_id": "6ad46c7ba7f26b2292b9a9f672d9e73757cfc818970dc5eb3505f6cfcf3d0338",
+    "review": {
+      "candidate_id": "6ad46c7ba7f26b2292b9a9f672d9e73757cfc818970dc5eb3505f6cfcf3d0338",
+      "findings": 0,
+      "decision": "approve"
+    },
+    "runtime_invocations": 7,
+    "terminal_state": "READY",
+    "sha256": "da58702847236fe3009e9a080534f4c2ef0ebfde10cd4e4e16b3b8329d875b20",
+    "human_interventions": 0,
+    "evaluator_terminal_state": "PASS"
+  },
+  "configuration": {
+    "max_parallel": 1,
+    "effort": "high",
+    "parallel_writers_requested": true,
+    "model": "gpt-6-luna",
+    "writer_edit_validation_requested": true
+  },
+  "candidate_binding": {
+    "acceptance_copy_identity": "601418ae13db19e4aee09954958179b1318d46fa6bc97002b73d7dede0de9cba",
+    "review_candidate_id": "6ad46c7ba7f26b2292b9a9f672d9e73757cfc818970dc5eb3505f6cfcf3d0338",
+    "heldout_copy_identity": "601418ae13db19e4aee09954958179b1318d46fa6bc97002b73d7dede0de9cba",
+    "copy_candidate_ids_match": true,
+    "native_copy_identity": "601418ae13db19e4aee09954958179b1318d46fa6bc97002b73d7dede0de9cba",
+    "acceptance_copy_candidate_id": "6ad46c7ba7f26b2292b9a9f672d9e73757cfc818970dc5eb3505f6cfcf3d0338",
+    "verification_plan_id": "76bd3980ec47fab5c46408279bbd98056e4792a5074285fb613e3687ded16ab6",
+    "review_verification_plan_id": "76bd3980ec47fab5c46408279bbd98056e4792a5074285fb613e3687ded16ab6"
+  },
+  "initial_writer_wrappers": [
+    {
+      "started_at": "2026-10-03T06:52:06.6020976Z",
+      "ended_at": "2026-10-03T06:54:19.1742798Z",
+      "wrapper_seconds": 132.5721822,
+      "model": "gpt-6-luna",
+      "input_tokens": 495370,
+      "output_tokens": 5139,
+      "effort": "high",
+      "task_id": "parsebytes-separators",
+      "proposed_paths": [
+        "bytes.go",
+        "bytes_test.go"
+      ],
+      "invocation_id": "77d132e6d2a4e619df51d117774a2879b66c6379f3a7e0497b769916aed55318"
+    },
+    {
+      "started_at": "2026-10-03T06:54:22.1745342Z",
+      "ended_at": "2026-10-03T06:56:24.0582416Z",
+      "wrapper_seconds": 121.8837074,
+      "model": "gpt-6-luna",
+      "input_tokens": 294825,
+      "output_tokens": 5135,
+      "effort": "high",
+      "task_id": "reduce-commaf-allocations",
+      "proposed_paths": [
+        "comma.go",
+        "comma_test.go"
+      ],
+      "invocation_id": "f67c7ad6d6a5d1aff7db3afa9871f7aff29b2814d7acf2f2fd49531f8647b765"
+    }
+  ],
+  "initial_wrapper_summary": {
+    "overlap_seconds": 0,
+    "meaning": "Controller wrapper intervals; not provider request durations.",
+    "output_tokens": 10274,
+    "inter_task_gap_seconds": 3.0002544,
+    "union_seconds": 257.4561441,
+    "input_tokens": 790195
+  },
+  "graph": {
+    "initial_tasks": [
+      {
+        "scope": [
+          "bytes.go",
+          "bytes_test.go",
+          "comma.go",
+          "comma_test.go",
+          "comma_fuzz_test.go",
+          "go.mod"
+        ],
+        "depends_on": [],
+        "id": "inspect-pinned-source",
+        "kind": "research"
+      },
+      {
+        "scope": [
+          "bytes.go",
+          "bytes_test.go"
+        ],
+        "write_paths": [
+          "bytes.go",
+          "bytes_test.go"
+        ],
+        "depends_on": [
+          "inspect-pinned-source"
+        ],
+        "id": "parsebytes-separators",
+        "kind": "implementation"
+      },
+      {
+        "scope": [
+          "comma.go",
+          "comma_test.go",
+          "comma_fuzz_test.go"
+        ],
+        "write_paths": [
+          "comma.go",
+          "comma_test.go"
+        ],
+        "depends_on": [
+          "inspect-pinned-source"
+        ],
+        "id": "reduce-commaf-allocations",
+        "kind": "implementation"
+      },
+      {
+        "depends_on": [
+          "parsebytes-separators",
+          "reduce-commaf-allocations"
+        ],
+        "id": "run-configured-verification",
+        "kind": "verification"
+      },
+      {
+        "depends_on": [
+          "run-configured-verification"
+        ],
+        "id": "review-changes",
+        "kind": "review"
+      }
+    ],
+    "repair_tasks": [
+      {
+        "depends_on": [
+          "parsebytes-separators",
+          "reduce-commaf-allocations"
+        ],
+        "id": "design-repair-1",
+        "kind": "design"
+      },
+      {
+        "depends_on": [
+          "design-repair-1"
+        ],
+        "id": "impl-repair-1",
+        "kind": "implementation"
+      },
+      {
+        "depends_on": [
+          "impl-repair-1"
+        ],
+        "id": "verify-repair-1",
+        "kind": "verification"
+      },
+      {
+        "depends_on": [
+          "verify-repair-1"
+        ],
+        "id": "review-repair-1",
+        "kind": "review"
+      }
+    ]
+  },
+  "comparison_limits": [
+    "The parallel arm ended BLOCKED before any confirmed file effect or verification; the serial arm reached READY and passed native, review, and held-out gates after one repair.",
+    "Execution graphs differ: the serial graph had max_parallel=1 and one repair; the parallel graph had max_parallel=2 and terminated before effects.",
+    "Wrapper intervals are not provider request timings. Provider call counts are null. These arms do not establish a causal speedup or quality comparison."
+  ],
+  "release_qualified": false,
+  "task_id": "go-humanize-feature-performance",
+  "source_task_pin": "a1b4e66b9a6d890e9e15e7091cf16c8032367d6e",
+  "retained_private_receipt_sha256": "d20ed713fb516cc22584d551dc883595bb54e0d50f44f27865d27dac159765b6"
+}

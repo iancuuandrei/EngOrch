@@ -1316,6 +1316,9 @@ func autonomousGraphImplementing(ctx context.Context, path string, s Snapshot) (
 		}
 		return s, true, nil
 	}
+	if err := preflightAutonomousVerification(s); err != nil {
+		return s, false, err
+	}
 	// Confirmed effect restarts at verification, recording implementation
 	// progress first so READY requires actual evidence.
 	if autonomousFilesApplied(s) {
@@ -1485,6 +1488,9 @@ func autonomousGraphRepairing(ctx context.Context, path string, s Snapshot) (Sna
 		}
 		latest, _ := Inspect(path)
 		return latest, nil
+	}
+	if err := rejectUnstartedAutonomousVerification(s); err != nil {
+		return s, err
 	}
 	if autonomousRepairApplied(s) {
 		if candidateID == s.RepairCandidateID {

@@ -2,7 +2,7 @@
 
 Generated from `internal/cli`; do not edit by hand.
 
-Use `harness [--root PATH] COMMAND`. Output is canonical JSON except help and `inspect --export-jsonl`.
+Use `harness [--root PATH] COMMAND`. Output is canonical JSON except help, aggregated run-snapshot JSON, and `inspect --export-jsonl`.
 
 | Command | Arguments | Behavior |
 | --- | --- | --- |
@@ -94,3 +94,4 @@ Use `harness [--root PATH] COMMAND`. Output is canonical JSON except help and `i
 Errors exit 1; success exits 0. Workspaces and exact approved file proposals are
 implemented, with journaled verification and Codex planning. GitHub effects follow.
 `reconcile` observes UNKNOWN workspace/file state without retrying writes.
+Commands that return a run snapshot encode the complete replay-validated state as JSON; this aggregate is not an identity payload and may exceed the canonical single-value bound. Other command output remains canonical JSON. `inspect RUN --export-jsonl` emits the validated event history as per-event canonical JSONL.

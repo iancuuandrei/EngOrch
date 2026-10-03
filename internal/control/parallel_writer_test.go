@@ -2,18 +2,22 @@ package control
 
 import (
 	"context"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"harness.local/engorch/internal/access"
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/config"
 	"harness.local/engorch/internal/engineeringplan"
+	"harness.local/engorch/internal/fileeffects"
 	"harness.local/engorch/internal/journal"
 	"harness.local/engorch/internal/runtime"
 	"harness.local/engorch/internal/taskscheduler"
+	"harness.local/engorch/internal/worktree"
 )
 
 func parallelWriterGraphFixture() engineeringplan.Graph {
@@ -68,6 +72,45 @@ func TestParallelGraphWritersV2AccessAndUsage(t *testing.T) {
 	assertParallelGraphWriters(t, parallelWriterV2Creation(t, 2), false)
 }
 
+func TestGraphWriterBatchSortsAggregateChangesByPath(t *testing.T) {
+	filesHash, err := worktree.FilesID([]worktree.FileState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := worktree.Candidate{
+		Version: 1, WorktreeID: strings.Repeat("a", 64), Head: strings.Repeat("b", 40),
+		IndexHash: strings.Repeat("c", 64), FilesHash: filesHash,
+	}
+	graph := parallelWriterGraphFixture()
+	graph.Tasks[0].ID, graph.Tasks[0].WritePaths = "impl-alpha", []string{"zeta.txt"}
+	graph.Tasks[1].ID, graph.Tasks[1].WritePaths = "impl-zulu", []string{"alpha.txt"}
+	graph.Tasks[2].Dependencies = []string{"impl-alpha", "impl-zulu"}
+	contents := func(value string) *string {
+		encoded := base64.StdEncoding.EncodeToString([]byte(value))
+		return &encoded
+	}
+	proposal := func(path, value string) fileeffects.Proposal {
+		return fileeffects.Proposal{Version: 1, Nonce: "writer-" + path, Before: before, BeforeFiles: []worktree.FileState{}, Changes: []fileeffects.Change{{Path: path, ContentBase64: contents(value)}}}
+	}
+	c := creation(t)
+	s := Snapshot{
+		RunID: strings.Repeat("1", 64), PlanID: strings.Repeat("2", 64), Creation: c,
+		Workspace: &worktree.Binding{}, Candidate: &before,
+		Graph: &GraphState{Graph: graph, Digest: strings.Repeat("d", 64), Revision: 1},
+		GraphWriterResults: map[string]GraphWriterRecord{
+			"impl-alpha": {TaskID: "impl-alpha", Writer: WriterRecord{Invocation: runtime.Invocation{ID: strings.Repeat("3", 64)}, Prepared: PreparedFiles{Proposal: proposal("zeta.txt", "zeta\\n")}}},
+			"impl-zulu":  {TaskID: "impl-zulu", Writer: WriterRecord{Invocation: runtime.Invocation{ID: strings.Repeat("4", 64)}, Prepared: PreparedFiles{Proposal: proposal("alpha.txt", "alpha\\n")}}},
+		},
+	}
+	batch, err := buildGraphWriterBatch(s, []string{"impl-zulu", "impl-alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := []string{batch.Prepared.Proposal.Changes[0].Path, batch.Prepared.Proposal.Changes[1].Path}
+	if got, want := strings.Join(paths, ","), "alpha.txt,zeta.txt"; got != want {
+		t.Fatalf("aggregate changes not sorted by path: got %s want %s", got, want)
+	}
+}
 func TestGraphWriterUnknownHostBlocksAutomaticResend(t *testing.T) {
 	invocation, err := runtime.NewInvocation(runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "fixture", Effort: "high", Role: "writer"}, "task-bound writer")
 	if err != nil {
@@ -78,6 +121,36 @@ func TestGraphWriterUnknownHostBlocksAutomaticResend(t *testing.T) {
 	}}
 	if err := autonomousGraphWriterDispatchBlocked(s, "controller", "impl-beta"); err == nil || !strings.Contains(err.Error(), "impl-alpha") {
 		t.Fatalf("unresolved graph writer was not blocked from resend: %v", err)
+	}
+}
+
+func TestGraphWriterDispatchTimingLegacyOptionalAndOrdered(t *testing.T) {
+	var legacy *GraphWriterDispatchTiming
+	if err := legacy.validate(); err != nil {
+		t.Fatalf("legacy record without dispatch timing rejected: %v", err)
+	}
+	start := time.Now().UTC()
+	if err := (&GraphWriterDispatchTiming{StartedAt: start.Format(time.RFC3339Nano), EndedAt: start.Add(time.Millisecond).Format(time.RFC3339Nano)}).validate(); err != nil {
+		t.Fatalf("ordered UTC dispatch timing rejected: %v", err)
+	}
+	if err := (&GraphWriterDispatchTiming{StartedAt: start.Format(time.RFC3339Nano), EndedAt: start.Add(-time.Millisecond).Format(time.RFC3339Nano)}).validate(); err == nil {
+		t.Fatal("reversed dispatch timing accepted")
+	}
+	local := time.Date(2026, time.October, 3, 12, 0, 0, 0, time.FixedZone("plus-one", 3600))
+	if err := (&GraphWriterDispatchTiming{StartedAt: local.Format(time.RFC3339Nano), EndedAt: local.Add(time.Millisecond).Format(time.RFC3339Nano)}).validate(); err == nil {
+		t.Fatal("non-UTC dispatch timing accepted")
+	}
+	if timing := observedGraphWriterDispatchTiming(start.Add(time.Millisecond), start); timing != nil {
+		t.Fatalf("reversed local clock observation was persisted: %+v", timing)
+	}
+	// The caller can still append the otherwise successful proposal without
+	// auxiliary timing when the local clock observation is invalid.
+	encoded, err := canonical.Bytes(GraphWriterRecord{TaskID: "impl-alpha", Dispatch: observedGraphWriterDispatchTiming(start.Add(time.Millisecond), start)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "dispatch") {
+		t.Fatalf("clock-invalid timing was serialized into proposal: %s", encoded)
 	}
 }
 
@@ -199,10 +272,26 @@ func assertParallelGraphWriters(t *testing.T, c Creation, overlap bool) {
 			t.Fatalf("task %s lacks graph completion evidence", id)
 		}
 		host := ready.GraphWriterHosts[id]
+		record := ready.GraphWriterResults[id]
+		if record.Dispatch == nil || record.Dispatch.validate() != nil {
+			t.Fatalf("writer %s lacks ordered observed wrapper timing: %+v", id, record.Dispatch)
+		}
 		methods, err := os.ReadFile(filepath.Join(host.Intent.Launch.Root, "home", "fixture-methods.log"))
 		if err != nil || strings.Count(string(methods), "turn/start\n") != 1 {
 			t.Fatalf("writer %s did not retain exactly one app-server turn: methods=%q err=%v", id, methods, err)
 		}
+	}
+	alpha, beta := ready.GraphWriterResults["impl-alpha"].Dispatch, ready.GraphWriterResults["impl-beta"].Dispatch
+	alphaStart, _ := time.Parse(time.RFC3339Nano, alpha.StartedAt)
+	alphaEnd, _ := time.Parse(time.RFC3339Nano, alpha.EndedAt)
+	betaStart, _ := time.Parse(time.RFC3339Nano, beta.StartedAt)
+	betaEnd, _ := time.Parse(time.RFC3339Nano, beta.EndedAt)
+	intervalsOverlap := alphaStart.Before(betaEnd) && betaStart.Before(alphaEnd)
+	if overlap && !intervalsOverlap {
+		t.Fatalf("barrier fixture did not overlap writer dispatches: alpha=%+v beta=%+v", alpha, beta)
+	}
+	if c.Execution.MaxParallel == 1 && intervalsOverlap {
+		t.Fatalf("serial worker overlapped writer dispatches: alpha=%+v beta=%+v", alpha, beta)
 	}
 	if countJournalKind(t, graphPath, "files.intent") != 1 || countJournalKind(t, graphPath, "files.observed") != 1 {
 		t.Fatal("parallel proposals did not produce exactly one aggregate file effect")

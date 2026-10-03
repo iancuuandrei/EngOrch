@@ -23,7 +23,9 @@ harness.toml required checks are set to the explicit manifest native_argv
 policy (init defaults to `go test ./...`) and hashed. Native mode runs
 `fabric init --codex EXE --model MODEL --effort EFFORT`, then native
 `fabric run --autonomous` objective plus inspect/usage/diff evidence
-gathering. PR5Matched mode uses the explicit -PR5BaselineScript with the
+gathering. Fabric and PR5 child calls temporarily prepend the selected Go
+directory and verify bare `go` resolves to that exact executable; caller PATH
+is restored in finally and the executable hash/binding are recorded. PR5Matched mode uses the explicit -PR5BaselineScript with the
 supplied baseline exe (init with baseline exe/model first, inspect+usage
 with the baseline exe, exact run-identity parsing, diff collected from the
 candidate path because the baseline lacks diff). Task PASS requires a
@@ -33,7 +35,9 @@ non-pending all-PASS verification, reviewer approve with zero findings and
 matching candidate_id+verification_plan_id, plus native upstream
 verification AND held-out PASS. Missing evidence is BLOCKED, never rerun.
 Hidden acceptance tests run only in the helper's candidate-bound byte-copy
-of the finished candidate; the original worktree is never mutated.
+of the finished candidate; the original worktree is never mutated. The helper
+receives a bounded projection of the complete inspect snapshot; full inspect
+JSON remains retained and drives all evaluation gates.
 UNKNOWN outcomes are BLOCKED, never automatically rerun. receipt_matched
 rows are completed runtime invocations, not provider calls: provider_calls
 stays null unless an actual count exists, while runtime invocations and
@@ -116,9 +120,68 @@ function Get-FileSha256([string]$Path) {
     } finally { $h.Dispose() }
 }
 
+function Get-PinnedGoEnvironmentBinding([string]$GoPath) {
+    $selected = (Resolve-Path -LiteralPath $GoPath -ErrorAction Stop).Path
+    return [ordered]@{
+        selected_go_path = $selected
+        selected_go_sha256 = (Get-FileSha256 $selected).ToLowerInvariant()
+        child_go_resolution = 'verified exact selected executable before each Fabric invocation'
+        child_path_scope = 'selected Go directory prepended temporarily; caller PATH restored in finally'
+    }
+}
+
+function Invoke-WithPinnedGo([string]$GoPath, [scriptblock]$Action) {
+    if ($null -eq $Action) { throw 'Pinned-Go action is required.' }
+    $selected = (Resolve-Path -LiteralPath $GoPath -ErrorAction Stop).Path
+    $selectedDir = [System.IO.Path]::GetDirectoryName($selected)
+    $previousPath = $env:PATH
+    try {
+        if ([string]::IsNullOrEmpty($previousPath)) {
+            $env:PATH = $selectedDir
+        } else {
+            $env:PATH = $selectedDir + [System.IO.Path]::PathSeparator + $previousPath
+        }
+
+        $visibleGo = Get-Command go -CommandType Application -ErrorAction Stop
+        $visiblePath = (Resolve-Path -LiteralPath $visibleGo.Source -ErrorAction Stop).Path
+        if (-not [string]::Equals($visiblePath, $selected, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Child PATH did not resolve go to the selected executable.'
+        }
+
+        & $Action
+    } finally {
+        if ($null -eq $previousPath) {
+            Remove-Item -Path 'env:PATH' -ErrorAction SilentlyContinue
+        } else {
+            $env:PATH = $previousPath
+        }
+    }
+}
+
+function Write-CandidateCopySnapshotProjection([object]$Snapshot, [string]$FullSnapshotPath, [string]$ProjectionPath) {
+    # Keep the original complete inspect JSON for evaluation evidence and gate
+    # decisions. The copy helper needs only these unchanged typed fields;
+    # unrelated host journals can otherwise exceed its canonical decoder cap.
+    $projection = [ordered]@{}
+    foreach ($name in @('run_id', 'state', 'workspace', 'candidate', 'verification', 'review')) {
+        $property = $Snapshot.PSObject.Properties[$name]
+        if ($null -eq $property) { $projection[$name] = $null }
+        else { $projection[$name] = $property.Value }
+    }
+    $json = ConvertTo-Json -InputObject $projection -Depth 100 -Compress
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($ProjectionPath, $json, $encoding)
+    return [ordered]@{
+        FullSnapshotSha256 = (Get-FileSha256 $FullSnapshotPath).ToLowerInvariant()
+        ProjectionSha256 = (Get-FileSha256 $ProjectionPath).ToLowerInvariant()
+        ProjectionBytes = [System.Text.Encoding]::UTF8.GetByteCount($json)
+    }
+}
+
 function Get-HeldoutSource([string]$Check) {
     $map = @{
         'humanize'   = 'humanize.heldout_test.go'
+        'commaf-performance' = 'commaf_performance.heldout_test.go'
         'afero'      = 'afero.heldout_test.go'
         'multierror' = 'multierror.heldout_test.go'
         'atomic'     = 'atomic.heldout_test.go'
@@ -131,6 +194,70 @@ function Get-HeldoutSource([string]$Check) {
     $p = Join-Path $heldoutDir $map[$Check]
     if (-not (Test-Path -LiteralPath $p)) { throw "Held-out fixture missing: $p" }
     return Get-Content -Raw -LiteralPath $p
+}
+
+function Get-HeldoutSources([string]$Check) {
+    if ($Check -ne 'humanize-feature-performance') {
+        $relativePath = if ($Check -eq 'difflib') { 'difflib/fabric_v1_heldout_test.go' } else { 'fabric_v1_heldout_test.go' }
+        return @([pscustomobject]@{ RelativePath = $relativePath; Content = (Get-HeldoutSource $Check) })
+    }
+
+    # Preserve each existing oracle byte-for-byte on disk. Rename only their
+    # package-level test entry points in the temporary candidate copy, then
+    # use one exact-selector wrapper that requires both tests to run.
+    $humanize = Get-HeldoutSource 'humanize'
+    $commaf = Get-HeldoutSource 'commaf-performance'
+    $testPattern = 'func TestFabricV1Heldout\(t \*testing\.T\)'
+    if ([regex]::Matches($humanize, $testPattern).Count -ne 1 -or
+        [regex]::Matches($commaf, $testPattern).Count -ne 1) {
+        throw 'Combined humanize composition requires one exact held-out entry point in each source fixture.'
+    }
+    $humanize = [regex]::Replace($humanize, $testPattern, 'func runFabricV1HeldoutHumanize(t *testing.T)')
+    $commaf = [regex]::Replace($commaf, $testPattern, 'func runFabricV1HeldoutCommaf(t *testing.T)')
+    $wrapper = @'
+package humanize
+
+import "testing"
+
+func TestFabricV1Heldout(t *testing.T) {
+	t.Run("ParseBytesUnderscores", runFabricV1HeldoutHumanize)
+	t.Run("CommafPerformance", runFabricV1HeldoutCommaf)
+}
+'@
+    return @(
+        [pscustomobject]@{ RelativePath = 'fabric_v1_heldout_humanize_test.go'; Content = $humanize }
+        [pscustomobject]@{ RelativePath = 'fabric_v1_heldout_commaf_test.go'; Content = $commaf }
+        [pscustomobject]@{ RelativePath = 'fabric_v1_heldout_test.go'; Content = $wrapper }
+    )
+}
+
+function Write-HeldoutSources([string]$Root, [object[]]$Sources) {
+    if ($Sources.Count -eq 0) { throw 'Held-out source set is empty.' }
+    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+    $written = New-Object System.Collections.Generic.List[string]
+    try {
+        foreach ($source in $Sources) {
+            $relative = [string]$source.RelativePath
+            if ([System.IO.Path]::IsPathRooted($relative)) { throw 'Held-out source path must be relative.' }
+            $destination = [System.IO.Path]::GetFullPath((Join-Path $rootFull $relative))
+            if (-not $destination.StartsWith($rootFull, [StringComparison]::OrdinalIgnoreCase)) { throw 'Held-out source path escaped its disposable root.' }
+            if (Test-Path -LiteralPath $destination) { throw "Held-out source destination already exists: $relative" }
+            $parent = [System.IO.Path]::GetDirectoryName($destination)
+            if (-not (Test-Path -LiteralPath $parent -PathType Container)) { throw "Held-out source parent is missing: $relative" }
+            [System.IO.File]::WriteAllText($destination, [string]$source.Content, (New-Object System.Text.UTF8Encoding($false)))
+            $written.Add($destination)
+        }
+        return ,$written.ToArray()
+    } catch {
+        foreach ($path in $written) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+        throw
+    }
+}
+
+function Remove-HeldoutSources([string[]]$Paths) {
+    foreach ($path in $Paths) {
+        if (Test-Path -LiteralPath $path -PathType Leaf) { Remove-Item -LiteralPath $path -Force }
+    }
 }
 
 function Get-NativeGoArgs([object]$Entry) {
@@ -307,6 +434,7 @@ function Get-RunnerSourceHashes() {
         'evals/v1/harness/Copy-CandidateTree.ps1',
         'evals/v1/harness/Go-ArgvPolicy.ps1',
         'evals/v1/harness/Toml-ArgvPolicy.ps1',
+        'evals/v1/harness/Test-PinnedGoEnvironment.ps1',
         'evals/v1/harness/Test-ArgvPolicy.ps1',
         'evals/v1/harness/Test-CopyFixtures.ps1',
         'evals/v1/harness/Test-TomlArgvPolicy.ps1',
@@ -333,12 +461,14 @@ function Get-ReviewCandidateId([object]$Snap) {
     return [string]$v.candidate_id
 }
 
-function Invoke-CandidateCopy([string]$HelperExe, [string]$SnapshotFile, [string]$ExpectedCandidate, [string]$Destination, [string]$LogDir) {
+function Invoke-CandidateCopy([string]$HelperExe, [string]$SnapshotFile, [string]$ExpectedCandidate, [string]$Destination, [string]$LogDir, [string]$LogPrefix = 'candidatecopy') {
     # Calls the explicit helper exe (fingerprinted by the caller, never
-    # auto-built or relaunched). Helper failure is BLOCKED before any
-    # acceptance tests, never rerun. A failed destination is retained.
-    $outLog = Join-Path $LogDir 'candidatecopy.stdout.log'
-    $errLog = Join-Path $LogDir 'candidatecopy.stderr.log'
+    # auto-built or relaunched) with the six-field copy projection. The full
+    # inspect artifact remains untouched for gates and evidence. Helper
+    # failure is BLOCKED before any acceptance tests, never rerun. A failed
+    # destination is retained.
+    $outLog = Join-Path $LogDir "$LogPrefix.stdout.log"
+    $errLog = Join-Path $LogDir "$LogPrefix.stderr.log"
     & $HelperExe --snapshot $SnapshotFile --expected-candidate $ExpectedCandidate --destination $Destination 1> $outLog 2> $errLog
     $exit = $LASTEXITCODE
     $stdout = ''
@@ -416,9 +546,11 @@ function Get-RunGate([object]$Snap, [string]$FabricRunId, [string]$DiffCandidate
     else { $gate.BlockedReason = "snapshot state is $($Snap.state), not READY"; return $gate }
 }
 
-if (-not (Test-Path $GoExe -PathType Leaf)) { throw "Pinned Go executable not found: $GoExe" }
+$GoExe = (Resolve-Path -LiteralPath $GoExe -ErrorAction Stop).Path
+if (-not (Test-Path -LiteralPath $GoExe -PathType Leaf)) { throw 'Pinned Go executable is not a file.' }
 $goVersion = (& $GoExe version).Trim()
 if ($LASTEXITCODE -ne 0 -or $goVersion -notmatch 'go1\.27\.1') { throw "Expected Go 1.27.1, got $goVersion" }
+$goEnvironmentBinding = Get-PinnedGoEnvironmentBinding $GoExe
 $productHead = Get-GitText $repoRoot @('rev-parse', 'HEAD')
 $productDirty = [bool]((Get-GitText $repoRoot @('status', '--porcelain')) -ne '')
 $runnerSha = (Get-FileSha256 $PSCommandPath).ToLowerInvariant()
@@ -471,19 +603,19 @@ if ($Action -eq 'Prepare') {
         }
 
         if ($entry.check -eq 'difflib') {
-            $heldoutRel = 'difflib/fabric_v1_heldout_test.go'
-            $checkPath = Join-Path $basePath $heldoutRel
-            $heldoutArg = $heldoutRel
+            $heldoutArg = 'difflib/fabric_v1_heldout_test.go'
+            $heldoutSources = Get-HeldoutSources $entry.check
         } else {
-            $heldoutRel = 'fabric_v1_heldout_test.go'
-            $checkPath = Join-Path $basePath $heldoutRel
+            $heldoutSources = Get-HeldoutSources $entry.check
             $heldoutArg = ''
         }
-        if (Test-Path -LiteralPath (Join-Path $taskPath $heldoutRel)) { throw "Held-out test leaked into task checkout for $($entry.id)" }
-        Set-Content -NoNewline -Encoding utf8 $checkPath (Get-HeldoutSource $entry.check)
+        foreach ($source in $heldoutSources) {
+            if (Test-Path -LiteralPath (Join-Path $taskPath $source.RelativePath)) { throw "Held-out test leaked into task checkout for $($entry.id)" }
+        }
+        $writtenHeldoutSources = Write-HeldoutSources $basePath $heldoutSources
         try {
             $heldout = Invoke-GoTest $basePath (Get-HeldoutGoArgs $entry $heldoutArg)
-        } finally { Remove-Item -LiteralPath $checkPath -Force }
+        } finally { Remove-HeldoutSources $writtenHeldoutSources }
         Set-Content -NoNewline -Encoding utf8 (Join-Path $basePath 'heldout.stdout.log') $heldout.Stdout
         Set-Content -NoNewline -Encoding utf8 (Join-Path $basePath 'heldout.stderr.log') $heldout.Stderr
         Set-Content -NoNewline -Encoding utf8 (Join-Path $basePath 'heldout.combined.log') $heldout.Combined
@@ -508,7 +640,7 @@ if ($Action -eq 'Prepare') {
             preflight_args         = ($native.Argv -join ' ')
             native_argv_policy     = (@($entry.native_argv) -join ' ')
             native_test_scope      = $native.Scope
-            windows_exclusion      = '^TestNocmpIntegration$ (windows-only, go-atomic; rationale in manifest native_verification)'
+            windows_exclusion      = if ($native.Scope -eq 'windows-scoped') { '^TestNocmpIntegration$ (Windows-only atomic tasks; rationale in manifest native_verification)' } else { $null }
             task_completion        = 'NOT RUN'
             provider_calls         = 0
             input_tokens           = $null
@@ -536,6 +668,7 @@ if ($Action -eq 'Prepare') {
         product_tree_dirty_at_prepare = $productDirty
         runner_sha256                 = $runnerSha
         go_version                    = $goVersion
+        go_environment_binding        = $goEnvironmentBinding
         preparation_elapsed_ms        = $started.ElapsedMilliseconds
         provider_calls                = 0
         heldout_checks                = 'baseline discriminator only; task checkouts never contained held-out tests; exact stdout/stderr under baseline-checks/<id>/*.log'
@@ -641,7 +774,9 @@ foreach ($entry in $entries) {
     try {
         if (-not (Test-Path -LiteralPath $taskPath)) { throw "Task checkout missing for $($entry.id): $taskPath" }
         if ((Get-GitText $taskPath @('rev-parse', 'HEAD')) -ne $entry.sha) { throw "Task checkout is not the fresh pinned SHA for $($entry.id); matched comparison requires fresh identical repo/task clones" }
-        if (Test-Path -LiteralPath (Join-Path $taskPath 'fabric_v1_heldout_test.go')) { throw "Held-out test present in task clone before candidate completion for $($entry.id)" }
+        foreach ($source in (Get-HeldoutSources $entry.check)) {
+            if (Test-Path -LiteralPath (Join-Path $taskPath $source.RelativePath)) { throw "Held-out test present in task clone before candidate completion for $($entry.id)" }
+        }
         $result.source_sha = $entry.sha
 
         if ($EvalMode -eq 'Native') {
@@ -651,8 +786,10 @@ foreach ($entry in $entries) {
                 throw "Task checkout for $($entry.id) already initialized; Evaluate requires a fresh prepared clone"
             }
             $initArgs = @(Get-NativeInitArgs $taskPath $CodexExe $Model $Effort ([bool]$ValidateWriterEdits))
-            & $FabricExe @initArgs 1> (Join-Path $taskOutDir 'fabric-init.stdout.log') 2> (Join-Path $taskOutDir 'fabric-init.stderr.log')
-            if ($LASTEXITCODE -ne 0) { throw "fabric init failed for $($entry.id); see fabric-init.*.log" }
+            Invoke-WithPinnedGo $GoExe {
+                & $FabricExe @initArgs 1> (Join-Path $taskOutDir 'fabric-init.stdout.log') 2> (Join-Path $taskOutDir 'fabric-init.stderr.log')
+                if ($LASTEXITCODE -ne 0) { throw "fabric init failed for $($entry.id); see fabric-init.*.log" }
+            }
             $result.effort = $Effort
             $verPolicy = Set-TaskVerificationConfig $taskPath $entry
             $result.verification_argv = $verPolicy.ArgvText
@@ -663,8 +800,10 @@ foreach ($entry in $entries) {
             $result.parallel_writers_requested = [bool]$ParallelWriters
             $result.writer_edit_validation_requested = [bool]$ValidateWriterEdits
             $result.max_parallel_requested = if ($MaxParallel -eq 0) { $null } else { $MaxParallel }
-            & $FabricExe @runArgs 1> (Join-Path $taskOutDir 'fabric-run.stdout.log') 2> (Join-Path $taskOutDir 'fabric-run.stderr.log')
-            if ($LASTEXITCODE -ne 0) { throw "fabric run --autonomous failed for $($entry.id); see fabric-run.*.log" }
+            Invoke-WithPinnedGo $GoExe {
+                & $FabricExe @runArgs 1> (Join-Path $taskOutDir 'fabric-run.stdout.log') 2> (Join-Path $taskOutDir 'fabric-run.stderr.log')
+                if ($LASTEXITCODE -ne 0) { throw "fabric run --autonomous failed for $($entry.id); see fabric-run.*.log" }
+            }
             $runOut = Get-Content -Raw -LiteralPath (Join-Path $taskOutDir 'fabric-run.stdout.log')
             if ([string]::IsNullOrWhiteSpace($runOut)) { throw "fabric run produced no output for $($entry.id)" }
             $parsed = ($runOut | ConvertFrom-Json)
@@ -672,12 +811,18 @@ foreach ($entry in $entries) {
             if ([string]::IsNullOrWhiteSpace($fabricRunId) -or $fabricRunId -notmatch '^[0-9a-f]{64}$') { throw "fabric run output has no exact run identity for $($entry.id)" }
             $result.fabric_run_id = $fabricRunId
             $result.fabric_sha256 = $fabricSha
-            & $FabricExe --root $taskPath inspect $fabricRunId 1> (Join-Path $taskOutDir 'fabric-inspect.stdout.log') 2> (Join-Path $taskOutDir 'fabric-inspect.stderr.log')
-            if ($LASTEXITCODE -ne 0) { throw "fabric inspect failed for $($entry.id); see fabric-inspect.*.log" }
-            & $FabricExe --root $taskPath usage $fabricRunId 1> (Join-Path $taskOutDir 'fabric-usage.stdout.log') 2> (Join-Path $taskOutDir 'fabric-usage.stderr.log')
-            if ($LASTEXITCODE -ne 0) { throw "fabric usage failed for $($entry.id); see fabric-usage.*.log" }
-            & $FabricExe --root $taskPath diff $fabricRunId 1> (Join-Path $taskOutDir 'fabric-diff.stdout.log') 2> (Join-Path $taskOutDir 'fabric-diff.stderr.log')
-            if ($LASTEXITCODE -ne 0) { throw "fabric diff failed for $($entry.id); see fabric-diff.*.log" }
+            Invoke-WithPinnedGo $GoExe {
+                & $FabricExe --root $taskPath inspect $fabricRunId 1> (Join-Path $taskOutDir 'fabric-inspect.stdout.log') 2> (Join-Path $taskOutDir 'fabric-inspect.stderr.log')
+                if ($LASTEXITCODE -ne 0) { throw "fabric inspect failed for $($entry.id); see fabric-inspect.*.log" }
+            }
+            Invoke-WithPinnedGo $GoExe {
+                & $FabricExe --root $taskPath usage $fabricRunId 1> (Join-Path $taskOutDir 'fabric-usage.stdout.log') 2> (Join-Path $taskOutDir 'fabric-usage.stderr.log')
+                if ($LASTEXITCODE -ne 0) { throw "fabric usage failed for $($entry.id); see fabric-usage.*.log" }
+            }
+            Invoke-WithPinnedGo $GoExe {
+                & $FabricExe --root $taskPath diff $fabricRunId 1> (Join-Path $taskOutDir 'fabric-diff.stdout.log') 2> (Join-Path $taskOutDir 'fabric-diff.stderr.log')
+                if ($LASTEXITCODE -ne 0) { throw "fabric diff failed for $($entry.id); see fabric-diff.*.log" }
+            }
             $snap = (Get-Content -Raw -LiteralPath (Join-Path $taskOutDir 'fabric-inspect.stdout.log') | ConvertFrom-Json)
             $usage = (Get-Content -Raw -LiteralPath (Join-Path $taskOutDir 'fabric-usage.stdout.log') | ConvertFrom-Json)
             $diffOut = (Get-Content -Raw -LiteralPath (Join-Path $taskOutDir 'fabric-diff.stdout.log') | ConvertFrom-Json)
@@ -705,8 +850,10 @@ foreach ($entry in $entries) {
             if ((Test-Path -LiteralPath (Join-Path $taskPath 'harness.toml')) -or (Test-Path -LiteralPath (Join-Path $taskPath '.harness'))) {
                 throw "Task checkout for $($entry.id) already initialized; Evaluate requires a fresh prepared clone"
             }
-            & $baselineExe --root $taskPath init --codex $CodexExe --model $Model --effort $Effort 1> (Join-Path $taskOutDir 'baseline-init.stdout.log') 2> (Join-Path $taskOutDir 'baseline-init.stderr.log')
-            if ($LASTEXITCODE -ne 0) { throw "baseline init failed for $($entry.id); see baseline-init.*.log" }
+            Invoke-WithPinnedGo $GoExe {
+                & $baselineExe --root $taskPath init --codex $CodexExe --model $Model --effort $Effort 1> (Join-Path $taskOutDir 'baseline-init.stdout.log') 2> (Join-Path $taskOutDir 'baseline-init.stderr.log')
+                if ($LASTEXITCODE -ne 0) { throw "baseline init failed for $($entry.id); see baseline-init.*.log" }
+            }
             $result.effort = $Effort
             $verPolicy = Set-TaskVerificationConfig $taskPath $entry
             $result.verification_argv = $verPolicy.ArgvText
@@ -732,7 +879,9 @@ foreach ($entry in $entries) {
                 $env:GIT_CONFIG_COUNT = ($appendIndex + 1).ToString()
                 Set-Item -Path "env:$scopedKey" -Value 'diff.autoRefreshIndex'
                 Set-Item -Path "env:$scopedValue" -Value 'false'
-                $taskResult = & $pr5Script -Fabric $baselineExe -Repository $taskPath -Objective $entry.task -ApprovePlan -ApproveChanges -NonInteractive
+                $taskResult = Invoke-WithPinnedGo $GoExe {
+                    & $pr5Script -Fabric $baselineExe -Repository $taskPath -Objective $entry.task -ApprovePlan -ApproveChanges -NonInteractive
+                }
             } finally {
                 Remove-Item -Path "env:$scopedKey" -ErrorAction SilentlyContinue
                 Remove-Item -Path "env:$scopedValue" -ErrorAction SilentlyContinue
@@ -749,10 +898,14 @@ foreach ($entry in $entries) {
             $result.baseline_sha256 = $baselineSha
             $result.baseline_script = $pr5Script
             Set-Content -NoNewline -Encoding utf8 (Join-Path $taskOutDir 'run-task.result.log') ("run_id=$fabricRunId state=$($taskResult.state)")
-            & $baselineExe --root $taskPath inspect $fabricRunId 1> (Join-Path $taskOutDir 'fabric-inspect.stdout.log') 2> (Join-Path $taskOutDir 'fabric-inspect.stderr.log')
-            if ($LASTEXITCODE -ne 0) { throw "baseline inspect failed for $($entry.id); see fabric-inspect.*.log" }
-            & $baselineExe --root $taskPath usage $fabricRunId 1> (Join-Path $taskOutDir 'fabric-usage.stdout.log') 2> (Join-Path $taskOutDir 'fabric-usage.stderr.log')
-            if ($LASTEXITCODE -ne 0) { throw "baseline usage failed for $($entry.id); see fabric-usage.*.log" }
+            Invoke-WithPinnedGo $GoExe {
+                & $baselineExe --root $taskPath inspect $fabricRunId 1> (Join-Path $taskOutDir 'fabric-inspect.stdout.log') 2> (Join-Path $taskOutDir 'fabric-inspect.stderr.log')
+                if ($LASTEXITCODE -ne 0) { throw "baseline inspect failed for $($entry.id); see fabric-inspect.*.log" }
+            }
+            Invoke-WithPinnedGo $GoExe {
+                & $baselineExe --root $taskPath usage $fabricRunId 1> (Join-Path $taskOutDir 'fabric-usage.stdout.log') 2> (Join-Path $taskOutDir 'fabric-usage.stderr.log')
+                if ($LASTEXITCODE -ne 0) { throw "baseline usage failed for $($entry.id); see fabric-usage.*.log" }
+            }
             $snap = (Get-Content -Raw -LiteralPath (Join-Path $taskOutDir 'fabric-inspect.stdout.log') | ConvertFrom-Json)
             $usage = (Get-Content -Raw -LiteralPath (Join-Path $taskOutDir 'fabric-usage.stdout.log') | ConvertFrom-Json)
             $diffCandidateId = $null
@@ -806,8 +959,14 @@ foreach ($entry in $entries) {
         # is BLOCKED before any acceptance tests, never rerun; a failed
         # destination is retained, never recursively deleted.
         $copyStage = Join-Path $taskOutDir 'acceptance-copy'
+        $fullSnapshotPath = Join-Path $taskOutDir 'fabric-inspect.stdout.log'
+        $copySnapshotPath = Join-Path $taskOutDir 'candidatecopy-snapshot.json'
+        $copySnapshotEvidence = Write-CandidateCopySnapshotProjection $snap $fullSnapshotPath $copySnapshotPath
+        $result.inspect_snapshot_sha256 = $copySnapshotEvidence.FullSnapshotSha256
+        $result.candidatecopy_snapshot_projection_sha256 = $copySnapshotEvidence.ProjectionSha256
+        $result.candidatecopy_snapshot_projection_bytes = $copySnapshotEvidence.ProjectionBytes
         try {
-            $copyObs = Invoke-CandidateCopy $CandidateCopyExe (Join-Path $taskOutDir 'fabric-inspect.stdout.log') $expectedCandidateId $copyStage $taskOutDir
+            $copyObs = Invoke-CandidateCopy $CandidateCopyExe $copySnapshotPath $expectedCandidateId $copyStage $taskOutDir
         } catch {
             $result.blocked_reason = "candidatecopy helper BLOCKED: $($_.Exception.Message)"
             $sw.Stop()
@@ -821,6 +980,11 @@ foreach ($entry in $entries) {
         $result.acceptance_copy_files = [int]$copyObs.file_count
         $result.acceptance_copy_candidate_id = [string]$copyObs.candidate_id
         $result.acceptance_copy_workspace = [string]$copyObs.workspace
+        $result.native_copy_path = $copyPath
+        $result.native_copy_identity = [string]$copyObs.files_hash
+        $result.native_copy_files = [int]$copyObs.file_count
+        $result.native_copy_candidate_id = [string]$copyObs.candidate_id
+        $result.native_copy_workspace = [string]$copyObs.workspace
         $copyObs | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 (Join-Path $taskOutDir 'acceptance-copy.manifest.json')
         if ([string]$copyObs.candidate_id -ne $expectedCandidateId) {
             $result.blocked_reason = 'helper observation candidate_id does not match expected reviewed candidate'
@@ -848,11 +1012,10 @@ foreach ($entry in $entries) {
             continue
         }
 
-        # Tests run only on the helper's copied bytes; the original worktree
-        # is never mutated. The held-out check is added only to the copy and
-        # removed afterwards. Destination manifest identity (files_hash) was
-        # already verified by the helper against the source Candidate.
-        # Final native upstream verification on the copy, then held-out.
+        # Native tests run on their own helper copy. They are candidate code
+        # and may mutate that copy, so held-out acceptance gets a second fresh
+        # helper copy from the unchanged candidate workspace after native tests
+        # finish. Both copies must bind to the same reviewed candidate.
         $native = Get-NativeGoArgs $entry
         $nativeVerify = Invoke-GoTest $copyPath $native.Argv
         Set-Content -NoNewline -Encoding utf8 (Join-Path $taskOutDir 'native-verify.stdout.log') $nativeVerify.Stdout
@@ -861,17 +1024,40 @@ foreach ($entry in $entries) {
         $result.native_verify_exit_code = $nativeVerify.ExitCode
         $result.native_verify_args = ($native.Argv -join ' ')
 
-        if ($entry.check -eq 'difflib') {
-            $checkDest = Join-Path (Join-Path $copyPath 'difflib') 'fabric_v1_heldout_test.go'
-            $heldoutFileArg = 'difflib/fabric_v1_heldout_test.go'
-        } else {
-            $checkDest = Join-Path $copyPath 'fabric_v1_heldout_test.go'
-            $heldoutFileArg = ''
-        }
-        Copy-Item -LiteralPath (Join-Path $heldoutDir "$($entry.check).heldout_test.go") -Destination $checkDest -Force
+        $heldoutCopyStage = Join-Path $taskOutDir 'heldout-acceptance-copy'
         try {
-            $heldout = Invoke-GoTest $copyPath (Get-HeldoutGoArgs $entry $heldoutFileArg)
-        } finally { Remove-Item -LiteralPath $checkDest -Force -ErrorAction SilentlyContinue }
+            $heldoutCopyObs = Invoke-CandidateCopy $CandidateCopyExe $copySnapshotPath $expectedCandidateId $heldoutCopyStage $taskOutDir 'heldout-candidatecopy'
+        } catch {
+            $result.blocked_reason = "heldout candidatecopy helper BLOCKED: $($_.Exception.Message)"
+            $sw.Stop()
+            $result.elapsed_ms = $sw.ElapsedMilliseconds
+            $results += $result
+            continue
+        }
+        $heldoutCopyPath = [string]$heldoutCopyObs.destination
+        $result.heldout_copy_path = $heldoutCopyPath
+        $result.heldout_copy_identity = [string]$heldoutCopyObs.files_hash
+        $result.heldout_copy_files = [int]$heldoutCopyObs.file_count
+        $result.heldout_copy_candidate_id = [string]$heldoutCopyObs.candidate_id
+        $result.heldout_copy_workspace = [string]$heldoutCopyObs.workspace
+        $heldoutCopyObs | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 (Join-Path $taskOutDir 'heldout-acceptance-copy.manifest.json')
+        if ([string]$heldoutCopyObs.candidate_id -ne $expectedCandidateId -or
+            [string]$heldoutCopyObs.files_hash -ne [string]$copyObs.files_hash -or
+            [string]$heldoutCopyObs.workspace -ne [string]$copyObs.workspace -or
+            [int]$heldoutCopyObs.file_count -ne [int]$copyObs.file_count) {
+            $result.blocked_reason = 'heldout helper copy does not match the native copy candidate binding'
+            $sw.Stop()
+            $result.elapsed_ms = $sw.ElapsedMilliseconds
+            $results += $result
+            continue
+        }
+
+        $heldoutSources = Get-HeldoutSources $entry.check
+        $heldoutFileArg = if ($entry.check -eq 'difflib') { 'difflib/fabric_v1_heldout_test.go' } else { '' }
+        $writtenHeldoutSources = Write-HeldoutSources $heldoutCopyPath $heldoutSources
+        try {
+            $heldout = Invoke-GoTest $heldoutCopyPath (Get-HeldoutGoArgs $entry $heldoutFileArg)
+        } finally { Remove-HeldoutSources $writtenHeldoutSources }
         Set-Content -NoNewline -Encoding utf8 (Join-Path $taskOutDir 'acceptance.stdout.log') $heldout.Stdout
         Set-Content -NoNewline -Encoding utf8 (Join-Path $taskOutDir 'acceptance.stderr.log') $heldout.Stderr
         $acceptClass = Get-FabricV1CheckClassification -TaskId $entry.id -ExitCode $heldout.ExitCode -CombinedOutput $heldout.Combined
@@ -951,6 +1137,7 @@ $evalRecord = [ordered]@{
     product_tree_dirty_at_evaluate = $evalProductDirty
     product_head_note      = 'Runner HEAD/dirty is the evaluation-time runner tree (dirty due to untracked helper source); binary vcs.revision/vcs.modified above is the binary build claim, not the runner HEAD. Do not claim clean binary source from a dirty runner HEAD.'
     go_version             = $goVersion
+    go_environment_binding = $goEnvironmentBinding
     prior_run_json_sha256  = $priorRunJsonSha
     task_pins              = $taskPins
     build_receipt          = $buildReceipt

@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "purpose": "Failed real generated-code task; not accepted parallel qualification",
+  "source_commit": "de2f5870d61a6996d995bc8eb38e5dd5029a253c",
+  "run_id": "b422cabfb3832da06e4ca09759aefaad5b6c4aad954f070dd3aa5cbea41a92ba",
+  "task_id": "go-atomic-numeric-text",
+  "repository_sha": "2d2bdbd262f95d0a890c696fb6f91d4776cb142c",
+  "terminal_state": "BLOCKED",
+  "snapshot_state": "REPAIRING",
+  "blocked_reason": "repair_budget_exhausted",
+  "elapsed_ms": 586623,
+  "initial_combined_file_effect": {
+    "count": 1,
+    "outcome": "CONFIRMED",
+    "intent_id": "9082a06cb06e1dc4265949b672518a1c71462c01e535583f71bbedb4a7134a80",
+    "candidate_file_count": 62,
+    "occurs_after_both_writer_proposals": true,
+    "candidate_files_sha256": "3b827d93071d1350bbc6e5a51dea3a817cb138aeb28cc3826ec6fe2db1ed82dd",
+    "event_sequence": 33
+  },
+  "initial_writer_cohort": {
+    "max_parallel": 2,
+    "host_ready_sequences": [
+      23,
+      24
+    ],
+    "runtime_timestamps": {
+      "reason": "Persisted run events provide ordering and runtime IDs, but no writer start/end timestamps.",
+      "start_utc": null,
+      "wall_clock_overlap": null,
+      "end_utc": null
+    },
+    "members": [
+      {
+        "observed_profile": {
+          "provider": "openai",
+          "effort": "high",
+          "model": "gpt-6-luna"
+        },
+        "requested_profile": {
+          "effort": "high",
+          "model": "gpt-6-luna",
+          "provider": "openai",
+          "role": "writer",
+          "runtime": "codex-app-server"
+        },
+        "host_intent_sequence": 22,
+        "thread_id": "01a10039-030e-7d30-91bd-206320887dd9",
+        "invocation_id": "a899351a39d661cfba35c1113395fddca80ebd14afa4c3f890789191a9f16627",
+        "runtime_observed_sequence": 27,
+        "proposal_paths": [
+          "uint64.go",
+          "uint64_test.go"
+        ],
+        "turn_id": "01a10039-0530-73d2-87b3-9ab4c146c8d2",
+        "task_id": "uint64-text",
+        "write_paths": [
+          "uint64.go",
+          "uint64_test.go"
+        ],
+        "proposal_sequence": 28,
+        "usage": {
+          "source": "CODEX_APP_SERVER",
+          "input_tokens": 206555,
+          "coverage": "OBSERVED",
+          "output_tokens": 2624
+        },
+        "runtime_started_utc": null,
+        "runtime_ended_utc": null
+      },
+      {
+        "observed_profile": {
+          "provider": "openai",
+          "effort": "high",
+          "model": "gpt-6-luna"
+        },
+        "requested_profile": {
+          "effort": "high",
+          "model": "gpt-6-luna",
+          "provider": "openai",
+          "role": "writer",
+          "runtime": "codex-app-server"
+        },
+        "host_intent_sequence": 21,
+        "thread_id": "01a10039-02c7-79d0-a5be-be0a56d8acf7",
+        "invocation_id": "8ca8a41b46e5dfe8b1f5e0b5ebbd47518d6d9ba0644aac2db29b8ece4e7a432a",
+        "runtime_observed_sequence": 29,
+        "proposal_paths": [
+          "int64.go",
+          "int64_test.go"
+        ],
+        "turn_id": "01a10039-0503-7ed1-af6c-362c9960e5c8",
+        "task_id": "int64-text",
+        "write_paths": [
+          "int64.go",
+          "int64_test.go"
+        ],
+        "proposal_sequence": 30,
+        "usage": {
+          "source": "CODEX_APP_SERVER",
+          "input_tokens": 262068,
+          "coverage": "OBSERVED",
+          "output_tokens": 3435
+        },
+        "runtime_started_utc": null,
+        "runtime_ended_utc": null
+      }
+    ],
+    "dispatch_batch_candidate_id": "5e7aea484875f331b018c024f66fd92c5ef9c3105ab1bb0bf96c800048b11fe1",
+    "requested_parallel": true,
+    "host_intent_sequences": [
+      21,
+      22
+    ],
+    "write_ownership_disjoint": true,
+    "dispatch_batch_sequence": 31,
+    "host_observed_sequences": [
+      25,
+      26
+    ]
+  },
+  "latest_review": {
+    "finding_paths": [
+      "int64.go"
+    ],
+    "invocation_id": "497b5bbefc5b29e00a56d53f7ec6a8262a1c2b82ffa9aa4bf3149c3c8f75c980",
+    "finding_count": 1,
+    "sequence": 91,
+    "candidate_id": "75c3fdf2be07eb00b5192eeeea37fae91872f81c343eeb53a02613c729a9843a",
+    "decision": "changes_requested",
+    "summary": "Reviewer requested changes because generated Int64 source differed from the updated generator template."
+  },
+  "qualification": "NOT ESTABLISHED",
+  "generated_context_was_included": true,
+  "initial_template_write_owner_was_missing": true,
+  "template_path": "internal/gen-atomicint/wrapper.tmpl",
+  "independence_assumption": "Invalid for regeneration-stable complete feature: both wrappers share one generator template",
+  "repair_attempts": 2,
+  "max_repairs": 2,
+  "latest_native_status": "PASS",
+  "latest_native_started": true,
+  "heldout_acceptance": "NOT RUN",
+  "provider_calls": null,
+  "release_qualified": false,
+  "measurement_artifact_sha256": "450c3f45356dc633303dd146081c892ae381f9f7fd9047f3074f85e56da512c6"
+}

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/config"
 	"harness.local/engorch/internal/control"
 	"harness.local/engorch/internal/repository"
@@ -269,14 +270,43 @@ func TestEndToEndRunValidatesAndCopies(t *testing.T) {
 	snap := snapshotFor(t, b, cand, id)
 	dir := t.TempDir()
 	snapPath := filepath.Join(dir, "snap.json")
-	raw, err := json.Marshal(snap)
+	projection := candidateCopySnapshot{
+		RunID:        snap.RunID,
+		State:        snap.State,
+		Workspace:    snap.Workspace,
+		Candidate:    snap.Candidate,
+		Verification: snap.Verification,
+		Review:       snap.Review,
+	}
+	raw, err := json.Marshal(projection)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Snapshot file must decode via canonical rules; json.Marshal output is compatible
-	// for this minimal shape (exact field names, no unknowns).
+	// This is the runner's bounded six-field projection, not a fabricated full
+	// Snapshot. In particular, the nil review remains explicitly present.
+	var decoded candidateCopySnapshot
+	if err := canonical.Decode(raw, &decoded); err != nil {
+		t.Fatalf("canonical projection decode failed: %v", err)
+	}
+	if decoded.Review != nil || decoded.RunID != snap.RunID || decoded.State != snap.State ||
+		decoded.Workspace == nil || decoded.Workspace.Request.RunID != snap.Workspace.Request.RunID ||
+		decoded.Workspace.GitDir != snap.Workspace.GitDir ||
+		decoded.Candidate == nil || *decoded.Candidate != *snap.Candidate ||
+		decoded.Verification == nil || decoded.Verification.PlanID != snap.Verification.PlanID {
+		t.Fatal("projection decode did not preserve required snapshot bindings or null review")
+	}
 	if err := os.WriteFile(snapPath, raw, 0600); err != nil {
 		t.Fatal(err)
+	}
+	loaded, err := loadSnapshot(snapPath)
+	if err != nil {
+		t.Fatalf("helper rejected exact projection: %v", err)
+	}
+	if loaded.RunID != snap.RunID || loaded.State != snap.State || loaded.Workspace == nil ||
+		loaded.Workspace.Request.RunID != snap.Workspace.Request.RunID || loaded.Workspace.GitDir != snap.Workspace.GitDir ||
+		loaded.Candidate == nil || *loaded.Candidate != *snap.Candidate ||
+		loaded.Verification == nil || loaded.Verification.PlanID != snap.Verification.PlanID || loaded.Review != nil {
+		t.Fatal("helper did not map exact projection fields into snapshot")
 	}
 	dest := filepath.Join(dir, "dest")
 	if err := run([]string{"--snapshot", snapPath, "--expected-candidate", id, "--destination", dest}); err != nil {
@@ -289,5 +319,47 @@ func TestEndToEndRunValidatesAndCopies(t *testing.T) {
 	badDest := filepath.Join(dir, "bad")
 	if err := run([]string{"--snapshot", snapPath, "--expected-candidate", strings.Repeat("f", 64), "--destination", badDest}); err == nil {
 		t.Fatal("wrong ID run admitted")
+	}
+}
+
+func TestLoadSnapshotRejectsMissingRequiredProjectionField(t *testing.T) {
+	_, r := fixture(t)
+	b := createBinding(t, r)
+	cand, _, err := worktree.Capture(context.Background(), b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := cand.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := snapshotFor(t, b, cand, id)
+	projection := candidateCopySnapshot{
+		RunID:        snap.RunID,
+		State:        snap.State,
+		Workspace:    snap.Workspace,
+		Candidate:    snap.Candidate,
+		Verification: snap.Verification,
+		Review:       nil,
+	}
+	raw, err := json.Marshal(projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &members); err != nil {
+		t.Fatal(err)
+	}
+	delete(members, "candidate")
+	raw, err = json.Marshal(members)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "missing-candidate.json")
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadSnapshot(path); err == nil || !strings.Contains(err.Error(), `missing exact field "candidate"`) {
+		t.Fatalf("missing required projection field was not rejected exactly: %v", err)
 	}
 }

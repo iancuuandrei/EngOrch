@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -45,6 +46,58 @@ type VerificationObservation struct {
 	Start  VerificationStart   `json:"start"`
 	Result verification.Result `json:"result"`
 	After  FileObservation     `json:"after"`
+}
+
+// ErrAutonomousVerificationNotRun marks an autonomous run blocked because a
+// required native check is unavailable or has not started. Callers may map
+// this stable class to a safe user-facing diagnostic without exposing details.
+var ErrAutonomousVerificationNotRun = errors.New("autonomous verification did not run")
+
+// preflightAutonomousVerification resolves and hashes every required check
+// against the exact candidate before autonomous role work can begin. Prepare
+// is the same resolver used by the durable verification plan, so this does
+// not introduce a second executable-selection policy.
+func preflightAutonomousVerification(s Snapshot) error {
+	if s.Creation.Execution == nil || s.Workspace == nil {
+		return nil
+	}
+	if s.Candidate == nil {
+		return errors.New("autonomous verification preflight requires a confirmed candidate")
+	}
+	candidateID, err := s.Candidate.ID()
+	if err != nil {
+		return err
+	}
+	for _, check := range s.Creation.Config.Verification {
+		invocation, err := verification.Prepare(candidateID, s.Workspace.Request.Path, check)
+		if err != nil {
+			return fmt.Errorf("autonomous verification check %q preflight failed: %w", check.Name, err)
+		}
+		if invocation.Executable == nil {
+			return fmt.Errorf("%w: required check %q is unavailable before implementation: %s", ErrAutonomousVerificationNotRun, check.Name, invocation.Unavailable)
+		}
+	}
+	return nil
+}
+
+// rejectUnstartedAutonomousVerification prevents a missing or otherwise
+// unstarted native check from being treated as semantic test failure and
+// consuming an autonomous repair slot. Started FAIL results remain eligible.
+func rejectUnstartedAutonomousVerification(s Snapshot) error {
+	if s.Verification == nil {
+		return nil
+	}
+	for n, observation := range s.Verification.Observations {
+		if observation.Result.Started || observation.Result.Status != "NOT_RUN" {
+			continue
+		}
+		name := "unknown"
+		if n < len(s.Verification.Plan.Invocations) {
+			name = s.Verification.Plan.Invocations[n].Check.Name
+		}
+		return fmt.Errorf("%w: repair blocked because check %q did not start (NOT_RUN); this is not a semantic test failure", ErrAutonomousVerificationNotRun, name)
+	}
+	return nil
 }
 
 func replayVerification(s *Snapshot, e journal.Event, seen map[string]bool) error {
