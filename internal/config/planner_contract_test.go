@@ -36,6 +36,11 @@ func TestOptionalPlannerContractIsStrictAndIdentityBound(t *testing.T) {
 			t.Fatal("unsupported planner contract admitted")
 		}
 	}
+	repairContractRaw := strings.Replace(Example, "\n[planner]", "\nplanner_contract = \"plan-graph-v3\"\n\n[planner]", 1)
+	repairContract, err := Parse([]byte(repairContractRaw))
+	if err != nil || repairContract.PlannerContract != "plan-graph-v3" {
+		t.Fatalf("repair graph planner contract rejected: %v", err)
+	}
 	legacyJSON, err := canonical.Bytes(legacy)
 	if err != nil {
 		t.Fatal(err)

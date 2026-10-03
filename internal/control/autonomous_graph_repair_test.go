@@ -35,6 +35,26 @@ func TestGraphAdmissionReservesExecutableBudgets(t *testing.T) {
 	if _, err := parseAcceptedGraph(s); err == nil || !strings.Contains(err.Error(), "insufficient task capacity") {
 		t.Fatal("configured repair capacity was not enforced", err)
 	}
+	c = graphCreation(t, 1)
+	c.Config.PlannerContract = plannerContractGraphV3
+	c.Config.Exploration = &config.ExplorationPolicy{Version: 1, MaxRecords: 3, MaxContextRecords: 3}
+	c.Execution.RepairPlanningVersion = 1
+	s = Snapshot{Creation: c, Plan: &runtime.Result{Output: mustGraphJSON(t, validGraphFixture())}}
+	if _, err := parseAcceptedGraph(s); err == nil || !strings.Contains(err.Error(), "repair design") {
+		t.Fatal("repair design record capacity was not reserved", err)
+	}
+	c.Config.Exploration.MaxRecords = 64
+	c.Config.Exploration.MaxContextRecords = 64
+	c.Execution.MaxRepairs = 8
+	g = validGraphFixture()
+	for len(g.Tasks) < 33 {
+		g.Tasks = append(g.Tasks, graphTask(fmt.Sprintf("repair-extra-%d", len(g.Tasks)), engineeringplan.Research))
+	}
+	s.Creation = c
+	s.Plan.Output = mustGraphJSON(t, g)
+	if _, err := parseAcceptedGraph(s); err == nil || !strings.Contains(err.Error(), "insufficient task capacity") {
+		t.Fatal("four-node repair design budget was not enforced", err)
+	}
 }
 
 func graphWrittenNativeGateFixture(t *testing.T, c Creation) (string, Snapshot) {

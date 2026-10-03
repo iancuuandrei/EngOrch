@@ -148,3 +148,69 @@ func TestValidateRevisionPreservesCompletedTaskAndBlocksUnknownRetry(t *testing.
 		t.Fatal("retry after unknown outcome accepted")
 	}
 }
+
+func TestRepairDesignReservesScopedWritePathsUntilDesignCompletes(t *testing.T) {
+	g := Graph{Version: Version, Mode: ModeGraph, Summary: "repair design", Tasks: []Task{
+		{ID: "impl", Kind: Implementation, Title: "initial", ScopePaths: []string{"."}, WritePaths: []string{"bool.go"}, ExpectedEvidence: []Evidence{{Kind: "file", Description: "candidate"}}, EstimatedSeconds: 30},
+		{ID: "verify", Kind: Verification, Title: "verify", Dependencies: []string{"impl"}, ScopePaths: []string{"."}, ExpectedEvidence: []Evidence{{Kind: "test", Description: "native"}}, EstimatedSeconds: 10},
+		{ID: "review", Kind: Review, Title: "review", Dependencies: []string{"verify"}, ScopePaths: []string{"."}, ExpectedEvidence: []Evidence{{Kind: "review", Description: "native"}}, EstimatedSeconds: 10},
+	}}
+	g.Tasks[0].Completed = true
+	g.Tasks[0].Attempts = []Attempt{{ID: "attempt-1", Outcome: AttemptCompleted}}
+	g.Tasks[1].Attempts = []Attempt{{ID: "attempt-1", Outcome: AttemptFailed}}
+	designed, err := RepairDesignExtension(g, "verify", "verification-plan", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateAutonomousRevision(g, designed); err != nil {
+		t.Fatal("bounded design extension rejected", err)
+	}
+	var design, impl Task
+	for _, task := range designed.Tasks {
+		if task.Kind == Design && task.ParentID == "verify" {
+			design = task
+		}
+		if task.Kind == Implementation && task.ParentID == "verify" {
+			impl = task
+		}
+	}
+	if design.ID == "" || impl.ID == "" || len(impl.WritePaths) != 0 || !stringListEqual(impl.Dependencies, []string{design.ID}) {
+		t.Fatalf("repair writer did not wait for bounded design: design=%+v implementation=%+v", design, impl)
+	}
+	ready, err := Ready(designed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	designReady := false
+	implReady := false
+	for _, task := range ready {
+		designReady = designReady || task.ID == design.ID
+		implReady = implReady || task.ID == impl.ID
+	}
+	if !designReady || implReady {
+		t.Fatalf("repair writer became ready before design: %v", ready)
+	}
+	for i := range designed.Tasks {
+		if designed.Tasks[i].ID == design.ID {
+			designed.Tasks[i].Completed = true
+			designed.Tasks[i].Attempts = []Attempt{{ID: "attempt-1", Outcome: AttemptCompleted}}
+		}
+	}
+	refined, err := RefineRepairWritePaths(designed, impl.ID, []string{"internal/gen-atomicwrapper/wrapper.tmpl"}, []string{"."})
+	if err != nil {
+		t.Fatalf("in-scope generated source path rejected: %v", err)
+	}
+	if err := ValidateAutonomousRevision(designed, refined); err != nil {
+		t.Fatal("write-path refinement revision rejected", err)
+	}
+	if _, err := RefineRepairWritePaths(designed, impl.ID, []string{"../outside.go"}, []string{"."}); err == nil {
+		t.Fatal("unsafe repair path accepted")
+	}
+	if _, err := RefineRepairWritePaths(designed, impl.ID, []string{"outside.go"}, []string{"src"}); err == nil {
+		t.Fatal("repair path outside original scope accepted")
+	}
+	designed.Tasks[0].Attempts = append(designed.Tasks[0].Attempts, Attempt{ID: "attempt-2", Outcome: AttemptUnknown})
+	if _, err := RefineRepairWritePaths(designed, impl.ID, []string{"internal/gen-atomicwrapper/wrapper.tmpl"}, []string{"."}); err == nil {
+		t.Fatal("refinement admitted with unresolved UNKNOWN task")
+	}
+}

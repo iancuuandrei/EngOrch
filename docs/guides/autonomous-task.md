@@ -61,6 +61,12 @@ Inspect reports the run ID and isolated workspace path. Use that explicit ID
 with `usage`, `diff`, or `resume --autonomous`; copying or committing the result
 is an operator action. The example repository and Codex paths are local choices.
 
+Optional `init` flags `--writer-model`, `--writer-effort`, `--reviewer-model`
+and `--reviewer-effort` configure those roles independently. Omitted values
+inherit `--model` and `--effort`; planner and explorer keep the base profile.
+This uses explicit model choices and does not claim an automatic cost or quality
+improvement. Model availability is determined by your authenticated runtime.
+
 ## 1. Clone and build
 
 ```sh

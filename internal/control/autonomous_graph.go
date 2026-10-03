@@ -119,7 +119,14 @@ func parseAcceptedGraph(s Snapshot) (engineeringplan.Graph, error) {
 	if readTasks > s.Creation.Config.MaxExplorationRecords() {
 		return engineeringplan.Graph{}, errors.New("plan exceeds the configured research/design record budget")
 	}
-	if s.Creation.Execution != nil && len(g.Tasks)+3*s.Creation.Execution.MaxRepairs > 64 {
+	if repairPlanningEnabled(s) && readTasks+s.Creation.Execution.MaxRepairs > s.Creation.Config.MaxExplorationRecords() {
+		return engineeringplan.Graph{}, errors.New("plan leaves insufficient research/design records for bounded repair design")
+	}
+	repairNodesPerSlot := 3
+	if repairPlanningEnabled(s) {
+		repairNodesPerSlot = 4
+	}
+	if s.Creation.Execution != nil && len(g.Tasks)+repairNodesPerSlot*s.Creation.Execution.MaxRepairs > 64 {
 		return engineeringplan.Graph{}, errors.New("plan leaves insufficient task capacity for its configured repair budget")
 	}
 	if g.Mode == engineeringplan.ModeDirect {
@@ -277,6 +284,15 @@ func replayGraph(s *Snapshot, e journal.Event) error {
 		}
 		if err := engineeringplan.ValidateAutonomousRevision(s.Graph.Graph, rev.Graph); err != nil {
 			return err
+		}
+		if repairPlanningEnabled(*s) {
+			if len(rev.Graph.Tasks) > len(s.Graph.Graph.Tasks) {
+				if err := validateRepairDesignExtension(*s, rev.Graph); err != nil {
+					return err
+				}
+			} else if err := validateRepairWriteRefinement(*s, rev.Graph); err != nil {
+				return err
+			}
 		}
 		digest, err := engineeringplan.Digest(rev.Graph)
 		if err != nil || digest != rev.Digest {
@@ -566,6 +582,19 @@ func explorerQuestionForTask(s Snapshot, task engineeringplan.Task) (string, err
 	}
 	scope := strings.Join(task.ScopePaths, ",")
 	question := fmt.Sprintf("[%s] %s | scope: %s | evidence: %s | objective: %s", task.ID, task.Title, scope, strings.Join(evidence, ";"), s.Creation.Objective)
+	for _, expected := range task.ExpectedEvidence {
+		if repairPlanningEnabled(s) && task.Kind == engineeringplan.Design && expected.Kind == "repair-attempt" {
+			if s.Candidate == nil {
+				return "", errors.New("repair design requires an exact candidate")
+			}
+			candidateID, err := s.Candidate.ID()
+			if err != nil {
+				return "", err
+			}
+			question = fmt.Sprintf("[%s] REPAIR DESIGN: inspect the exact failed-gate evidence and candidate %s; return every concrete repository-relative file path needed for a repair, all within the original implementation scope. State uncertainties and rationale. | task: %s | scope: %s | evidence: %s | objective: %s", candidateID, candidateID, task.ID, scope, strings.Join(evidence, ";"), s.Creation.Objective)
+			break
+		}
+	}
 	if len(question) > 4096 {
 		// Trim objective to fit the bound while preserving task identity.
 		over := len(question) - 4096
@@ -641,7 +670,12 @@ func graphRepairForFailure(path string, failedTaskID, failedEvidence string) (Sn
 		return s, errors.New("repair requires a recorded graph")
 	}
 	seq := s.RepairAttempts + 1
-	next, err := engineeringplan.RepairExtension(s.Graph.Graph, failedTaskID, failedEvidence, seq)
+	var next engineeringplan.Graph
+	if repairPlanningEnabled(s) {
+		next, err = engineeringplan.RepairDesignExtension(s.Graph.Graph, failedTaskID, failedEvidence, seq)
+	} else {
+		next, err = engineeringplan.RepairExtension(s.Graph.Graph, failedTaskID, failedEvidence, seq)
+	}
 	if err != nil {
 		return s, err
 	}
@@ -777,7 +811,7 @@ func isStaticGraphExplorerCohort(s Snapshot, claim taskscheduler.Claim) bool {
 	if claim.Task.Operation != taskscheduler.OperationExplorer || claim.AgentTurn != nil {
 		return false
 	}
-	if !graphEnabled(s) || s.State != "IMPLEMENTING" {
+	if !graphEnabled(s) || !v1StaticGraphExplorerStateAllowed(s) {
 		return false
 	}
 	if s.Workspace == nil || s.Candidate == nil || s.Plan == nil || s.Graph == nil {
@@ -1292,6 +1326,12 @@ func autonomousGraphImplementing(ctx context.Context, path string, s Snapshot) (
 		return s, true, nil
 	}
 	if implReady != nil {
+		if repairPlanningEnabled(s) && len(implReady.WritePaths) == 0 {
+			if err := refineRepairWritePathsFromDesign(path, s, *implReady); err != nil {
+				return s, false, err
+			}
+			return s, true, nil
+		}
 		// Only a single writer after all required research/design tasks:
 		// Ready already guarantees dependencies completed; additionally
 		// require no incomplete research/design remains.
@@ -1354,6 +1394,16 @@ func autonomousGraphRepairing(ctx context.Context, path string, s Snapshot) (Sna
 		if candidateID == s.RepairCandidateID {
 			return s, errors.New("autonomous repair made no candidate progress")
 		}
+		// A confirmed writer effect may have been persisted just before a
+		// restart, before its graph implementation progress. Record that exact
+		// proposal/candidate before attempting the dependent native gate.
+		if err := recordGraphImplementationProgress(path); err != nil {
+			return InspectOr(s, path, err)
+		}
+		s, err = Inspect(path)
+		if err != nil {
+			return s, err
+		}
 		if !autonomousVerificationCovered(s, candidateID) {
 			if err := autonomousDispatchBlocked(s); err != nil {
 				return s, err
@@ -1404,6 +1454,37 @@ func autonomousGraphRepairing(ctx context.Context, path string, s Snapshot) (Sna
 		}
 		latest, _ := Inspect(path)
 		return latest, nil
+	}
+	if repairPlanningEnabled(s) {
+		ready, err := graphReadyTasks(s)
+		if err != nil {
+			return s, err
+		}
+		var designTasks []engineeringplan.Task
+		for _, task := range ready {
+			if task.Kind == engineeringplan.Research || task.Kind == engineeringplan.Design {
+				designTasks = append(designTasks, task)
+			}
+		}
+		if len(designTasks) > 0 {
+			if err := autonomousDispatchBlocked(s); err != nil {
+				return s, err
+			}
+			if err := runGraphResearchBatch(ctx, path, s, designTasks); err != nil {
+				return InspectOr(s, path, err)
+			}
+			latest, err := Inspect(path)
+			return latest, err
+		}
+		for _, task := range ready {
+			if task.Kind == engineeringplan.Implementation && task.ParentID != "" && len(task.WritePaths) == 0 {
+				if err := refineRepairWritePathsFromDesign(path, s, task); err != nil {
+					return s, err
+				}
+				latest, err := Inspect(path)
+				return latest, err
+			}
+		}
 	}
 	if ns, staged, err := autonomousWriterEffect(ctx, path, s); err != nil {
 		return ns, err
@@ -1682,7 +1763,13 @@ func maybeEvolveGraphForRepair(path string, s Snapshot) error {
 		if ev.ReviewInvocationID != "" {
 			failedEvidence = ev.ReviewInvocationID
 		}
-		next, err := engineeringplan.RepairExtension(s.Graph.Graph, t.ID, failedEvidence, s.RepairAttempts+1)
+		var next engineeringplan.Graph
+		var err error
+		if repairPlanningEnabled(s) {
+			next, err = engineeringplan.RepairDesignExtension(s.Graph.Graph, t.ID, failedEvidence, s.RepairAttempts+1)
+		} else {
+			next, err = engineeringplan.RepairExtension(s.Graph.Graph, t.ID, failedEvidence, s.RepairAttempts+1)
+		}
 		if err != nil {
 			return err
 		}

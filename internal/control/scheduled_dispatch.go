@@ -439,11 +439,12 @@ func scheduledInvocation(task taskscheduler.TaskSpec, turn *taskscheduler.AgentT
 	}
 	if s.Creation.Config.Version != 2 {
 		// Narrow exception: only static graph-bound V1 explorer in the current
-		// frozen batch, IMPLEMENTING with resolved candidate/workspace. Never
-		// broaden V1 writer/reviewer/planner or dynamic agent_turn. V1 TaskPool
-		// remains forbidden; PumpOptions.Workers bounds concurrency instead.
+		// frozen batch, in IMPLEMENTING or opted-in repair-design REPAIRING with
+		// resolved candidate/workspace. Never broaden V1 writer/reviewer/planner
+		// or dynamic agent_turn. V1 TaskPool remains forbidden; PumpOptions.Workers
+		// bounds concurrency instead.
 		if !(s.Creation.Config.Version == 1 && task.Operation == taskscheduler.OperationExplorer && turn == nil &&
-			s.Creation.Execution.GraphEnabled() && s.State == "IMPLEMENTING" &&
+			s.Creation.Execution.GraphEnabled() && v1StaticGraphExplorerStateAllowed(s) &&
 			s.Workspace != nil && s.Candidate != nil && s.Plan != nil && s.Graph != nil &&
 			s.Creation.Config.TaskPool == nil && isStaticGraphExplorerCohort(s, taskscheduler.Claim{Task: task})) {
 			return s, "", runtime.Invocation{}, errors.New("scheduled dispatch requires configuration v2")
@@ -500,6 +501,14 @@ func scheduledInvocationFromContext(ctx context.Context, operation taskscheduler
 		return base, nil
 	}
 	return scheduledTurnInvocation(base, operation, turn.TurnID)
+}
+
+// v1StaticGraphExplorerStateAllowed keeps the configuration-v1 scheduler
+// exception limited to initial graph work, plus the explicitly opted-in
+// bounded repair-design wave. Other REPAIRING work remains outside this
+// exception.
+func v1StaticGraphExplorerStateAllowed(s Snapshot) bool {
+	return s.State == "IMPLEMENTING" || s.State == "REPAIRING" && repairPlanningEnabled(s)
 }
 
 func resolveScheduledRecordedInvocation(s Snapshot, base, observed runtime.Invocation) (runtime.Invocation, error) {
