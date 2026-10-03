@@ -116,7 +116,7 @@ func (a *Adapter) Execute(ctx context.Context, i runtime.Invocation) (executionR
 		}
 	}
 	a.Client.SetObserver(a.observeUsage)
-	thread, err := a.Client.StartThreadWithTools(ctx, i.Profile, a.Directory, a.SourceTools())
+	thread, err := a.Client.StartThreadWithTools(ctx, i.Profile, a.Directory, a.SourceToolsForInvocation(i))
 	if err != nil {
 		return runtime.Result{}, err
 	}

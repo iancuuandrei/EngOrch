@@ -5,11 +5,17 @@ package candidatetools
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 
+	"harness.local/engorch/internal/anchoredit"
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/repository"
+	"harness.local/engorch/internal/safepath"
 	"harness.local/engorch/internal/sourcetools"
 	"harness.local/engorch/internal/worktree"
 )
@@ -19,17 +25,26 @@ const (
 	ListName = "candidate_list"
 	// ReadName identifies reading against the admitted candidate observation.
 	ReadName = "candidate_read"
+	// ValidateAnchoredEditsName validates a bounded edit proposal against the exact candidate.
+	ValidateAnchoredEditsName = "candidate_validate_anchored_edits"
 )
+
+// AnchorValidationVersion opts an invocation into candidate-bound edit validation.
+const AnchorValidationVersion = 1
 
 // Binding pins mutable workspace reads to one exact admitted candidate.
 type Binding struct {
-	Workspace worktree.Binding   `json:"workspace"`
-	Candidate worktree.Candidate `json:"candidate"`
+	Workspace               worktree.Binding   `json:"workspace"`
+	Candidate               worktree.Candidate `json:"candidate"`
+	AnchorValidationVersion int                `json:"anchor_validation_version,omitempty"`
 }
 
 // Validate checks structural and source identity. Execute additionally
 // reobserves the live candidate before making any bytes available.
 func (b Binding) Validate(source repository.Identity) error {
+	if b.AnchorValidationVersion != 0 && b.AnchorValidationVersion != AnchorValidationVersion {
+		return errors.New("unsupported candidate anchor validation version")
+	}
 	id, err := b.Workspace.ID()
 	if err != nil {
 		return err
@@ -43,6 +58,24 @@ func (b Binding) Validate(source repository.Identity) error {
 	return nil
 }
 
+// AnchoredEditArgs validates proposed changes to one existing candidate file.
+type AnchoredEditArgs struct {
+	CandidateID string            `json:"candidate_id"`
+	Path        string            `json:"path"`
+	BeforeHash  string            `json:"before_hash"`
+	Edits       []anchoredit.Edit `json:"edits"`
+}
+
+// AnchoredEditValidation is safe, bounded diagnostic output; it never returns file contents.
+type AnchoredEditValidation struct {
+	CandidateID string `json:"candidate_id"`
+	Path        string `json:"path"`
+	BeforeHash  string `json:"before_hash"`
+	Valid       bool   `json:"valid"`
+	Diagnostic  string `json:"diagnostic,omitempty"`
+	ResultHash  string `json:"result_hash,omitempty"`
+}
+
 // Page is a bounded, path-ordered view of the exact candidate manifest.
 type Page struct {
 	CandidateID string               `json:"candidate_id"`
@@ -52,7 +85,16 @@ type Page struct {
 
 // Catalog returns candidate tool definitions in stable order.
 func Catalog() []sourcetools.Definition {
-	return []sourcetools.Definition{
+	return catalog(false)
+}
+
+// CatalogWithAnchoredEdits adds the opt-in read-only candidate validator.
+func CatalogWithAnchoredEdits() []sourcetools.Definition {
+	return catalog(true)
+}
+
+func catalog(includeAnchoredEdits bool) []sourcetools.Definition {
+	definitions := []sourcetools.Definition{
 		{
 			Name:        ListName,
 			Description: "List the exact admitted candidate's current regular files with hashes and modes. Use after empty initially, follow next_after until null. Unlike source_list this includes admitted modifications. Drift fails the request.",
@@ -77,6 +119,19 @@ func Catalog() []sourcetools.Definition {
 			),
 		},
 	}
+	if includeAnchoredEdits {
+		definitions = append(definitions, sourcetools.Definition{
+			Name:        ValidateAnchoredEditsName,
+			Description: "Read-only validation of anchored replacements against one exact existing file in the admitted candidate. Returns validity and a result hash, never file contents. A false result is diagnostic only; final host admission still validates independently.",
+			InputSchema: object(map[string]any{
+				"candidate_id": map[string]any{"type": "string"},
+				"path":         map[string]any{"type": "string"},
+				"before_hash":  map[string]any{"type": "string", "pattern": "^[0-9a-f]{64}$"},
+				"edits":        map[string]any{"type": "array", "minItems": 1, "maxItems": anchoredit.MaxEdits, "items": object(map[string]any{"before": map[string]any{"type": "string", "minLength": 1}, "after": map[string]any{"type": "string"}}, []string{"before", "after"})},
+			}, []string{"candidate_id", "path", "before_hash", "edits"}),
+		})
+	}
+	return definitions
 }
 
 func object(properties map[string]any, required []string) map[string]any {
@@ -126,9 +181,115 @@ func Execute(ctx context.Context, binding Binding, name string, arguments json.R
 		}
 		content, err := worktree.ReadSource(ctx, binding.Workspace, binding.Candidate, args.Path, args.Offset, args.Limit)
 		return content, true, err
+	case ValidateAnchoredEditsName:
+		if binding.AnchorValidationVersion != AnchorValidationVersion {
+			return nil, true, errors.New("candidate anchored edit validation is not enabled")
+		}
+		var args AnchoredEditArgs
+		if err := canonical.Decode(arguments, &args); err != nil {
+			return nil, true, err
+		}
+		if err := binding.Validate(binding.Workspace.Request.Source); err != nil {
+			return nil, true, err
+		}
+		result, err := validateAnchoredEdits(ctx, binding, args)
+		return result, true, err
 	default:
 		return nil, false, nil
 	}
+}
+
+func validateAnchoredEdits(ctx context.Context, binding Binding, args AnchoredEditArgs) (AnchoredEditValidation, error) {
+	if err := binding.Candidate.ValidateBinding(binding.Workspace); err != nil {
+		return AnchoredEditValidation{}, err
+	}
+	candidateID, err := binding.Candidate.ID()
+	if err != nil {
+		return AnchoredEditValidation{}, err
+	}
+	if args.CandidateID != candidateID {
+		return AnchoredEditValidation{}, errors.New("candidate validation identity mismatch")
+	}
+	if err := safepath.Writable(args.Path); err != nil {
+		return AnchoredEditValidation{}, err
+	}
+	if err := safepath.RequireDigest(args.BeforeHash); err != nil {
+		return AnchoredEditValidation{}, errors.New("invalid candidate file hash")
+	}
+	captured, files, err := worktree.Capture(ctx, binding.Workspace)
+	if err != nil {
+		return AnchoredEditValidation{}, err
+	}
+	if captured != binding.Candidate {
+		return AnchoredEditValidation{}, errors.New("candidate changed before edit validation")
+	}
+	var file *worktree.FileState
+	for i := range files {
+		if files[i].Path == args.Path {
+			file = &files[i]
+			break
+		}
+	}
+	if file == nil || file.Hash != args.BeforeHash {
+		return AnchoredEditValidation{}, errors.New("candidate file hash mismatch")
+	}
+	var source []byte
+	for offset := int64(0); ; {
+		chunk, readErr := worktree.ReadSource(ctx, binding.Workspace, binding.Candidate, args.Path, offset, 32768)
+		if readErr != nil {
+			return AnchoredEditValidation{}, readErr
+		}
+		if chunk.CandidateID != candidateID || chunk.Path != args.Path || chunk.SHA256 != args.BeforeHash || chunk.Offset != offset || chunk.Size > anchoredit.MaxSourceBytes {
+			return AnchoredEditValidation{}, errors.New("candidate source observation mismatch")
+		}
+		// ReadSource returns canonical standard base64; reject noncanonical encodings.
+		pageBytes, decodeErr := decodeCandidatePage(chunk.ContentBase64)
+		if decodeErr != nil {
+			return AnchoredEditValidation{}, decodeErr
+		}
+		if len(source)+len(pageBytes) > anchoredit.MaxSourceBytes || len(pageBytes) == 0 && chunk.NextOffset != nil {
+			return AnchoredEditValidation{}, errors.New("candidate source size outside validation bound")
+		}
+		source = append(source, pageBytes...)
+		if chunk.NextOffset == nil {
+			if int64(len(source)) != chunk.Size {
+				return AnchoredEditValidation{}, errors.New("candidate source page sequence incomplete")
+			}
+			break
+		}
+		if *chunk.NextOffset != offset+int64(len(pageBytes)) || len(pageBytes) != 32768 {
+			return AnchoredEditValidation{}, errors.New("candidate source page sequence invalid")
+		}
+		offset = *chunk.NextOffset
+	}
+	result := AnchoredEditValidation{CandidateID: candidateID, Path: args.Path, BeforeHash: args.BeforeHash}
+	composed, applyErr := anchoredit.Apply(source, args.Edits)
+	if applyErr != nil {
+		result.Diagnostic = boundedDiagnostic(applyErr)
+		return result, nil
+	}
+	digest := sha256.Sum256(composed)
+	result.Valid, result.ResultHash = true, hex.EncodeToString(digest[:])
+	return result, nil
+}
+
+func decodeCandidatePage(encoded string) ([]byte, error) {
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || base64.StdEncoding.EncodeToString(decoded) != encoded {
+		return nil, errors.New("invalid candidate source page encoding")
+	}
+	return decoded, nil
+}
+
+func boundedDiagnostic(err error) string {
+	message := strings.TrimSpace(err.Error())
+	if len(message) > 240 {
+		message = message[:240]
+	}
+	if message == "" {
+		return "anchored edit proposal is invalid"
+	}
+	return message
 }
 
 func list(ctx context.Context, binding Binding, after string, limit int) (Page, error) {

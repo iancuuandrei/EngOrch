@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"harness.local/engorch/internal/candidatetools"
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/codexhost"
 	"harness.local/engorch/internal/codexruntime"
@@ -14,6 +15,7 @@ import (
 	"harness.local/engorch/internal/safepath"
 	"harness.local/engorch/internal/taskscheduler"
 	"harness.local/engorch/internal/worktree"
+	"harness.local/engorch/internal/writercontract"
 )
 
 // RunWriter runs or resumes a configured Codex proposal invocation, then records
@@ -252,10 +254,14 @@ func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected
 		if policyErr != nil {
 			return result, policyErr
 		}
-		a := &codexruntime.Adapter{JournalPath: runtimePath, Directory: filepath.Join(l.Root, "workspace"), Source: &s.Creation.Repository, Candidate: &codexruntime.CandidateBinding{Workspace: *s.Workspace, Candidate: before}, RI: runtimeRI, Lexical: runtimeLexical, UsageBudget: usageBudget, RequireLiveUsage: requireLiveUsage, UsageQualified: usageQualified, UnlimitedTokens: unlimitedTokens}
+		candidateBinding := &codexruntime.CandidateBinding{Workspace: *s.Workspace, Candidate: before}
+		if s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV2 && (expected.Invocation.Profile.Role == "writer" || expected.Invocation.Profile.Role == "fixer") {
+			candidateBinding.AnchorValidationVersion = candidatetools.AnchorValidationVersion
+		}
+		a := &codexruntime.Adapter{JournalPath: runtimePath, Directory: filepath.Join(l.Root, "workspace"), Source: &s.Creation.Repository, Candidate: candidateBinding, RI: runtimeRI, Lexical: runtimeLexical, UsageBudget: usageBudget, RequireLiveUsage: requireLiveUsage, UsageQualified: usageQualified, UnlimitedTokens: unlimitedTokens}
 		tools := codexruntime.NewToolSession(ctx, a)
 		defer tools.Close()
-		h, err := startCodexRoleHost(ctx, l, s.Creation.Config.Codex, expected.Invocation.Profile, a.SourceTools(), tools.HandleTool)
+		h, err := startCodexRoleHost(ctx, l, s.Creation.Config.Codex, expected.Invocation.Profile, a.SourceToolsForInvocation(expected.Invocation), tools.HandleTool)
 		if err != nil {
 			return result, err
 		}

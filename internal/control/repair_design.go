@@ -13,6 +13,17 @@ func repairPlanningEnabled(s Snapshot) bool {
 	return s.Creation.Execution != nil && s.Creation.Execution.RepairPlanningVersion == 1
 }
 
+func repairDesignExtensionForSnapshot(s Snapshot, failedTaskID, failedEvidence string, seq int) (engineeringplan.Graph, error) {
+	scope, err := initialImplementationScope(s)
+	if err != nil {
+		return engineeringplan.Graph{}, err
+	}
+	if s.Graph == nil {
+		return engineeringplan.Graph{}, errors.New("repair design extension requires a recorded graph")
+	}
+	return engineeringplan.RepairDesignExtensionScoped(s.Graph.Graph, failedTaskID, failedEvidence, seq, scope)
+}
+
 // initialImplementationScope derives the immutable write ceiling from the
 // accepted plan, never from a repair task or reviewer/explorer text.
 func initialImplementationScope(s Snapshot) ([]string, error) {
@@ -74,11 +85,22 @@ func validateRepairDesignExtension(s Snapshot, next engineeringplan.Graph) error
 	if !ok || evidence.Outcome != "failed" || repairFailureID(evidence) == "" {
 		return errors.New("repair design does not bind a completed failed gate")
 	}
-	expected, err := engineeringplan.RepairDesignExtension(s.Graph.Graph, design.ParentID, repairFailureID(evidence), seq)
+	legacyExpected, err := engineeringplan.RepairDesignExtension(s.Graph.Graph, design.ParentID, repairFailureID(evidence), seq)
 	if err != nil {
 		return err
 	}
-	if !sameCanonicalGraph(expected, next) {
+	if sameCanonicalGraph(legacyExpected, next) {
+		return nil
+	}
+	scope, err := initialImplementationScope(s)
+	if err != nil {
+		return err
+	}
+	scopedExpected, err := engineeringplan.RepairDesignExtensionScoped(s.Graph.Graph, design.ParentID, repairFailureID(evidence), seq, scope)
+	if err != nil {
+		return err
+	}
+	if !sameCanonicalGraph(scopedExpected, next) {
 		return errors.New("repair design extension differs from deterministic failed-gate extension")
 	}
 	return nil

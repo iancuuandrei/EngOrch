@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -345,6 +346,144 @@ func TestRepairWriteRefinementUsesExactCandidateBoundDesignPaths(t *testing.T) {
 	substituted, substitutedNext := repairDesignFixture(t, []string{"."}, []string{path}, true)
 	if err := validateRepairWriteRefinement(substituted, substitutedNext); err == nil || !strings.Contains(err.Error(), "current candidate") {
 		t.Fatalf("design result for a different candidate was admitted: %v", err)
+	}
+}
+
+func TestParallelNativeFailureRepairDesignUsesAcceptedScopeUnion(t *testing.T) {
+	initial := engineeringplan.Graph{Version: engineeringplan.Version, Mode: engineeringplan.ModeGraph, Summary: "parallel implementation with native repair", Tasks: []engineeringplan.Task{
+		{ID: "impl-a", Kind: engineeringplan.Implementation, Title: "Writer A", ScopePaths: []string{"src/a"}, WritePaths: []string{"src/a/main.go"}, ExpectedEvidence: []engineeringplan.Evidence{{Kind: "file", Description: "A"}}, EstimatedSeconds: 20},
+		{ID: "impl-b", Kind: engineeringplan.Implementation, Title: "Writer B", ScopePaths: []string{"src/b"}, WritePaths: []string{"src/b/main.go"}, ExpectedEvidence: []engineeringplan.Evidence{{Kind: "file", Description: "B"}}, EstimatedSeconds: 20},
+		{ID: "verify", Kind: engineeringplan.Verification, Title: "Native verification", Dependencies: []string{"impl-a", "impl-b"}, ScopePaths: []string{"."}, ExpectedEvidence: []engineeringplan.Evidence{{Kind: "test", Description: "fresh native tests"}}, EstimatedSeconds: 10},
+		{ID: "review", Kind: engineeringplan.Review, Title: "Review", Dependencies: []string{"verify"}, ScopePaths: []string{"."}, ExpectedEvidence: []engineeringplan.Evidence{{Kind: "review", Description: "independent review"}}, EstimatedSeconds: 10},
+	}}
+	accepted, err := json.Marshal(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := initial
+	failed.Tasks = append([]engineeringplan.Task(nil), initial.Tasks...)
+	for i := range failed.Tasks {
+		switch failed.Tasks[i].ID {
+		case "impl-a", "impl-b":
+			failed.Tasks[i].Completed = true
+			failed.Tasks[i].Attempts = []engineeringplan.Attempt{{ID: failed.Tasks[i].ID + "-attempt", Outcome: engineeringplan.AttemptCompleted}}
+		case "verify":
+			failed.Tasks[i].Attempts = []engineeringplan.Attempt{{ID: "verify-attempt", Outcome: engineeringplan.AttemptFailed}}
+		}
+	}
+	failure := GraphTaskEvidence{TaskID: "verify", AttemptID: "verify-attempt", Outcome: "failed", VerificationPlanID: strings.Repeat("e", 64)}
+	creation := graphCreation(t, 1)
+	creation.Config.Version = 1
+	creation.Config.PlannerContract = plannerContractGraphV4
+	creation.Execution.RepairPlanningVersion = 1
+	creation.Execution.ParallelImplementationVersion = 1
+	creation.Execution.MaxParallel = 2
+	planID := strings.Repeat("1", 64)
+	digest, err := engineeringplan.Digest(failed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := Snapshot{Creation: creation, PlanID: planID, Plan: &runtime.Result{Output: string(accepted)}, RepairAttempts: 0, Graph: &GraphState{
+		PlanID: planID, Digest: digest, Revision: 1, Graph: failed, Evidence: map[string]GraphTaskEvidence{
+			"impl-a": {TaskID: "impl-a", AttemptID: "impl-a-attempt", Outcome: "completed"},
+			"impl-b": {TaskID: "impl-b", AttemptID: "impl-b-attempt", Outcome: "completed"},
+			"verify": failure,
+		},
+	}}
+	repair, err := repairDesignExtensionForSnapshot(s, "verify", failure.VerificationPlanID, 1)
+	if err != nil {
+		t.Fatal("native failure could not create bounded repair design", err)
+	}
+	if err := validateRepairDesignExtension(s, repair); err != nil {
+		t.Fatal("exact scoped repair revision was rejected", err)
+	}
+	var design, implementation engineeringplan.Task
+	for _, task := range repair.Tasks {
+		if task.ParentID == "verify" && task.Kind == engineeringplan.Design {
+			design = task
+		}
+		if task.ParentID == "verify" && task.Kind == engineeringplan.Implementation {
+			implementation = task
+		}
+	}
+	if !stringListsEqual(design.ScopePaths, []string{"src/a", "src/b"}) || !stringListsEqual(implementation.ScopePaths, []string{"src/a", "src/b"}) {
+		t.Fatalf("repair did not receive immutable initial scope union: design=%v writer=%v", design.ScopePaths, implementation.ScopePaths)
+	}
+	malicious := repair
+	malicious.Tasks = append([]engineeringplan.Task(nil), repair.Tasks...)
+	for i := range malicious.Tasks {
+		if malicious.Tasks[i].ID == implementation.ID {
+			malicious.Tasks[i].ScopePaths = []string{"src/a", "src/b", "src/c"}
+		}
+	}
+	if err := validateRepairDesignExtension(s, malicious); err == nil {
+		t.Fatal("repair revision widened scope beyond accepted plan")
+	}
+
+	candidate := worktree.Candidate{Version: 1, WorktreeID: strings.Repeat("a", 64), Head: strings.Repeat("b", 40), IndexHash: strings.Repeat("c", 64), FilesHash: strings.Repeat("d", 64), FileCount: 1}
+	candidateID, err := candidate.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range repair.Tasks {
+		if repair.Tasks[i].ID == design.ID {
+			repair.Tasks[i].Completed = true
+			repair.Tasks[i].Attempts = []engineeringplan.Attempt{{ID: "design-attempt", Outcome: engineeringplan.AttemptCompleted}}
+		}
+	}
+	designInvocationID := strings.Repeat("f", 64)
+	s.Candidate = &candidate
+	s.Graph = &GraphState{PlanID: planID, Revision: 2, Graph: repair, Evidence: map[string]GraphTaskEvidence{
+		"impl-a":  {TaskID: "impl-a", AttemptID: "impl-a-attempt", Outcome: "completed"},
+		"impl-b":  {TaskID: "impl-b", AttemptID: "impl-b-attempt", Outcome: "completed"},
+		"verify":  failure,
+		design.ID: {TaskID: design.ID, AttemptID: "design-attempt", Outcome: "completed", ExplorerInvocationID: designInvocationID},
+	}}
+	question, err := explorerQuestionForTask(s, design)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := canonical.Bytes(Exploration{CandidateID: candidateID, Summary: "Generated artifact source belongs to the second writer's scope.", Paths: []string{"src/b/generated.go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Explorations = []ExplorerRecord{{Question: question, Invocation: runtime.Invocation{ID: designInvocationID}, Result: runtime.Result{Output: string(output)}}}
+	refined, err := engineeringplan.RefineRepairWritePaths(repair, implementation.ID, []string{"src/b/generated.go"}, []string{"src/a", "src/b"})
+	if err != nil {
+		t.Fatal("candidate-bound second-scope repair path rejected", err)
+	}
+	if err := validateRepairWriteRefinement(s, refined); err != nil {
+		t.Fatal("validated design refinement did not survive controller admission", err)
+	}
+}
+
+func TestRepairPlanningRejectsScopeUnionTooLargeForRepairGraph(t *testing.T) {
+	firstScope := make([]string, 32)
+	for i := range firstScope {
+		firstScope[i] = fmt.Sprintf("src/a%02d", i)
+	}
+	plan := engineeringplan.Graph{Version: engineeringplan.Version, Mode: engineeringplan.ModeGraph, Summary: "bounded repair scope", Tasks: []engineeringplan.Task{
+		{ID: "impl-a", Kind: engineeringplan.Implementation, Title: "Writer A", ScopePaths: firstScope, WritePaths: []string{"src/a00/a.go"}, ExpectedEvidence: []engineeringplan.Evidence{{Kind: "file", Description: "A"}}, EstimatedSeconds: 20},
+		{ID: "impl-b", Kind: engineeringplan.Implementation, Title: "Writer B", ScopePaths: []string{"src/overflow"}, WritePaths: []string{"src/overflow/b.go"}, ExpectedEvidence: []engineeringplan.Evidence{{Kind: "file", Description: "B"}}, EstimatedSeconds: 20},
+		{ID: "verify", Kind: engineeringplan.Verification, Title: "Verify", Dependencies: []string{"impl-a", "impl-b"}, ScopePaths: []string{"."}, ExpectedEvidence: []engineeringplan.Evidence{{Kind: "test", Description: "native"}}, EstimatedSeconds: 10},
+		{ID: "review", Kind: engineeringplan.Review, Title: "Review", Dependencies: []string{"verify"}, ScopePaths: []string{"."}, ExpectedEvidence: []engineeringplan.Evidence{{Kind: "review", Description: "review"}}, EstimatedSeconds: 10},
+	}}
+	encoded, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	creation := graphCreation(t, 2)
+	creation.Config.Version = 1
+	creation.Config.PlannerContract = plannerContractGraphV4
+	creation.Execution.ParallelImplementationVersion = 1
+	creation.Execution.RepairPlanningVersion = 1
+	s := Snapshot{Creation: creation, Plan: &runtime.Result{Output: string(encoded)}}
+	if _, err := parseAcceptedGraph(s); err == nil || !strings.Contains(err.Error(), "scope union exceeds bounded repair design capacity") {
+		t.Fatalf("unrepresentable repair scope union was accepted or failed unclearly: %v", err)
+	}
+	s.Creation.Execution.MaxRepairs = 0
+	if _, err := parseAcceptedGraph(s); err != nil {
+		t.Fatalf("repair scope cap rejected a plan with no repair slots: %v", err)
 	}
 }
 

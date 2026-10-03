@@ -221,6 +221,52 @@ func TestAnchoredEditsV1IsAnExplicitWriterContract(t *testing.T) {
 	}
 }
 
+func TestAnchoredEditsV2IsCodexOnlyAndIdentityBound(t *testing.T) {
+	c, err := Parse([]byte(Example))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Writer = &runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "writer", Effort: "high", Role: "writer"}
+	root := t.TempDir()
+	c.Codex = &Codex{Executable: filepath.Join(root, "codex.exe"), ExecutableHash: strings.Repeat("a", 64), StateRoot: filepath.Join(root, "state"), AuthSource: filepath.Join(root, "auth.json")}
+	c.WriterContract = writercontract.ContractAnchoredEditsV2
+	if err := c.Validate(); err != nil {
+		t.Fatal("anchored-edits-v2 Codex route rejected", err)
+	}
+	v2ID, err := c.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.WriterContract = writercontract.ContractAnchoredEditsV1
+	v1ID, err := c.ID()
+	if err != nil || v1ID == v2ID {
+		t.Fatal("v2 validation opt-in was not configuration-identity-bound", err)
+	}
+
+	for _, runtimeName := range []string{"fake", "provider-api", "opencode-http"} {
+		unsupported := c
+		unsupported.WriterContract = writercontract.ContractAnchoredEditsV2
+		unsupported.Writer = &runtime.Profile{Runtime: runtimeName, Provider: "deterministic", Model: "fixture", Effort: "none", Role: "writer"}
+		if runtimeName == "provider-api" || runtimeName == "opencode-http" {
+			unsupported.Version = 2
+			unsupported.Access = &Access{}
+			unsupported.Provider = &Provider{}
+		}
+		if err := unsupported.Validate(); err == nil || !strings.Contains(err.Error(), "anchored-edits-v2 requires a Codex writer runtime") {
+			t.Fatalf("anchored-edits-v2 admitted unsupported runtime %q: %v", runtimeName, err)
+		}
+	}
+
+	graph := c
+	graph.WriterContract = writercontract.ContractAnchoredEditsV2
+	graph.PlannerContract = "plan-graph-v4"
+	graph.ExplorerContract = "json-v2"
+	graph.Explorer = &runtime.Profile{Runtime: "fake", Provider: "deterministic", Model: "fixture", Effort: "none", Role: "explorer"}
+	if err := graph.Validate(); err != nil {
+		t.Fatal("plan-graph-v4 rejected anchored-edits-v2", err)
+	}
+}
+
 func TestExplorerJSONV2ContractIsExplicitAndIdentityBound(t *testing.T) {
 	c, err := Parse([]byte(Example))
 	if err != nil {

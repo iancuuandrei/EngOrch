@@ -144,7 +144,7 @@ func writerInvocationForTask(s Snapshot, taskID string) (runtime.Invocation, err
 	objective := s.Creation.Objective
 	var schema json.RawMessage
 	var implementationTask *writerImplementationContext
-	if s.Creation.Config.WriterContract == "nonempty-v1" || s.Creation.Config.WriterContract == "utf8-v2" || s.Creation.Config.WriterContract == writercontract.ContractChangesJSONV1 || s.Creation.Config.WriterContract == writercontract.ContractUTF8ReplaceV3 || s.Creation.Config.WriterContract == writercontract.ContractUTF8ScopedV4 || s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV1 {
+	if s.Creation.Config.WriterContract == "nonempty-v1" || s.Creation.Config.WriterContract == "utf8-v2" || s.Creation.Config.WriterContract == writercontract.ContractChangesJSONV1 || s.Creation.Config.WriterContract == writercontract.ContractUTF8ReplaceV3 || s.Creation.Config.WriterContract == writercontract.ContractUTF8ScopedV4 || writercontract.IsAnchoredEdits(s.Creation.Config.WriterContract) {
 		var projectionErr error
 		objective, projectionErr = mutationObjective(objective)
 		if projectionErr != nil {
@@ -179,7 +179,7 @@ func writerInvocationForTask(s Snapshot, taskID string) (runtime.Invocation, err
 				instruction += " No graph implementation_task is present: follow only the ordinary approved plan and existing controller permission checks; do not infer additional graph scope or write permissions."
 			}
 		}
-		if s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV1 {
+		if writercontract.IsAnchoredEdits(s.Creation.Config.WriterContract) {
 			schema, err = writercontract.AnchoredEditsSchemaForCandidate(candidate)
 			if err != nil {
 				return runtime.Invocation{}, err
@@ -197,6 +197,9 @@ func writerInvocationForTask(s Snapshot, taskID string) (runtime.Invocation, err
 				instruction += " implementation_task is the single currently ready graph task. Make changes only under its exact write_paths; keep them within scope_paths and expected_evidence. Do not widen or replace task scope."
 			} else {
 				instruction += " No graph implementation_task is present, so no task-specific graph write scope is asserted; follow only the ordinary approved plan and existing controller permissions."
+			}
+			if s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV2 {
+				instruction += " Before returning the final proposal, call candidate_validate_anchored_edits for every existing-file change using the exact candidate_id, path, before_hash and edits from that change. A valid=false result means do not emit the final proposal yet: use candidate_read to inspect the same candidate bytes, correct the anchors, and validate again within this same turn. Keep each validation argument below 14 KiB to leave room for the 16 KiB tool-request envelope; use short unique anchors and small edits, reducing the per-file edit set if needed. New-file changes have no existing anchors and do not use this tool. The controller independently rechecks and composes every proposal against the exact candidate before admitting any file effect."
 			}
 		}
 		if s.Creation.Config.WriterContract == writercontract.ContractChangesJSONV1 {
@@ -279,7 +282,7 @@ func prepareWriterFilesForTask(ctx context.Context, path, taskID string, invocat
 	}
 	var proposal WriterProposal
 	var preimages []WriterEditPreimage
-	if s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV1 {
+	if writercontract.IsAnchoredEdits(s.Creation.Config.WriterContract) {
 		anchored, decodeErr := decodeAnchoredProposal(result.Output)
 		if decodeErr != nil {
 			return PreparedFiles{}, nil, decodeErr
