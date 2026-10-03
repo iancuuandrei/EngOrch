@@ -49,6 +49,13 @@ type GoCommittedCorpus struct {
 	Omissions        []taskcontext.Omission `json:"omissions"`
 	OmissionsTrimmed bool                   `json:"omissions_trimmed"`
 	Unavailable      string                 `json:"unavailable,omitempty"`
+	ModuleInventory  *GoModuleInventory     `json:"module_inventory,omitempty"`
+}
+
+// GoCorpusOptions opts into committed module declarations. Nil preserves the
+// original source-local collection recipe and graph identities.
+type GoCorpusOptions struct {
+	ModuleInventory *GoModuleInventory
 }
 
 type goCorpusCandidate struct {
@@ -94,7 +101,20 @@ func (s *goCorpusSink) Close() error { return nil }
 // batch process, and parses their facts through one pinned RI stream. cacheDir
 // is intentionally required to be empty for the controller's first recipe.
 func CollectCommittedGoCorpus(ctx context.Context, identity repository.Identity, client Client, cacheDir, objective string) (GoCommittedCorpus, error) {
+	return CollectCommittedGoCorpusWithOptions(ctx, identity, client, cacheDir, objective, GoCorpusOptions{})
+}
+
+// CollectCommittedGoCorpusWithOptions admits an explicit source-bound module
+// inventory for declared package ownership. It never establishes active Go
+// build resolution, and malformed or omitted manifest coverage stays partial.
+func CollectCommittedGoCorpusWithOptions(ctx context.Context, identity repository.Identity, client Client, cacheDir, objective string, options GoCorpusOptions) (GoCommittedCorpus, error) {
 	corpus := GoCommittedCorpus{Sources: []repository.SourceDigest{}, GraphInputs: []GoGraphFileInput{}, Generators: []GoGeneratorBinding{}, Omissions: []taskcontext.Omission{}}
+	if options.ModuleInventory != nil {
+		if err := ValidateGoModuleInventory(*options.ModuleInventory, identity); err != nil {
+			return corpus, err
+		}
+		corpus.ModuleInventory = options.ModuleInventory
+	}
 	if cacheDir != "" {
 		return corpus, errors.New("committed Go corpus controller path does not permit an RI cache")
 	}
@@ -216,10 +236,13 @@ func CollectCommittedGoCorpus(ctx context.Context, identity repository.Identity,
 			return nil
 		}
 		binding, bindingErr := SourceLocalGoPackageBinding(source.RepositoryID, entry.Path, file.Name.Name)
+		if options.ModuleInventory != nil {
+			binding, bindingErr = DeclaredGoPackageBinding(*options.ModuleInventory, entry.Path, file.Name.Name)
+		}
 		if bindingErr != nil {
 			return bindingErr
 		}
-		if strings.HasSuffix(entry.Path, "_test.go") && strings.HasSuffix(file.Name.Name, "_test") {
+		if binding.IdentityKind == goCorpusSourceLocalV1 && strings.HasSuffix(entry.Path, "_test.go") && strings.HasSuffix(file.Name.Name, "_test") {
 			basePackageName := strings.TrimSuffix(file.Name.Name, "_test")
 			baseBinding, err := SourceLocalGoPackageBinding(source.RepositoryID, entry.Path, basePackageName)
 			if err != nil {
@@ -260,7 +283,7 @@ func CollectCommittedGoCorpus(ctx context.Context, identity repository.Identity,
 		trial := make([]GoGraphFileInput, 0, len(graphInputs)+1)
 		trial = append(trial, graphInputs...)
 		trial = append(trial, input)
-		fits, fitErr := goCorpusGraphFits(source.RepositoryID, stream.producerHash, trial)
+		fits, fitErr := goCorpusGraphFitsWithModules(source.RepositoryID, stream.producerHash, trial, options.ModuleInventory)
 		if fitErr != nil {
 			return GoCommittedCorpus{}, fitErr
 		}
@@ -283,7 +306,11 @@ func CollectCommittedGoCorpus(ctx context.Context, identity repository.Identity,
 }
 
 func goCorpusGraphFits(sourceID, producer string, files []GoGraphFileInput) (bool, error) {
-	graph, err := BuildGoEngineeringGraph(GoGraphSnapshotInput{SourceID: sourceID, ProducerSHA256: producer, Files: files, Generators: []GoGeneratorBinding{}})
+	return goCorpusGraphFitsWithModules(sourceID, producer, files, nil)
+}
+
+func goCorpusGraphFitsWithModules(sourceID, producer string, files []GoGraphFileInput, inventory *GoModuleInventory) (bool, error) {
+	graph, err := BuildGoEngineeringGraph(GoGraphSnapshotInput{SourceID: sourceID, ProducerSHA256: producer, Files: files, Generators: []GoGeneratorBinding{}, ModuleInventory: inventory})
 	if err != nil {
 		if err.Error() == "JSON size or UTF-8 invalid" || strings.Contains(err.Error(), "exceeds") {
 			return false, nil

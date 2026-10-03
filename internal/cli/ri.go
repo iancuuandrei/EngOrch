@@ -13,9 +13,12 @@ import (
 
 func riCommand(ctx context.Context, root string, args []string, out io.Writer) error {
 	if len(args) < 1 {
-		return errors.New("ri requires facts, graph, context, topology, status, coverage, deps, rdeps or path")
+		return errors.New("ri requires facts, modules, graph, context, topology, status, coverage, deps, rdeps or path")
 	}
 	operation := args[0]
+	if operation == "modules" {
+		return riGoModulesCommand(ctx, root, args, out)
+	}
 	if operation == "facts" {
 		return riGoFactsCommand(ctx, root, args, out)
 	}
@@ -48,7 +51,7 @@ func riCommand(ctx context.Context, root string, args []string, out io.Writer) e
 	}
 	valid := (operation == "path" && len(args) == 12) || (operation == "status" && len(args) == 5) || (operation == "coverage" && len(args) == 8) || ((operation == "deps" || operation == "rdeps" || operation == "definition" || operation == "references") && (len(args) == 8 || len(args) == 9))
 	if !valid {
-		return errors.New("usage: ri facts EXE EXE_SHA256 PATH [CACHE_DIR]; ri graph EXE EXE_SHA256 SPEC_JSON [CACHE_DIR]; ri context EXE EXE_SHA256 SPEC_JSON OBJECTIVE [CACHE_DIR]; ri topology EXE EXE_SHA256 SPEC_JSON CHANGED_PATHS_JSON MAX_GROUP_FILES [CACHE_DIR]; ri status|coverage|deps|rdeps|path EXE EXE_SHA256 SNAPSHOT SNAPSHOT_ID; coverage adds NODE RELATION DIRECTION; deps/rdeps add NODE PRODUCER LIMIT [CURSOR]; path adds FROM TO RELATION DIRECTION PRODUCER MAX_DEPTH MAX_EDGES")
+		return errors.New("usage: ri modules; ri facts EXE EXE_SHA256 PATH [CACHE_DIR]; ri graph EXE EXE_SHA256 SPEC_JSON [CACHE_DIR]; ri context EXE EXE_SHA256 SPEC_JSON OBJECTIVE [CACHE_DIR]; ri topology EXE EXE_SHA256 SPEC_JSON CHANGED_PATHS_JSON MAX_GROUP_FILES [CACHE_DIR]; ri status|coverage|deps|rdeps|path EXE EXE_SHA256 SNAPSHOT SNAPSHOT_ID; coverage adds NODE RELATION DIRECTION; deps/rdeps add NODE PRODUCER LIMIT [CURSOR]; path adds FROM TO RELATION DIRECTION PRODUCER MAX_DEPTH MAX_EDGES")
 	}
 	cfg, err := configuration(root)
 	if err != nil {
@@ -133,6 +136,25 @@ func riCommand(ctx context.Context, root string, args []string, out io.Writer) e
 		return err
 	}
 	return output(out, result)
+}
+
+func riGoModulesCommand(ctx context.Context, root string, args []string, out io.Writer) error {
+	if len(args) != 1 {
+		return errors.New("usage: ri modules")
+	}
+	cfg, err := configuration(root)
+	if err != nil {
+		return err
+	}
+	identity, err := repository.Discover(ctx, root, cfg.Repository)
+	if err != nil {
+		return err
+	}
+	inventory, err := ri.CollectGoModuleInventory(ctx, identity)
+	if err != nil {
+		return err
+	}
+	return output(out, inventory)
 }
 
 func riAbsolutePath(root, path string) (string, error) {

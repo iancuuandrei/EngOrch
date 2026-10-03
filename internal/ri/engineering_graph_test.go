@@ -1,13 +1,18 @@
 package ri
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"harness.local/engorch/internal/canonical"
+	"harness.local/engorch/internal/repository"
 )
 
 func graphInput(path, source string, pkg GoPackageBinding, declarations []GoSymbol, imports []GoImport, calls []GoCall, markers []string, producer string) GoGraphFileInput {
@@ -434,4 +439,157 @@ func hasGoDeclaration(graph GoEngineeringGraph, path, name string) bool {
 		}
 	}
 	return false
+}
+
+func TestBuildGoEngineeringGraphWithDeclaredModuleInventory(t *testing.T) {
+	root := t.TempDir()
+	files := map[string][]byte{
+		"go.mod":          []byte("module example.com/root\n\ngo 1.27\n"),
+		"api/a.go":        []byte("package api\nfunc A() {}\n"),
+		"api/a_test.go":   []byte("package api_test\n"),
+		"nested/go.mod":   []byte("module example.com/nested\n\ngo 1.27\n"),
+		"nested/pkg/b.go": []byte("package pkg\nfunc B() {}\n"),
+		"cmd/use.go":      []byte("package cmd\nimport (\n \"example.com/root/api\"\n \"example.com/nested/pkg\"\n)\nfunc Use() { api.A(); pkg.B() }\n"),
+	}
+	initGoCorpusGit(t, root, files)
+	identity, err := repository.Discover(context.Background(), root, "module-graph")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory, err := CollectGoModuleInventory(context.Background(), identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateGoModuleInventory(inventory, identity); err != nil {
+		t.Fatal(err)
+	}
+	producer := strings.Repeat("b", 64)
+	sourceID, err := identity.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs := make([]GoGraphFileInput, 0, 4)
+	for _, name := range []string{"api/a.go", "api/a_test.go", "nested/pkg/b.go", "cmd/use.go"} {
+		content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		packageName := "api"
+		switch name {
+		case "api/a_test.go":
+			packageName = "api_test"
+		case "nested/pkg/b.go":
+			packageName = "pkg"
+		case "cmd/use.go":
+			packageName = "cmd"
+		}
+		binding, err := DeclaredGoPackageBinding(inventory, name, packageName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		imports := []GoImport(nil)
+		if name == "cmd/use.go" {
+			text := string(content)
+			imports = []GoImport{{Path: "example.com/root/api", Range: graphSpan(text, `"example.com/root/api"`, 0)}, {Path: "example.com/nested/pkg", Range: graphSpan(text, `"example.com/nested/pkg"`, 0)}}
+		}
+		inputs = append(inputs, graphInput(name, string(content), binding, nil, imports, nil, nil, producer))
+	}
+	for _, input := range inputs {
+		if err := validateGoPackageBinding(input.Package, input.Facts.Path, sourceID, &inventory); err != nil {
+			t.Fatalf("binding %s invalid: %+v: %v", input.Facts.Path, input.Package, err)
+		}
+	}
+	graph, err := BuildGoEngineeringGraph(GoGraphSnapshotInput{SourceID: sourceID, ProducerSHA256: producer, Files: inputs, ModuleInventory: &inventory})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateGoEngineeringGraph(graph); err != nil {
+		t.Fatal(err)
+	}
+	if graph.ModuleInventory == nil || graph.ModuleInventory.Digest != inventory.Digest || !hasGoEdge(graph.Edges, "DECLARED_OWNERSHIP", "api/a.go", "DECLARED_MODULE_V1") {
+		t.Fatalf("declared inventory evidence is missing from graph: %+v", graph.ModuleInventory)
+	}
+	apiID := graphPackageNodeID("example.com/root/api")
+	if !hasGraphEdgeTarget(graph.Edges, "IMPORTS", "cmd/use.go", apiID) {
+		t.Fatal("unique declared package import did not map to observed package")
+	}
+	var apiTest GoGraphFile
+	for _, file := range graph.Files {
+		if file.Facts.Path == "api/a_test.go" {
+			apiTest = file
+		}
+	}
+	if apiTest.Package.PackageIdentity == "" || graphPackageBindingNodeID(apiTest.Package) == apiID || !hasGraphEdgeTarget(graph.Edges, "TESTS", "api/a_test.go", apiID) {
+		t.Fatal("external test package did not retain a distinct declared identity")
+	}
+	replayedBytes, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var replayed GoEngineeringGraph
+	if err := json.Unmarshal(replayedBytes, &replayed); err != nil || ValidateGoEngineeringGraph(replayed) != nil {
+		t.Fatalf("declared inventory graph did not survive pure replay: %v", err)
+	}
+
+	if _, err := BuildGoEngineeringGraph(GoGraphSnapshotInput{SourceID: sourceID, CandidateID: strings.Repeat("c", 64), ProducerSHA256: producer, Files: inputs, ModuleInventory: &inventory}); err == nil {
+		t.Fatal("candidate graph accepted a base-only module inventory")
+	}
+	if _, err := ApplyGoEngineeringOverlay(graph, GoGraphOverlayInput{BaseDigest: graph.Digest, CandidateID: strings.Repeat("c", 64), ProducerSHA256: producer}); err == nil {
+		t.Fatal("module-backed graph accepted a candidate overlay without manifest closure")
+	}
+	tampered := inventory
+	tampered.Digest = strings.Repeat("f", 64)
+	if _, err := BuildGoEngineeringGraph(GoGraphSnapshotInput{SourceID: sourceID, ProducerSHA256: producer, Files: inputs, ModuleInventory: &tampered}); err == nil {
+		t.Fatal("tampered module inventory was accepted")
+	}
+}
+
+func TestDeclaredGoPackageBindingFallsBackForIncompleteNestedModule(t *testing.T) {
+	root := t.TempDir()
+	initGoCorpusGit(t, root, map[string][]byte{
+		"go.mod":          []byte("module example.com/root\n"),
+		"nested/go.mod":   []byte("module example.com/nested\n"),
+		"nested/pkg/a.go": []byte("package pkg\n"),
+	})
+	identity, err := repository.Discover(context.Background(), root, "module-fallback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory, err := CollectGoModuleInventory(context.Background(), identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicate := cloneGoModuleInventory(inventory)
+	for i := range duplicate.Files {
+		if duplicate.Files[i].Path == "nested/go.mod" {
+			duplicate.Files[i].ModulePath = "example.com/root"
+		}
+	}
+	if err := finalizeGoModuleInventory(&duplicate); err != nil {
+		t.Fatal(err)
+	}
+	duplicateBinding, err := DeclaredGoPackageBinding(duplicate, "nested/pkg/a.go", "pkg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicateBinding.IdentityKind != "source_local_v1" {
+		t.Fatalf("duplicate declared module path was treated as uniquely import-resolvable: %+v", duplicateBinding)
+	}
+	for i := range inventory.Files {
+		if inventory.Files[i].Path == "nested/go.mod" {
+			inventory.Files[i].Status = "invalid"
+			inventory.Files[i].ModulePath = ""
+			inventory.Coverage = "partial"
+		}
+	}
+	if err := finalizeGoModuleInventory(&inventory); err != nil {
+		t.Fatal(err)
+	}
+	binding, err := DeclaredGoPackageBinding(inventory, "nested/pkg/a.go", "pkg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.IdentityKind != "source_local_v1" || binding.ImportPath != "" {
+		t.Fatalf("incomplete nested module incorrectly inherited ancestor ownership: %+v", binding)
+	}
 }

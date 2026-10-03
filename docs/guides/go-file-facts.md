@@ -29,18 +29,53 @@ fabric --root D:\src\project ri facts D:\tools\engorch-ri.exe <exe-sha256> inter
 
 ## Explicit Go graph and task context
 
+`fabric ri modules` emits a bounded `GoModuleInventory` for the configured
+repository's exact committed tree. It records parsed declarations and safe
+omissions for committed `go.mod`, `go.work`, and `vendor/modules.txt` files,
+including the repository ID, commit, tree and inventory digest. It does not
+read dirty manifest contents, run Go, select a workspace or vendor mode, or
+resolve dependencies. `coverage: partial` and per-file omission statuses must
+remain visible; a partial inventory does not establish that an unobserved
+module declaration is absent.
+
+The output can be embedded as `module_inventory` in a graph spec. The inventory
+is bound to its source ID, commit and tree; a spec from another committed
+source is rejected. When supplied, graph package identities are derived from
+the committed module declarations and each Go file's package clause. Explicit
+`import_path` and `module_path` fields may be omitted in that mode; if supplied,
+they must agree with the declaration. The resulting graph is still a committed
+base graph with an empty candidate ID. Candidate overlays require their own
+manifest closure and are not created by this command.
+
+For example, PowerShell can embed the exact command output without manually
+copying its source identity or digest:
+
+```powershell
+$inventoryJson = (& fabric --root D:\src\project ri modules) -join "`n"
+[System.IO.File]::WriteAllText('modules.json', $inventoryJson, [System.Text.UTF8Encoding]::new($false))
+$modules = Get-Content modules.json -Raw | ConvertFrom-Json
+$spec = @{
+  files = @(@{ path = 'internal\pkg\api.go' })
+  generators = @()
+  module_inventory = $modules
+}
+[System.IO.File]::WriteAllText('graph-spec.json', ($spec | ConvertTo-Json -Depth 32), [System.Text.UTF8Encoding]::new($false))
+fabric --root D:\src\project ri graph D:\tools\engorch-ri.exe <exe-sha256> graph-spec.json
+```
+
 `fabric ri graph EXE EXE_SHA256 SPEC_JSON [CACHE_DIR]` reads every listed
 regular Go file from the same committed repository snapshot, obtains facts
 through one pinned RI stream, and builds a partial graph. The required spec is
 strict JSON with this shape. Whitespace and object key order are flexible; duplicate
-or unknown members, invalid UTF-8 and malformed values are rejected:
+or unknown members, invalid UTF-8 and malformed values are rejected. The strict
+graph spec, including an embedded module inventory, is limited to 1 MiB:
 
 ```json
 {"files":[{"import_path":"example.invalid/app/pkg","module_path":"example.invalid/app","path":"pkg/api.go"}],"generators":[]}
 ```
 
-Each file needs an explicit import and module path. External test packages may
-also set `test_of_import_path`. Optional generator records contain
+Without `module_inventory`, each file needs an explicit import and module path.
+External test packages may also set `test_of_import_path`. Optional generator records contain
 `generator_path`, `generated_path`, and the exact source `directive`; both
 files and the directive must be present in the bounded corpus. The CLI never
 runs generator commands. Specs reject duplicate JSON members, unlisted or
@@ -48,7 +83,9 @@ sensitive paths, and invalid package identities before parsing begins. The
 corpus is limited to 256 files, 1 MiB per file, and 8 MiB total. The result
 includes repository identity, per-file Git blob/content observations, and the
 graph with `coverage: PARTIAL` and an empty candidate ID for this committed
-base.
+base. With `module_inventory`, the import and module paths may be omitted and
+are instead derived from the package clause plus the unique deepest committed
+module declaration.
 
 `fabric ri context EXE EXE_SHA256 SPEC_JSON OBJECTIVE [CACHE_DIR]` uses the
 same committed corpus and graph builder, then runs the existing bounded task

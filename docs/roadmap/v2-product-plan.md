@@ -161,3 +161,47 @@ integrated increment, without resurrecting a G0 promotion ladder.
 - Full clean final-candidate suite, hosted checks, fresh unchanged eight-task
   evaluation, real topology A/B and remaining intelligence/cache/routing/horizon
   capabilities are still required. No v1.1, v1.2 or v2 completion is claimed.
+
+## Frozen checkpoint — v1.0.5 and the next module capability
+
+- `v1.0.5` is frozen at `856ccb0412090a8c065a2510794e1c01370b3b3c`,
+  with automation as both author and committer. Its complete clean Go suite
+  passed, including control (790.445 seconds), CLI and RI. Hosted run
+  `37144231404` passed; unresolved Sonar issues for bot-authored draft PR #16
+  were zero at the check. Public dev contains this candidate; public main
+  remains at `v1.0.2` pending demonstrated coding acceptance benefit.
+- A fresh eight-task evaluation uses the clean v1.0.5 binary
+  `35c0057fa0088046a18107fb0993e36dc19539f5b9dbf6d4d7486bc324514399`
+  and pinned RI engine
+  `c86244aa6becf439eb770b1f4d4c0076ae65411ef15353d4f9300e1a74520ec0`.
+  Preparation used no providers. Evaluation `eval-20261003T184316Z-3951966f`
+  is in progress with unchanged objectives, held-out checks and repair limits;
+  it does not enable isolated writers. No final PASS count is available yet.
+- The next independent capability observes committed Go module/workspace/vendor
+  manifests, derives conservative declared package ownership, and connects it
+  to the existing RI graph and bounded corpus. It preserves the legacy mode
+  and rejects module-backed candidate overlays until manifest closure exists.
+  Dirty manifests cannot change committed-source answers. Independent review
+  approves the helper/graph/corpus slice; full RI with the actual pinned engine
+  passed in 17.884 seconds. CLI exposure, final combined qualification and
+  public integration are still pending.
+- A separate isolated-writer treatment prepared two pinned tasks without
+  provider calls and used the same v1.0.5 binary, context mode and gates, with
+  explicit resource estimates and `MaxParallel=3`. Frozen evaluation
+  `eval-20261003T190119Z-b6bfcb7a` completed 0/2 PASS: both runs BLOCKED in
+  IMPLEMENTING. This is a failed treatment, not a parallelism speed/quality
+  improvement. Its journals are preserved; diagnosis is read-only and these
+  runs are not relaunched. The serial eight-task evaluation remains separate.
+- Module CLI review found that sensitive/protected manifests could enter the
+  selected-source batch. A bounded path-policy fix and regression fixtures
+  are required before this module increment can be integrated.
+- The module path-policy repair is now implemented: sensitive/unsafe paths
+  are redacted before source batching, and omitted manifests supply no content
+  declarations or blob/hash metadata. Ownership remains ambiguous where a
+  manifest was omitted. The final focused pinned-engine module/corpus/CLI
+  regressions passed (CLI 2.272 s, RI 6.041 s); unfiltered doccheck passed
+  (0.302 s). Module CLI previously passed its full suite (82.468 s).
+- Final independent module/CLI review approves the privacy repair and committed
+  inventory re-collection. The next increment is ready to freeze for a clean
+  full-suite run. The separate graph-only semantic adapter is reviewed, but is
+  retained for the following increment and does not change this freeze.

@@ -36,8 +36,9 @@ type GoGraphFileInput struct {
 	Package GoPackageBinding `json:"package"`
 }
 
-// GoPackageBinding is caller-supplied repository/package metadata. ImportPath
-// is matched exactly; the graph never infers module ownership from go.mod.
+// GoPackageBinding is explicit repository/package metadata. ImportPath is
+// matched exactly; declared_module_v1 bindings additionally require a matching
+// committed module inventory. Neither mode establishes active build resolution.
 // TestOfImportPath is explicit metadata for an external-test package; an
 // internal *_test.go file is associated with its own supplied ImportPath.
 type GoPackageBinding struct {
@@ -50,6 +51,61 @@ type GoPackageBinding struct {
 	PackageName           string `json:"package_name,omitempty"`
 	PackageIdentity       string `json:"package_identity,omitempty"`
 	TestOfPackageIdentity string `json:"test_of_package_identity,omitempty"`
+	ModuleRoot            string `json:"module_root,omitempty"`
+	ManifestPath          string `json:"manifest_path,omitempty"`
+	InventoryDigest       string `json:"inventory_digest,omitempty"`
+}
+
+// DeclaredGoPackageBinding derives a package binding from a validated
+// committed module inventory. It falls back to the established source-local
+// identity whenever the inventory cannot establish one unique deepest module.
+// It records declarations only and does not claim active Go build resolution.
+func DeclaredGoPackageBinding(inventory GoModuleInventory, sourcePath, packageName string) (GoPackageBinding, error) {
+	if err := ValidateGoModuleInventoryRecord(inventory); err != nil {
+		return GoPackageBinding{}, err
+	}
+	ownership, err := GoModuleOwnershipForPath(inventory, sourcePath)
+	if err != nil {
+		return GoPackageBinding{}, err
+	}
+	if ownership.Status != "declared_module" {
+		return SourceLocalGoPackageBinding(inventory.RepositoryID, sourcePath, packageName)
+	}
+	if !declaredModulePathUnique(inventory, ownership.ModulePath) {
+		return SourceLocalGoPackageBinding(inventory.RepositoryID, sourcePath, packageName)
+	}
+	if !validGoPackageName(packageName) || !validGoImportPath(ownership.ModulePath) || !validGoImportPath(ownership.ImportPath) || safepath.Relative(sourcePath) != nil {
+		return GoPackageBinding{}, errors.New("invalid declared Go package ownership")
+	}
+	manifestPath := path.Join(ownership.ModuleRoot, "go.mod")
+	if ownership.ModuleRoot == "" {
+		manifestPath = "go.mod"
+	}
+	binding := GoPackageBinding{
+		ImportPath: ownership.ImportPath, ModulePath: ownership.ModulePath,
+		IdentityKind: "declared_module_v1", SourceID: inventory.RepositoryID,
+		SourceDirectory: path.Dir(sourcePath), PackageName: packageName,
+		ModuleRoot: ownership.ModuleRoot, ManifestPath: manifestPath, InventoryDigest: inventory.Digest,
+	}
+	if strings.HasSuffix(sourcePath, "_test.go") && strings.HasSuffix(packageName, "_test") {
+		binding.TestOfImportPath = ownership.ImportPath
+		identity, err := declaredGoPackageIdentity(binding)
+		if err != nil {
+			return GoPackageBinding{}, err
+		}
+		binding.PackageIdentity = identity
+	}
+	return binding, nil
+}
+
+func declaredModulePathUnique(inventory GoModuleInventory, modulePath string) bool {
+	count := 0
+	for _, file := range inventory.Files {
+		if file.Kind == "go_mod" && file.Status == "parsed" && file.ModulePath == modulePath {
+			count++
+		}
+	}
+	return count == 1
 }
 
 // SourceLocalGoPackageBinding creates a stable package identity from an
@@ -91,11 +147,12 @@ type GoGeneratorBinding struct {
 // GoGraphSnapshotInput binds one immutable committed source identity and its
 // RI producer. CandidateID is optional for a base graph and set for candidates.
 type GoGraphSnapshotInput struct {
-	SourceID       string               `json:"source_id"`
-	CandidateID    string               `json:"candidate_id"`
-	ProducerSHA256 string               `json:"producer_sha256"`
-	Files          []GoGraphFileInput   `json:"files"`
-	Generators     []GoGeneratorBinding `json:"generators"`
+	SourceID        string               `json:"source_id"`
+	CandidateID     string               `json:"candidate_id"`
+	ProducerSHA256  string               `json:"producer_sha256"`
+	Files           []GoGraphFileInput   `json:"files"`
+	Generators      []GoGeneratorBinding `json:"generators"`
+	ModuleInventory *GoModuleInventory   `json:"module_inventory,omitempty"`
 }
 
 // GoGraphOverlayInput describes replacement and deletion facts for a new
@@ -147,30 +204,32 @@ type GoGraphEdge struct {
 // source hashes, facts, explicit package bindings, nodes, and edges. Callers
 // receive fresh values; overlay application never mutates the supplied base.
 type GoEngineeringGraph struct {
-	Schema         string               `json:"schema"`
-	SourceID       string               `json:"source_id"`
-	CandidateID    string               `json:"candidate_id"`
-	ProducerSHA256 string               `json:"producer_sha256"`
-	SourceDigest   string               `json:"source_digest"`
-	Coverage       string               `json:"coverage"`
-	Files          []GoGraphFile        `json:"files"`
-	Generators     []GoGeneratorBinding `json:"generators"`
-	Nodes          []GoGraphNode        `json:"nodes"`
-	Edges          []GoGraphEdge        `json:"edges"`
-	Digest         string               `json:"digest"`
+	Schema          string               `json:"schema"`
+	SourceID        string               `json:"source_id"`
+	CandidateID     string               `json:"candidate_id"`
+	ProducerSHA256  string               `json:"producer_sha256"`
+	SourceDigest    string               `json:"source_digest"`
+	Coverage        string               `json:"coverage"`
+	Files           []GoGraphFile        `json:"files"`
+	Generators      []GoGeneratorBinding `json:"generators"`
+	Nodes           []GoGraphNode        `json:"nodes"`
+	Edges           []GoGraphEdge        `json:"edges"`
+	ModuleInventory *GoModuleInventory   `json:"module_inventory,omitempty"`
+	Digest          string               `json:"digest"`
 }
 
 type goEngineeringGraphContent struct {
-	Schema         string               `json:"schema"`
-	SourceID       string               `json:"source_id"`
-	CandidateID    string               `json:"candidate_id"`
-	ProducerSHA256 string               `json:"producer_sha256"`
-	SourceDigest   string               `json:"source_digest"`
-	Coverage       string               `json:"coverage"`
-	Files          []GoGraphFile        `json:"files"`
-	Generators     []GoGeneratorBinding `json:"generators"`
-	Nodes          []GoGraphNode        `json:"nodes"`
-	Edges          []GoGraphEdge        `json:"edges"`
+	Schema          string               `json:"schema"`
+	SourceID        string               `json:"source_id"`
+	CandidateID     string               `json:"candidate_id"`
+	ProducerSHA256  string               `json:"producer_sha256"`
+	SourceDigest    string               `json:"source_digest"`
+	Coverage        string               `json:"coverage"`
+	Files           []GoGraphFile        `json:"files"`
+	Generators      []GoGeneratorBinding `json:"generators"`
+	Nodes           []GoGraphNode        `json:"nodes"`
+	Edges           []GoGraphEdge        `json:"edges"`
+	ModuleInventory *GoModuleInventory   `json:"module_inventory,omitempty"`
 }
 
 // BuildGoEngineeringGraph validates exact source/fact bindings and builds a
@@ -180,11 +239,15 @@ func BuildGoEngineeringGraph(input GoGraphSnapshotInput) (GoEngineeringGraph, er
 	if !lowerDigest(input.SourceID) || (input.CandidateID != "" && !lowerDigest(input.CandidateID)) || !lowerDigest(input.ProducerSHA256) {
 		return GoEngineeringGraph{}, errors.New("Go graph source, candidate, or producer digest is malformed")
 	}
-	files, err := validateGoGraphInputs(input.Files, input.ProducerSHA256, input.SourceID)
+	inventory, err := validateGoGraphModuleInventory(input.ModuleInventory, input.SourceID, input.CandidateID)
 	if err != nil {
 		return GoEngineeringGraph{}, err
 	}
-	return buildGoEngineeringGraph(input.SourceID, input.CandidateID, input.ProducerSHA256, files, input.Generators)
+	files, err := validateGoGraphInputs(input.Files, input.ProducerSHA256, input.SourceID, inventory)
+	if err != nil {
+		return GoEngineeringGraph{}, err
+	}
+	return buildGoEngineeringGraph(input.SourceID, input.CandidateID, input.ProducerSHA256, files, input.Generators, inventory)
 }
 
 // ApplyGoEngineeringOverlay applies candidate-bound replacements/deletions to
@@ -197,10 +260,13 @@ func ApplyGoEngineeringOverlay(base GoEngineeringGraph, overlay GoGraphOverlayIn
 	if overlay.BaseDigest != base.Digest || (overlay.SourceID != "" && overlay.SourceID != base.SourceID) || !lowerDigest(overlay.CandidateID) || (base.CandidateID != "" && overlay.CandidateID == base.CandidateID) || overlay.ProducerSHA256 != base.ProducerSHA256 {
 		return GoEngineeringGraph{}, errors.New("Go graph overlay binding mismatch")
 	}
+	if base.ModuleInventory != nil {
+		return GoEngineeringGraph{}, errors.New("module-backed Go graph overlays require a candidate manifest inventory")
+	}
 	var replacements []GoGraphFile
 	if len(overlay.Replacements) > 0 {
 		var err error
-		replacements, err = validateGoGraphInputs(overlay.Replacements, overlay.ProducerSHA256, base.SourceID)
+		replacements, err = validateGoGraphInputs(overlay.Replacements, overlay.ProducerSHA256, base.SourceID, nil)
 		if err != nil {
 			return GoEngineeringGraph{}, err
 		}
@@ -241,7 +307,7 @@ func ApplyGoEngineeringOverlay(base GoEngineeringGraph, overlay GoGraphOverlayIn
 		files = append(files, file)
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Facts.Path < files[j].Facts.Path })
-	return buildGoEngineeringGraph(base.SourceID, overlay.CandidateID, overlay.ProducerSHA256, files, overlay.Generators)
+	return buildGoEngineeringGraph(base.SourceID, overlay.CandidateID, overlay.ProducerSHA256, files, overlay.Generators, nil)
 }
 
 // ValidateGoEngineeringGraph checks graph structure and its deterministic
@@ -255,7 +321,7 @@ func ValidateGoEngineeringGraph(graph GoEngineeringGraph) error {
 	}
 	totalFacts := 0
 	for i, file := range graph.Files {
-		if err := validateGoGraphFile(file, graph.ProducerSHA256, graph.SourceID); err != nil {
+		if err := validateGoGraphFile(file, graph.ProducerSHA256, graph.SourceID, graph.ModuleInventory); err != nil {
 			return err
 		}
 		if i > 0 && graph.Files[i-1].Facts.Path >= file.Facts.Path {
@@ -280,7 +346,11 @@ func ValidateGoEngineeringGraph(graph GoEngineeringGraph) error {
 	// supplied content as well: matching only the supplied digest would permit
 	// altered nodes/edges with an unchanged digest. No validation result is cached
 	// across mutable caller-owned graphs.
-	expected, err := buildGoEngineeringGraph(graph.SourceID, graph.CandidateID, graph.ProducerSHA256, graph.Files, graph.Generators)
+	inventory, err := validateGoGraphModuleInventory(graph.ModuleInventory, graph.SourceID, graph.CandidateID)
+	if err != nil {
+		return err
+	}
+	expected, err := buildGoEngineeringGraph(graph.SourceID, graph.CandidateID, graph.ProducerSHA256, graph.Files, graph.Generators, inventory)
 	if err != nil || expected.Digest != graph.Digest || !reflect.DeepEqual(expected.content(), graph.content()) {
 		return errors.New("Go engineering graph relations do not match its bound facts")
 	}
@@ -532,7 +602,32 @@ func QueryGoImpact(graph GoEngineeringGraph, query GoImpactQuery) (GoImpactResul
 	return GoImpactResult{Coverage: "PARTIAL", Paths: paths, Truncated: truncated}, nil
 }
 
-func validateGoGraphInputs(inputs []GoGraphFileInput, producer, sourceID string) ([]GoGraphFile, error) {
+func validateGoGraphModuleInventory(inventory *GoModuleInventory, sourceID, candidateID string) (*GoModuleInventory, error) {
+	if inventory == nil {
+		return nil, nil
+	}
+	if candidateID != "" {
+		return nil, errors.New("module-backed Go graph requires a committed base source")
+	}
+	if inventory.RepositoryID != sourceID || ValidateGoModuleInventoryRecord(*inventory) != nil {
+		return nil, errors.New("Go graph module inventory is invalid or source-substituted")
+	}
+	copy := cloneGoModuleInventory(*inventory)
+	return &copy, nil
+}
+
+func cloneGoModuleInventory(inventory GoModuleInventory) GoModuleInventory {
+	copy := inventory
+	copy.Files = append([]GoManifestObservation(nil), inventory.Files...)
+	for i := range copy.Files {
+		copy.Files[i].Requires = append([]GoModuleRequirement(nil), inventory.Files[i].Requires...)
+		copy.Files[i].Replaces = append([]GoModuleReplacement(nil), inventory.Files[i].Replaces...)
+		copy.Files[i].Uses = append([]GoWorkspaceUse(nil), inventory.Files[i].Uses...)
+	}
+	return copy
+}
+
+func validateGoGraphInputs(inputs []GoGraphFileInput, producer, sourceID string, inventory *GoModuleInventory) ([]GoGraphFile, error) {
 	if len(inputs) == 0 || len(inputs) > goEngineeringMaxFiles {
 		return nil, errors.New("Go graph file count is outside bounds")
 	}
@@ -556,7 +651,7 @@ func validateGoGraphInputs(inputs []GoGraphFileInput, producer, sourceID string)
 		if err := validateGoFileFacts(facts, facts.Path, facts.SourceSHA256, producer, input.Source); err != nil {
 			return nil, fmt.Errorf("invalid Go facts for %s: %w", facts.Path, err)
 		}
-		if err := validateGoPackageBinding(input.Package, facts.Path, sourceID); err != nil {
+		if err := validateGoPackageBinding(input.Package, facts.Path, sourceID, inventory); err != nil {
 			return nil, err
 		}
 		files = append(files, GoGraphFile{Facts: normalizeGoGraphFacts(facts), Package: input.Package})
@@ -565,14 +660,14 @@ func validateGoGraphInputs(inputs []GoGraphFileInput, producer, sourceID string)
 	return files, nil
 }
 
-func validateGoGraphFile(file GoGraphFile, producer, sourceID string) error {
+func validateGoGraphFile(file GoGraphFile, producer, sourceID string, inventory *GoModuleInventory) error {
 	if file.Facts.ProducerSHA256 != producer || file.Facts.Path == "" || filepath.Ext(file.Facts.Path) != ".go" || file.Facts.Coverage != "PARTIAL" || file.Facts.Schema != goFactsSchema || file.Facts.Language != "go" || file.Facts.ParserVersion != goFactsParserVersion || !lowerDigest(file.Facts.SourceSHA256) || !lowerDigest(file.Facts.BodySHA256) || !lowerDigest(file.Facts.CacheKey) {
 		return errors.New("Go graph contains an invalid file fact binding")
 	}
 	if err := safepath.Relative(file.Facts.Path); err != nil {
 		return errors.New("Go graph contains an invalid file path")
 	}
-	if err := validateGoPackageBinding(file.Package, file.Facts.Path, sourceID); err != nil {
+	if err := validateGoPackageBinding(file.Package, file.Facts.Path, sourceID, inventory); err != nil {
 		return err
 	}
 	if err := validateNormalizedGoGraphFacts(file.Facts); err != nil {
@@ -620,7 +715,7 @@ func validateNormalizedGoGraphFacts(facts GoFileFacts) error {
 	return nil
 }
 
-func validateGoPackageBinding(binding GoPackageBinding, file, sourceID string) error {
+func validateGoPackageBinding(binding GoPackageBinding, file, sourceID string, inventory *GoModuleInventory) error {
 	if err := safepath.Relative(file); err != nil || filepath.Ext(file) != ".go" {
 		return errors.New("Go graph package binding has an invalid source path")
 	}
@@ -655,6 +750,27 @@ func validateGoPackageBinding(binding GoPackageBinding, file, sourceID string) e
 			expectedTestTarget, err := sourceLocalPackageIdentity(binding.SourceID, binding.SourceDirectory, testTargetName)
 			if err != nil || binding.TestOfPackageIdentity != expectedTestTarget {
 				return errors.New("Go source-local test target identity is invalid")
+			}
+		}
+	case "declared_module_v1":
+		if inventory == nil || binding.SourceID != sourceID || binding.InventoryDigest != inventory.Digest || binding.SourceDirectory != path.Dir(file) || (binding.SourceDirectory != "." && safepath.Relative(binding.SourceDirectory) != nil) || binding.ManifestPath == "" || binding.ManifestPath != path.Join(binding.ModuleRoot, "go.mod") || binding.ModuleRoot != "" && safepath.Relative(binding.ModuleRoot) != nil || !validGoPackageName(binding.PackageName) || !validGoImportPath(binding.ModulePath) || !validGoImportPath(binding.ImportPath) {
+			return errors.New("Go declared-module package binding is invalid")
+		}
+		ownership, err := GoModuleOwnershipForPath(*inventory, file)
+		if err != nil || ownership.Status != "declared_module" || binding.ModuleRoot != ownership.ModuleRoot || binding.ModulePath != ownership.ModulePath || binding.ImportPath != ownership.ImportPath {
+			return errors.New("Go declared-module package ownership differs from inventory")
+		}
+		if binding.TestOfImportPath == "" {
+			if binding.PackageIdentity != "" {
+				return errors.New("unexpected declared-module package identity")
+			}
+		} else {
+			if !strings.HasSuffix(file, "_test.go") || !strings.HasSuffix(binding.PackageName, "_test") || binding.TestOfImportPath != ownership.ImportPath {
+				return errors.New("invalid declared-module external test binding")
+			}
+			expected, err := declaredGoPackageIdentity(binding)
+			if err != nil || binding.PackageIdentity != expected {
+				return errors.New("declared-module external test identity is invalid")
 			}
 		}
 	default:
@@ -692,7 +808,7 @@ func sourceLocalPackageIdentity(sourceID, directory, packageName string) (string
 	return "source_local_v1:" + digest, nil
 }
 
-func buildGoEngineeringGraph(sourceID, candidateID, producer string, files []GoGraphFile, generators []GoGeneratorBinding) (GoEngineeringGraph, error) {
+func buildGoEngineeringGraph(sourceID, candidateID, producer string, files []GoGraphFile, generators []GoGeneratorBinding, inventory *GoModuleInventory) (GoEngineeringGraph, error) {
 	if len(files) == 0 || len(files) > goEngineeringMaxFiles || len(generators) > goEngineeringMaxFacts {
 		return GoEngineeringGraph{}, errors.New("Go graph build input exceeds bounds")
 	}
@@ -701,7 +817,7 @@ func buildGoEngineeringGraph(sourceID, candidateID, producer string, files []GoG
 	packageFiles := make(map[string][]string)
 	totalFacts := 0
 	for _, file := range files {
-		if err := validateGoGraphFile(file, producer, sourceID); err != nil {
+		if err := validateGoGraphFile(file, producer, sourceID, inventory); err != nil {
 			return GoEngineeringGraph{}, err
 		}
 		if _, exists := fileByPath[file.Facts.Path]; exists {
@@ -712,7 +828,7 @@ func buildGoEngineeringGraph(sourceID, candidateID, producer string, files []GoG
 			return GoEngineeringGraph{}, errors.New("Go graph build exceeds aggregate fact budget")
 		}
 		fileByPath[file.Facts.Path] = cloneGoGraphFile(file)
-		if file.Package.IdentityKind == "" {
+		if file.Package.IdentityKind == "" || file.Package.IdentityKind == "declared_module_v1" {
 			packageFiles[file.Package.ImportPath] = append(packageFiles[file.Package.ImportPath], file.Facts.Path)
 		}
 	}
@@ -750,6 +866,9 @@ func buildGoEngineeringGraph(sourceID, candidateID, producer string, files []GoG
 			return GoEngineeringGraph{}, err
 		}
 		addEdge(GoGraphEdge{From: fileID, To: pkgID, Relation: "IN_PACKAGE", Path: path})
+		if file.Package.IdentityKind == "declared_module_v1" {
+			addEdge(GoGraphEdge{From: fileID, To: pkgID, Relation: "DECLARED_OWNERSHIP", Path: path, Resolution: "DECLARED_MODULE_V1"})
+		}
 		if file.Package.IdentityKind == "source_local_v1" {
 			if file.Package.TestOfPackageIdentity != "" {
 				testPkgID := graphSourceLocalPackageNodeID(file.Package.TestOfPackageIdentity)
@@ -854,6 +973,10 @@ func buildGoEngineeringGraph(sourceID, candidateID, producer string, files []GoG
 		return GoEngineeringGraph{}, err
 	}
 	graph := GoEngineeringGraph{Schema: goEngineeringGraphSchema, SourceID: sourceID, CandidateID: candidateID, ProducerSHA256: producer, SourceDigest: sourceDigest, Coverage: "PARTIAL", Files: files, Generators: append([]GoGeneratorBinding{}, generators...), Nodes: nodes, Edges: edges}
+	if inventory != nil {
+		copy := cloneGoModuleInventory(*inventory)
+		graph.ModuleInventory = &copy
+	}
 	graph.Digest, err = canonical.Hash("harness.ri.go-engineering-graph.v1", graph.content())
 	if err != nil {
 		return GoEngineeringGraph{}, err
@@ -862,7 +985,7 @@ func buildGoEngineeringGraph(sourceID, candidateID, producer string, files []GoG
 }
 
 func (g GoEngineeringGraph) content() goEngineeringGraphContent {
-	return goEngineeringGraphContent{Schema: g.Schema, SourceID: g.SourceID, CandidateID: g.CandidateID, ProducerSHA256: g.ProducerSHA256, SourceDigest: g.SourceDigest, Coverage: g.Coverage, Files: g.Files, Generators: g.Generators, Nodes: g.Nodes, Edges: g.Edges}
+	return goEngineeringGraphContent{Schema: g.Schema, SourceID: g.SourceID, CandidateID: g.CandidateID, ProducerSHA256: g.ProducerSHA256, SourceDigest: g.SourceDigest, Coverage: g.Coverage, Files: g.Files, Generators: g.Generators, Nodes: g.Nodes, Edges: g.Edges, ModuleInventory: g.ModuleInventory}
 }
 
 func normalizeGoGraphFacts(facts GoFileFacts) GoFileFacts {
@@ -932,16 +1055,39 @@ func graphPackageBindingNodeID(binding GoPackageBinding) string {
 	if binding.IdentityKind == "source_local_v1" {
 		return graphSourceLocalPackageNodeID(binding.PackageIdentity)
 	}
+	if binding.IdentityKind == "declared_module_v1" && binding.PackageIdentity != "" {
+		return graphDeclaredModulePackageNodeID(binding.PackageIdentity)
+	}
 	return graphPackageNodeID(binding.ImportPath)
 }
 func graphSourceLocalPackageNodeID(identity string) string {
 	return "source-package:" + strings.TrimPrefix(identity, "source_local_v1:")
 }
+func graphDeclaredModulePackageNodeID(identity string) string {
+	return "declared-package:" + strings.TrimPrefix(identity, "declared_module_v1:")
+}
 func graphPackageNodeKindLabel(binding GoPackageBinding) (string, string) {
 	if binding.IdentityKind == "source_local_v1" {
 		return "source_local_package", binding.PackageIdentity
 	}
+	if binding.IdentityKind == "declared_module_v1" && binding.PackageIdentity != "" {
+		return "declared_module_external_test_package", binding.PackageIdentity
+	}
 	return "package", binding.ImportPath
+}
+
+func declaredGoPackageIdentity(binding GoPackageBinding) (string, error) {
+	digest, err := canonical.Hash("harness.ri.declared-go-external-test-package.v1", struct {
+		SourceID        string `json:"source_id"`
+		InventoryDigest string `json:"inventory_digest"`
+		ModuleRoot      string `json:"module_root"`
+		Directory       string `json:"directory"`
+		PackageName     string `json:"package_name"`
+	}{binding.SourceID, binding.InventoryDigest, binding.ModuleRoot, binding.SourceDirectory, binding.PackageName})
+	if err != nil {
+		return "", err
+	}
+	return "declared_module_v1:" + digest, nil
 }
 func graphSymbolNodeID(path string, symbol GoSymbol) string {
 	id, _ := canonical.Hash("harness.ri.go-symbol-node.v1", map[string]any{"path": path, "name": symbol.Name, "kind": symbol.Kind, "range": symbol.Range, "test": symbol.Test})

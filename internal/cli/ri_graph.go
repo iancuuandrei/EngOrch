@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"path"
@@ -20,7 +22,7 @@ import (
 )
 
 const (
-	goGraphSpecMaxBytes     = 256 << 10
+	goGraphSpecMaxBytes     = canonical.MaxBytes
 	goGraphMaxFiles         = 256
 	goGraphMaxBytes         = 8 << 20
 	goGraphMaxFileBytes     = 1 << 20
@@ -29,8 +31,9 @@ const (
 )
 
 type goGraphSpec struct {
-	Files      []goGraphFileSpec       `json:"files"`
-	Generators []ri.GoGeneratorBinding `json:"generators"`
+	Files           []goGraphFileSpec       `json:"files"`
+	Generators      []ri.GoGeneratorBinding `json:"generators"`
+	ModuleInventory *ri.GoModuleInventory   `json:"module_inventory,omitempty"`
 }
 
 type goGraphFileSpec struct {
@@ -229,6 +232,18 @@ func buildGoGraph(ctx context.Context, root, executableArg, executableHash, spec
 	if err != nil {
 		return empty, err
 	}
+	if spec.ModuleInventory != nil {
+		if err := ri.ValidateGoModuleInventory(*spec.ModuleInventory, identity); err != nil {
+			return empty, fmt.Errorf("Go graph module inventory is not bound to the configured committed source: %w", err)
+		}
+		committedInventory, err := ri.CollectGoModuleInventory(ctx, identity)
+		if err != nil {
+			return empty, fmt.Errorf("revalidate committed Go module inventory: %w", err)
+		}
+		if committedInventory.Digest != spec.ModuleInventory.Digest {
+			return empty, errors.New("Go graph module inventory differs from the configured committed source")
+		}
+	}
 	executable, err := riAbsolutePath(root, executableArg)
 	if err != nil {
 		return empty, err
@@ -287,12 +302,15 @@ func buildGoGraph(ctx context.Context, root, executableArg, executableHash, spec
 		if err != nil {
 			return empty, fmt.Errorf("parse committed Go source %q: %w", sourceFile.spec.Path, err)
 		}
-		binding := ri.GoPackageBinding{ImportPath: sourceFile.spec.ImportPath, ModulePath: sourceFile.spec.ModulePath, TestOfImportPath: sourceFile.spec.TestOfImportPath}
+		binding, err := graphPackageBinding(sourceFile.spec, sourceFile.bytes, source.RepositoryID, spec.ModuleInventory)
+		if err != nil {
+			return empty, fmt.Errorf("derive package identity for committed Go source %q: %w", sourceFile.spec.Path, err)
+		}
 		graphInputs = append(graphInputs, ri.GoGraphFileInput{Facts: facts, Source: sourceFile.bytes, Package: binding})
 		observations = append(observations, goGraphSourceObservation{Source: sourceFile.digest})
 		contextFiles = append(contextFiles, taskcontext.File{Path: sourceFile.spec.Path, Hash: sourceFile.digest.SHA256, Content: sourceFile.bytes})
 	}
-	graph, err := ri.BuildGoEngineeringGraph(ri.GoGraphSnapshotInput{SourceID: source.RepositoryID, ProducerSHA256: executableHash, Files: graphInputs, Generators: spec.Generators})
+	graph, err := ri.BuildGoEngineeringGraph(ri.GoGraphSnapshotInput{SourceID: source.RepositoryID, ProducerSHA256: executableHash, Files: graphInputs, Generators: spec.Generators, ModuleInventory: spec.ModuleInventory})
 	if err != nil {
 		return empty, err
 	}
@@ -316,11 +334,11 @@ func readGoGraphSpec(path string) (goGraphSpec, error) {
 		return spec, err
 	}
 	if !info.Mode().IsRegular() || info.Size() > goGraphSpecMaxBytes {
-		return spec, errors.New("Go graph spec must be a regular file no larger than 256 KiB")
+		return spec, errors.New("Go graph spec must be a regular file no larger than 1 MiB")
 	}
 	raw, err := io.ReadAll(io.LimitReader(file, goGraphSpecMaxBytes+1))
 	if err != nil || len(raw) > goGraphSpecMaxBytes {
-		return spec, errors.New("Go graph spec exceeds 256 KiB or could not be read")
+		return spec, errors.New("Go graph spec exceeds 1 MiB or could not be read")
 	}
 	normal, err := canonical.Normalize(raw)
 	if err != nil {
@@ -336,6 +354,11 @@ func validateGoGraphSpec(spec goGraphSpec) error {
 	if len(spec.Files) == 0 || len(spec.Files) > goGraphMaxFiles || len(spec.Generators) > goGraphMaxFiles {
 		return errors.New("Go graph spec must contain 1 to 256 files and bounded relations")
 	}
+	if spec.ModuleInventory != nil {
+		if err := ri.ValidateGoModuleInventoryRecord(*spec.ModuleInventory); err != nil {
+			return fmt.Errorf("Go graph spec module inventory is invalid: %w", err)
+		}
+	}
 	paths := make(map[string]bool, len(spec.Files))
 	for _, file := range spec.Files {
 		if err := safepath.Relative(file.Path); err != nil || filepath.Ext(file.Path) != ".go" || len(file.Path) > 4096 {
@@ -348,8 +371,12 @@ func validateGoGraphSpec(spec goGraphSpec) error {
 			return fmt.Errorf("Go graph spec repeats path %q", file.Path)
 		}
 		paths[file.Path] = true
-		if !validGoImportPathCLI(file.ImportPath) || !validGoImportPathCLI(file.ModulePath) || (file.ImportPath != file.ModulePath && !strings.HasPrefix(file.ImportPath, strings.TrimSuffix(file.ModulePath, "/")+"/")) {
-			return fmt.Errorf("Go graph spec has invalid explicit package identity for %q", file.Path)
+		if spec.ModuleInventory == nil {
+			if !validGoImportPathCLI(file.ImportPath) || !validGoImportPathCLI(file.ModulePath) || (file.ImportPath != file.ModulePath && !strings.HasPrefix(file.ImportPath, strings.TrimSuffix(file.ModulePath, "/")+"/")) {
+				return fmt.Errorf("Go graph spec has invalid explicit package identity for %q", file.Path)
+			}
+		} else if (file.ImportPath == "") != (file.ModulePath == "") || (file.ImportPath != "" && (!validGoImportPathCLI(file.ImportPath) || !validGoImportPathCLI(file.ModulePath) || (file.ImportPath != file.ModulePath && !strings.HasPrefix(file.ImportPath, strings.TrimSuffix(file.ModulePath, "/")+"/")))) {
+			return fmt.Errorf("Go graph spec has invalid optional package identity for module-backed file %q", file.Path)
 		}
 		if file.TestOfImportPath != "" && (!validGoImportPathCLI(file.TestOfImportPath) || !strings.HasSuffix(file.Path, "_test.go")) {
 			return fmt.Errorf("Go graph spec has invalid external-test identity for %q", file.Path)
@@ -361,6 +388,24 @@ func validateGoGraphSpec(spec goGraphSpec) error {
 		}
 	}
 	return nil
+}
+
+func graphPackageBinding(spec goGraphFileSpec, source []byte, sourceID string, inventory *ri.GoModuleInventory) (ri.GoPackageBinding, error) {
+	if inventory == nil {
+		return ri.GoPackageBinding{ImportPath: spec.ImportPath, ModulePath: spec.ModulePath, TestOfImportPath: spec.TestOfImportPath}, nil
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), spec.Path, source, parser.PackageClauseOnly)
+	if err != nil || parsed == nil || parsed.Name == nil {
+		return ri.GoPackageBinding{}, errors.New("package clause is unavailable")
+	}
+	binding, err := ri.DeclaredGoPackageBinding(*inventory, spec.Path, parsed.Name.Name)
+	if err != nil {
+		return ri.GoPackageBinding{}, err
+	}
+	if (spec.ImportPath != "" && spec.ImportPath != binding.ImportPath) || (spec.ModulePath != "" && spec.ModulePath != binding.ModulePath) || (spec.TestOfImportPath != "" && spec.TestOfImportPath != binding.TestOfImportPath) {
+		return ri.GoPackageBinding{}, errors.New("explicit package identity differs from committed module ownership")
+	}
+	return binding, nil
 }
 
 func validGoImportPathCLI(value string) bool {
