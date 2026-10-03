@@ -328,18 +328,63 @@ func goCorpusGraphFitsWithModules(sourceID, producer string, files []GoGraphFile
 		}
 		return false, fmt.Errorf("committed Go graph admission failed: %w", err)
 	}
-	encoded, err := json.Marshal(graph)
+	canonicalSize, err := goCorpusCanonicalJSONSize(graph)
 	if err != nil {
 		return false, err
 	}
-	canonicalBytes, err := canonical.Normalize(encoded)
-	if err != nil {
-		if err.Error() == "JSON size or UTF-8 invalid" {
-			return false, nil
+	return canonicalSize <= goCorpusMaxGraphBytes, nil
+}
+
+// goCorpusCanonicalJSONSize returns the byte length of canonical JSON without
+// decoding and re-encoding the already validated typed graph. encoding/json
+// escapes U+2028 and U+2029 for JavaScript compatibility; canonical v1 emits
+// those UTF-8 runes directly, so each such escape reduces the canonical length
+// by three bytes. HTML escaping is disabled because canonical v1 keeps <, >, &.
+func goCorpusCanonicalJSONSize(value any) (int, error) {
+	var encoded bytes.Buffer
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return 0, err
+	}
+	raw := encoded.Bytes()
+	if len(raw) == 0 || raw[len(raw)-1] != '\n' {
+		return 0, errors.New("JSON encoder did not terminate the value")
+	}
+	size := len(raw) - 1 // Encoder.Encode appends one newline not present in canonical v1.
+	for index := 0; index < len(raw)-1; {
+		if raw[index] != '"' {
+			index++
+			continue
 		}
-		return false, err
+		index++
+		for index < len(raw)-1 && raw[index] != '"' {
+			if raw[index] != '\\' {
+				index++
+				continue
+			}
+			if index+1 >= len(raw)-1 {
+				return 0, errors.New("JSON encoder emitted an incomplete escape")
+			}
+			if raw[index+1] == 'u' {
+				if index+6 > len(raw)-1 {
+					return 0, errors.New("JSON encoder emitted an incomplete unicode escape")
+				}
+				escape := raw[index+2 : index+6]
+				if bytes.Equal(escape, []byte("2028")) || bytes.Equal(escape, []byte("2029")) {
+					size -= 3 // six ASCII escape bytes become one three-byte UTF-8 rune.
+				}
+				index += 6
+				continue
+			}
+			index += 2
+		}
+		if index >= len(raw)-1 {
+			return 0, errors.New("JSON encoder emitted an unterminated string")
+		}
+		index++
 	}
-	return len(canonicalBytes) <= goCorpusMaxGraphBytes, nil
+	return size, nil
 }
 
 func goCorpusEntries(candidates []goCorpusCandidate) []repository.SourceEntry {

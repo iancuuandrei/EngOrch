@@ -305,3 +305,49 @@ integrated increment, without resurrecting a G0 promotion ladder.
 - Contract evidence compilation and automatic compaction observation are
   separate unintegrated candidates. The v2 goal remains active and fixed-six
   acceptance remains 5/6 until fresh qualifying evidence proves otherwise.
+- Frozen v1.0.9 hosted run `37153276332` and PR #18 Sonar/security checks
+  passed; direct Sonar reported zero issues and 1.3% duplication. Main
+  integration still awaits the clean full-suite result.
+- Frozen CPU/RAM diagnostic (five samples) observed process-tree peak working
+  set 290,803,712 bytes and maximum sampled aggregate CPU 31,734.4 ms.
+  Sampling overlapped the full suite; it is not an isolated timing comparison.
+  Pinned humanize allocated roughly 384–389 MB per collection despite only
+  52,828 source bytes. A memory profile traced most allocation to rebuilding
+  and hashing each candidate graph prefix; a separate repair is under review.
+- The v1.0.9 checkpoint CLI read the retained real humanize READY journal
+  `69712c626440b103279f224b9cb8d8a84c254bcc94eb58261f40d058a691760e`:
+  accepted=true, three completed tasks, zero active/uncertain intents,
+  approved review; journal main-file hash was unchanged. The exhausted numeric
+  journal `54311360b3336553475f480104525c1f1d94b25f258be6a89014a1d1839dcff1`
+  remained REPAIRING, accepted=false, zero active/uncertain intents. These are
+  read-only compatibility observations, not a sustained resume qualification.
+- v1.0.9 integrated on public main/dev at
+  `4ec8d0252332618c22a316cc9653d20eaef61497`; bot-authored PR #18 merged.
+  Clean full Go suite PASS with exit 0: control 882.817 s, CLI 106.204 s,
+  RI 70.651 s, worktree 42.762 s; log `v109-clean-full-tests.log`.
+  Frozen PowerShell native-argument/objective harnesses and doccheck passed.
+  Fresh serial/isolation prepared cohorts now proceed under the unchanged
+  objective-v2 task pins, gates and two-repair budgets.
+
+## Checkpoint — v1.0.9 comparison complete; v1.0.10 candidate
+
+- The fresh v1.0.9 serial arm passed Humanize and numeric-text (2/2),
+  including generated-output ownership. The isolated arm passed Humanize but
+  numeric-text exhausted two repairs with its last native check failing (1/2).
+  No uncertain effects remain in that failed run; it is not resumed.
+  See `../evaluation/v1.0.9-isolated-writers.md` for frozen identities and
+  input/cached/uncached/output usage. These two tasks do not replace the
+  fixed-six cohort or qualify isolated scheduling.
+- A measured graph-size counting repair preserves the original greedy file
+  selection and exact graph/context identities. Three local Humanize samples
+  reduced median allocated bytes by 19.5% and allocations by 28.9%; a more
+  aggressive batching prototype regressed time and was discarded. The repair
+  still requires clean qualification of its released increment.
+- The next candidate adds opt-in contract evidence, explicit operator-owned
+  fixer access configuration, bounded objective-focus topology queries and
+  metadata-only native compaction observation. Contract replay must reproduce
+  real source and generation inputs before provider evaluation. Native
+  compaction remains unqualified until a useful live task demonstrates it.
+- The next context comparison uses one frozen candidate binary and objective
+  v2 on both arms, changing only the context mode across the six fixed tasks,
+  godotenv and numeric-text. Budgets and held-out checks stay unchanged.

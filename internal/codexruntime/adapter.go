@@ -181,12 +181,17 @@ func (a *Adapter) Execute(ctx context.Context, i runtime.Invocation) (executionR
 	if err := appendEvent(a.JournalPath, "runtime.stream-terminal", TurnStatus{turn.ID, turn.Status}); err != nil {
 		return runtime.Result{}, err
 	}
-	if turn.Status == "completed" && turn.ItemsView != "" && turn.ItemsView != "full" {
-		if err := appendEvent(a.JournalPath, "runtime.turn-status", TurnStatus{turn.ID, turn.Status}); err != nil {
-			return runtime.Result{}, err
+	if turn.Status == "completed" {
+		if turn.ItemsView != "" && turn.ItemsView != "full" {
+			if err := appendEvent(a.JournalPath, "runtime.turn-status", TurnStatus{turn.ID, turn.Status}); err != nil {
+				return runtime.Result{}, err
+			}
+			turn, err = a.Client.ReadTurn(ctx, thread, turn.ID)
+			if err != nil {
+				return runtime.Result{}, err
+			}
 		}
-		turn, err = a.Client.ReadTurn(ctx, thread, turn.ID)
-		if err != nil {
+		if err := a.recordReadbackCompaction(turn, thread.ThreadID); err != nil {
 			return runtime.Result{}, err
 		}
 	}
@@ -277,6 +282,9 @@ func (a *Adapter) Resume(ctx context.Context, invocationID string) (runtime.Resu
 		if errors.Is(err, codexrpc.ErrRouteIdentityContradiction) {
 			err = errors.Join(err, appendEvent(a.JournalPath, "runtime.route-contradiction", routeFailureEvidence(err, nil)))
 		}
+		return runtime.Result{}, err
+	}
+	if err := a.recordReadbackCompaction(turn, s.Thread.ThreadID); err != nil {
 		return runtime.Result{}, err
 	}
 	return a.finish(s.Intent.Invocation, *s.Thread, turn)

@@ -94,6 +94,9 @@ func normalizeUsage(s *State) UsageNormalized {
 // observeUsage executes on the serial RPC reader before another tool reply.
 // The raw params are durable before normalization or budget mutation.
 func (a *Adapter) observeUsage(m codexrpc.Message) error {
+	if m.Method == "item/started" || m.Method == "item/completed" {
+		return a.observeCompaction(m)
+	}
 	if m.Method != "thread/tokenUsage/updated" {
 		return nil
 	}

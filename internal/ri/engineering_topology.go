@@ -59,6 +59,14 @@ type GoTopologyResult struct {
 // already present in the graph; source-local imports remain unresolved. This
 // read-only query performs no parsing, model calls, tests, or write admission.
 func QueryGoTopology(graph GoEngineeringGraph, changedPaths []string, maxGroupFiles int) (GoTopologyResult, error) {
+	return queryGoTopology(graph, changedPaths, maxGroupFiles, true)
+}
+
+// queryGoTopology is shared by the full changed-path query and the compact
+// objective-focus projection. The latter does not serialize the full module
+// inventory or expose its legacy digest, so it need not inherit the 1 MiB
+// public-result limit before compacting.
+func queryGoTopology(graph GoEngineeringGraph, changedPaths []string, maxGroupFiles int, seal bool) (GoTopologyResult, error) {
 	var out GoTopologyResult
 	if maxGroupFiles < 1 || maxGroupFiles > 32 || len(changedPaths) == 0 || len(changedPaths) > goEngineeringMaxSeeds {
 		return out, errors.New("Go topology query bounds are invalid")
@@ -85,12 +93,14 @@ func QueryGoTopology(graph GoEngineeringGraph, changedPaths []string, maxGroupFi
 	if err != nil {
 		return GoTopologyResult{}, err
 	}
-	out.Digest, err = canonical.Hash("harness.ri.go-topology.v1", out)
-	if err != nil {
-		return GoTopologyResult{}, err
-	}
-	if encoded, encodeErr := canonical.Bytes(out); encodeErr != nil || len(encoded) > 1<<20 {
-		return GoTopologyResult{}, errors.New("Go topology result exceeds bounded output")
+	if seal {
+		out.Digest, err = canonical.Hash("harness.ri.go-topology.v1", out)
+		if err != nil {
+			return GoTopologyResult{}, err
+		}
+		if encoded, encodeErr := canonical.Bytes(out); encodeErr != nil || len(encoded) > 1<<20 {
+			return GoTopologyResult{}, errors.New("Go topology result exceeds bounded output")
+		}
 	}
 	return out, nil
 }

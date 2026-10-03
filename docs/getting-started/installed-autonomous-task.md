@@ -10,7 +10,7 @@ Go 1.27.1 or newer.
 
 ## Download and verify the package
 
-After publication, download `fabric_1.0.0_windows_amd64.zip` from the
+Download `fabric_1.0.0_windows_amd64.zip` from the
 [Fabric v1.0.0 GitHub release](https://github.com/iancuuandrei/Fabric/releases/tag/v1.0.0).
 Check its SHA-256 before extracting:
 
@@ -107,6 +107,17 @@ $run = 'PASTE_RUN_ID_HERE'
 & $fabric inspect $run
 & $fabric diff $run
 & $fabric usage $run
+```
+
+If the run is blocked, inspect its exact state and reconcile any uncertain
+effect before continuing. Resume only when the run is reported resumable and
+has no unresolved unknown effect; pass its recorded ID to continue that same
+run:
+
+```powershell
+& $fabric resume --autonomous $run
+if ($LASTEXITCODE -ne 0) { Write-Warning 'Inspect the run state before taking another action.' }
+& $fabric inspect $run
 ```
 
 `READY` means configured verification passed and the recorded reviewer approved

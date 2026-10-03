@@ -45,6 +45,12 @@ type State struct {
 	UsageFailure   string              `json:"usage_failure,omitempty"`
 	usageTracker   *codexusage.Tracker
 
+	Compaction            *CompactionSummary `json:"compaction,omitempty"`
+	compactionItems       map[string]*compactionItemState
+	compactionEvents      int
+	compactionUnknown     bool
+	compactionUnknownTurn string
+
 	NotificationStreamComplete bool                       `json:"notification_stream_complete,omitempty"`
 	TerminalResponse           *TerminalResponseTelemetry `json:"terminal_response,omitempty"`
 	RouteEvidence              *RouteEvidence             `json:"route_evidence,omitempty"`
@@ -94,6 +100,10 @@ func replay(events []journal.Event) (State, error) {
 		switch e.Kind {
 		case "runtime.usage-baseline", "runtime.usage-start", "runtime.usage-raw", "runtime.usage-normalized", "runtime.usage-blocked", "runtime.usage-interrupt-intent":
 			if err := s.usageEvent(e.Kind, e.Payload); err != nil {
+				return s, err
+			}
+		case "runtime.compaction-item", "runtime.compaction-unknown":
+			if err := s.compactionEvent(e.Kind, e.Payload); err != nil {
 				return s, err
 			}
 		case "runtime.stream-terminal":
@@ -244,6 +254,16 @@ func replay(events []journal.Event) (State, error) {
 			if s.ToolTurnID != "" && s.ToolTurnID != turn.ID {
 				return s, errors.New("tool request turn differs from dispatch receipt")
 			}
+			for _, item := range s.compactionItems {
+				if item.turnID != turn.ID {
+					// Notifications may arrive before turn/start's response. Preserve
+					// the metadata, but make a response mismatch explicitly unknown.
+					s.compactionUnknown = true
+				}
+			}
+			if s.compactionUnknownTurn != "" && s.compactionUnknownTurn != turn.ID {
+				s.compactionUnknown = true
+			}
 			s.TurnID = turn.ID
 		case "runtime.turn-status":
 			if s.TurnID == "" || s.Result != nil || s.PendingTool != nil {
@@ -319,6 +339,7 @@ func replay(events []journal.Event) (State, error) {
 			s.ExecutionOutcome = s.TurnStatus
 		}
 	}
+	s.finalizeCompactionSummary()
 	return s, nil
 }
 

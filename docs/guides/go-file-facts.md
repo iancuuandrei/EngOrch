@@ -212,6 +212,13 @@ change scheduler policy, create a candidate, authorize edits, or count as
 verification evidence. Partial coverage, traversal limits, or omitted graph
 inputs must not be interpreted as proof that no other files are affected.
 
+The RI API also exposes `QueryGoFocusTopology` for objective contract excerpt
+paths. It uses a distinct digest domain and labels these seeds
+`objective_contract`; they are not changed-file claims. Its model-sized
+projection is capped at 8 KiB and reports omitted groups, paths, couplings,
+packages, and potential tests. The projection contains graph observations only,
+not source bytes, write authority, or proof that tasks are independent.
+
 Example:
 
 ```powershell
