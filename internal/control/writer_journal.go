@@ -54,7 +54,7 @@ func replayWriterProposal(s *Snapshot, e journal.Event, seen map[string]bool) er
 		return err
 	}
 	var reply WriterProposal
-	if s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV1 {
+	if writercontract.IsAnchoredEdits(s.Creation.Config.WriterContract) {
 		anchored, decodeErr := decodeAnchoredProposal(record.Result.Output)
 		if decodeErr != nil {
 			return decodeErr

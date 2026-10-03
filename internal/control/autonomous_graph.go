@@ -115,6 +115,20 @@ func parseAcceptedGraph(s Snapshot) (engineeringplan.Graph, error) {
 	if err := engineeringplan.ValidateAutonomousGraphWithImplementations(g, maxInitialImplementations); err != nil {
 		return engineeringplan.Graph{}, err
 	}
+	if repairPlanningEnabled(s) && s.Creation.Execution.MaxRepairs > 0 {
+		scopeRoots := map[string]struct{}{}
+		for _, task := range g.Tasks {
+			if task.Kind != engineeringplan.Implementation {
+				continue
+			}
+			for _, root := range task.ScopePaths {
+				scopeRoots[root] = struct{}{}
+			}
+		}
+		if len(scopeRoots) > 32 {
+			return engineeringplan.Graph{}, errors.New("initial implementation scope union exceeds bounded repair design capacity of 32 paths")
+		}
+	}
 	readTasks := 0
 	for _, task := range g.Tasks {
 		if task.Kind == engineeringplan.Research || task.Kind == engineeringplan.Design {
@@ -704,7 +718,7 @@ func graphRepairForFailure(path string, failedTaskID, failedEvidence string) (Sn
 	seq := s.RepairAttempts + 1
 	var next engineeringplan.Graph
 	if repairPlanningEnabled(s) {
-		next, err = engineeringplan.RepairDesignExtension(s.Graph.Graph, failedTaskID, failedEvidence, seq)
+		next, err = repairDesignExtensionForSnapshot(s, failedTaskID, failedEvidence, seq)
 	} else {
 		next, err = engineeringplan.RepairExtension(s.Graph.Graph, failedTaskID, failedEvidence, seq)
 	}
@@ -1920,7 +1934,7 @@ func maybeEvolveGraphForRepair(path string, s Snapshot) error {
 		var next engineeringplan.Graph
 		var err error
 		if repairPlanningEnabled(s) {
-			next, err = engineeringplan.RepairDesignExtension(s.Graph.Graph, t.ID, failedEvidence, s.RepairAttempts+1)
+			next, err = repairDesignExtensionForSnapshot(s, t.ID, failedEvidence, s.RepairAttempts+1)
 		} else {
 			next, err = engineeringplan.RepairExtension(s.Graph.Graph, t.ID, failedEvidence, s.RepairAttempts+1)
 		}

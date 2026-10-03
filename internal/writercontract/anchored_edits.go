@@ -10,6 +10,16 @@ import (
 // Existing files carry exact original anchors; new files require explicit text.
 const ContractAnchoredEditsV1 = "anchored-edits-v1"
 
+// ContractAnchoredEditsV2 keeps the v1 proposal bytes and enables same-turn
+// candidate anchor validation for writer/fixer model invocations.
+const ContractAnchoredEditsV2 = "anchored-edits-v2"
+
+// IsAnchoredEdits reports contracts that share the frozen anchored proposal
+// schema and controller-side composition rules.
+func IsAnchoredEdits(contract string) bool {
+	return contract == ContractAnchoredEditsV1 || contract == ContractAnchoredEditsV2
+}
+
 const (
 	// AnchoredEditsMaxChanges bounds changed paths in one proposal.
 	AnchoredEditsMaxChanges = 64

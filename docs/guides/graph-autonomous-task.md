@@ -106,10 +106,34 @@ tasks with disjoint concrete write paths. A small objective does not need a
 second writer. `--max-parallel 1` remains valid with the opt-in, allowing the
 same two-task shape to execute serially for comparison.
 
-Parallel implementation acceptance is pending. CLI and planner regression
-checks pass, but they do not prove two model invocations overlap, safe merged
-application, or improved real-task latency. Those require the cohort
-integration tests and a candidate-bound real-repository trial.
+Real-provider parallel implementation acceptance is pending. Local Codex
+app-server fixtures cover two overlapping writers, one aggregate application,
+serial repair after review, and journal replay before fresh verification.
+A fresh real-model godotenv trial selected one implementation task and was
+blocked on a missing source anchor before any file effect. It proves neither
+successful parallel acceptance nor improved real-task latency; see the
+[retained trial summary](../../evals/v1/results/godotenv-parallel-525d53a-20261003.json).
+
+## Experimental validation within a writer turn
+
+For a fresh Codex configuration, `fabric init --codex EXE --model MODEL
+--effort high --validate-writer-edits` selects `anchored-edits-v2`.
+Existing configurations and the default init recipe retain their current
+contract. The opt-in does not migrate or resume an older invocation.
+
+The writer or fixer can call `candidate_validate_anchored_edits` against its
+exact candidate and file hash before returning the final proposal. Validation
+reads the candidate without changing files and reports whether the proposed
+anchors are valid. A failed anchor check lets the model read the source and
+correct the proposal within the same turn. Candidate drift or a mismatched
+binding fails the tool request. Final proposal composition still independently
+checks every anchor and scope before preparing a file effect.
+
+This opt-in currently targets Codex; OpenCode support and successful
+real-repository acceptance are not yet established. Local contract tests pass,
+including an app-server fixture that receives invalid-anchor feedback, reads
+the candidate, corrects the edit and applies one proposal within the same
+writer turn. This is local fixture evidence, not provider qualification.
 
 ## Parallel seams
 

@@ -43,6 +43,27 @@ retains exact evaluation/result identities and unknown metadata. The original
 run was not resumed or edited. This is a separate unsuccessful harder-task
 attempt, not an added PASS or a seventh row in the six-task comparison.
 
+The later clean `525d53a686cd56961de4dcd5a2f74c74ec887193` opt-in trial
+used `--parallel-writers --max-parallel 2` but the planner selected one
+implementation task. Its writer completed the SDK turn and made two candidate
+reads; all three proposed file hashes matched. Four edit anchors occurred
+once, while an 801-byte source anchor occurred zero times. Admission rejected
+the proposal before aggregation, file application, verification or review.
+The [sanitized trial summary](../../evals/v1/results/godotenv-parallel-525d53a-20261003.json)
+records this separate BLOCKED result and its immutable evaluation hash.
+Outer finish metadata and unavailable usage metrics remain UNKNOWN. The run
+was not resumed; it supplies no successful parallel or latency comparison.
+
+The clean `e973cd50b89964eb6ffe791b2fcfadc4b3bc7deb` trial selected the
+opt-in `anchored-edits-v2` contract. Its initial proposal was accepted and
+the file outcome was CONFIRMED. Native verification then failed in
+`TestMultilineQuotedValues`: `Can't separate key from value`. Repair design
+completed, but the repair implementation remained at zero attempts and no
+repair writer host intent was recorded. This trial is BLOCKED, with no
+successful acceptance or latency claim. Actual validation-tool call counts
+are not established by occurrences of tool names in schemas or instructions.
+The original run and candidate were preserved without a retry.
+
 ## Initial matched six-task run
 
 Two fresh sets of pinned repositories used the same Codex executable, model

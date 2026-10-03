@@ -12,6 +12,7 @@ import (
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/codexrpc"
 	"harness.local/engorch/internal/repository"
+	"harness.local/engorch/internal/runtime"
 )
 
 func sourceAdapter(t *testing.T) *Adapter {
@@ -74,6 +75,46 @@ func TestSourceToolsVisibleCatalogUnchanged(t *testing.T) {
 	if string(got) != string(want) {
 		t.Fatalf("provider-visible source catalog changed\n got: %s\nwant: %s", got, want)
 	}
+}
+
+func TestAnchoredEditToolIsOnlyAddedForOptedInWriterAndFixer(t *testing.T) {
+	adapter := &Adapter{Source: &repository.Identity{}, Candidate: &CandidateBinding{AnchorValidationVersion: 1}}
+	for _, role := range []string{"writer", "fixer"} {
+		inv, err := runtime.NewInvocation(runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "model", Effort: "high", Role: role}, "candidate edit")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !hasToolName(adapter.SourceToolsForInvocation(inv), "candidate_validate_anchored_edits") {
+			t.Fatalf("tool missing for %s", role)
+		}
+	}
+	for _, role := range []string{"planner", "explorer", "reviewer"} {
+		inv, err := runtime.NewInvocation(runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "model", Effort: "high", Role: role}, "candidate edit")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hasToolName(adapter.SourceToolsForInvocation(inv), "candidate_validate_anchored_edits") {
+			t.Fatalf("tool leaked to %s", role)
+		}
+	}
+	if hasToolName(adapter.SourceTools(), "candidate_validate_anchored_edits") {
+		t.Fatal("legacy catalog changed")
+	}
+	adapter.Candidate.AnchorValidationVersion = 0
+	writer, _ := runtime.NewInvocation(runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "model", Effort: "high", Role: "writer"}, "candidate edit")
+	if hasToolName(adapter.SourceToolsForInvocation(writer), "candidate_validate_anchored_edits") {
+		t.Fatal("v0 binding received v1 tool")
+	}
+}
+
+func hasToolName(tools []any, name string) bool {
+	for _, raw := range tools {
+		entry, ok := raw.(map[string]any)
+		if ok && entry["name"] == name {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSourceBrokerImmutableReadAndScope(t *testing.T) {

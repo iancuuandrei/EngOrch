@@ -54,6 +54,26 @@ func TestCodexInitCreatesCompleteRolesAndPreservesExistingConfig(t *testing.T) {
 	}
 }
 
+func TestCodexInitWriterEditValidationIsOptIn(t *testing.T) {
+	defaultConfig, _, _, err := codexInitRoleFixture(t, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaultConfig.WriterContract != "anchored-edits-v1" {
+		t.Fatalf("default writer contract changed: %q", defaultConfig.WriterContract)
+	}
+	optedIn, _, _, err := codexInitRoleFixture(t, []string{"--validate-writer-edits"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if optedIn.WriterContract != "anchored-edits-v2" {
+		t.Fatalf("init opt-in did not select anchored-edits-v2: %q", optedIn.WriterContract)
+	}
+	if optedIn.PlannerContract != "plan-v1" || optedIn.ExplorerContract != "json-v2" || optedIn.Writer.Runtime != "codex-app-server" {
+		t.Fatal("writer validation opt-in changed unrelated init routing")
+	}
+}
+
 func TestCodexInitRejectsInvalidSetupBeforeWriting(t *testing.T) {
 	for _, args := range [][]string{{"init", "--model", "fixture"}, {"init", "--codex", "missing", "--model", "fixture"}, {"init", "unexpected"}} {
 		root := t.TempDir()

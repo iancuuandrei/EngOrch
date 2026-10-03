@@ -54,6 +54,7 @@ param(
     [ValidateSet('Native', 'PR5Matched')][string]$EvalMode = 'Native',
     [string]$Effort = 'high',
     [switch]$ParallelWriters,
+    [switch]$ValidateWriterEdits,
     [ValidateRange(0, 8)][int]$MaxParallel = 0,
     [string]$PR5BaselineExe,
     [string]$PR5BaselineScript,
@@ -65,8 +66,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-if ($Action -eq 'Evaluate' -and $EvalMode -eq 'PR5Matched' -and ($ParallelWriters -or $MaxParallel -ne 0)) {
-    throw 'Parallel writer and scheduler overrides require Native mode; PR5Matched retains its original invocation.'
+if ($Action -eq 'Evaluate' -and $EvalMode -eq 'PR5Matched' -and ($ParallelWriters -or $ValidateWriterEdits -or $MaxParallel -ne 0)) {
+    throw 'Writer and scheduler overrides require Native mode; PR5Matched retains its original invocation.'
 }
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $manifestPath = Join-Path $repoRoot 'evals\v1\manifest.json'
@@ -84,6 +85,12 @@ $git = (Get-Command git -ErrorAction Stop).Source
 . (Join-Path $repoRoot 'evals\v1\harness\Toml-ArgvPolicy.ps1')
 
 $DiffByteLimit = 1048576
+
+function Get-NativeInitArgs([string]$TaskPath, [string]$RuntimePath, [string]$WriterModel, [string]$WriterEffort, [bool]$EnableEditValidation) {
+    $nativeArgs = @('--root', $TaskPath, 'init', '--codex', $RuntimePath, '--model', $WriterModel, '--effort', $WriterEffort)
+    if ($EnableEditValidation) { $nativeArgs += '--validate-writer-edits' }
+    return $nativeArgs
+}
 
 function Get-NativeRunArgs([string]$TaskPath, [string]$Objective, [bool]$EnableParallelWriters, [int]$ParallelLimit) {
     if ($ParallelLimit -lt 0 -or $ParallelLimit -gt 8) { throw 'Scheduler override must be 0 (default) or 1..8.' }
@@ -115,6 +122,7 @@ function Get-HeldoutSource([string]$Check) {
         'afero'      = 'afero.heldout_test.go'
         'multierror' = 'multierror.heldout_test.go'
         'atomic'     = 'atomic.heldout_test.go'
+        'atomic-numeric' = 'atomic_numeric.heldout_test.go'
         'difflib'    = 'difflib.heldout_test.go'
         'logr'       = 'logr.heldout_test.go'
         'godotenv'   = 'godotenv.heldout_test.go'
@@ -133,7 +141,7 @@ function Get-NativeGoArgs([object]$Entry) {
     $testArgs = @($Entry.native_argv)
     $scope = 'full'
     if ($Entry.id -eq 'go-difflib') { $scope = 'legacy-tests-without-vet' }
-    if (($env:OS -eq 'Windows_NT') -and ($Entry.id -eq 'go-atomic')) {
+    if (($env:OS -eq 'Windows_NT') -and ($Entry.id -in @('go-atomic', 'go-atomic-numeric-text'))) {
         $testArgs += @('-skip', '^TestNocmpIntegration$')
         $scope = 'windows-scoped'
     }
@@ -642,7 +650,8 @@ foreach ($entry in $entries) {
             if ((Test-Path -LiteralPath (Join-Path $taskPath 'harness.toml')) -or (Test-Path -LiteralPath (Join-Path $taskPath '.harness'))) {
                 throw "Task checkout for $($entry.id) already initialized; Evaluate requires a fresh prepared clone"
             }
-            & $FabricExe --root $taskPath init --codex $CodexExe --model $Model --effort $Effort 1> (Join-Path $taskOutDir 'fabric-init.stdout.log') 2> (Join-Path $taskOutDir 'fabric-init.stderr.log')
+            $initArgs = @(Get-NativeInitArgs $taskPath $CodexExe $Model $Effort ([bool]$ValidateWriterEdits))
+            & $FabricExe @initArgs 1> (Join-Path $taskOutDir 'fabric-init.stdout.log') 2> (Join-Path $taskOutDir 'fabric-init.stderr.log')
             if ($LASTEXITCODE -ne 0) { throw "fabric init failed for $($entry.id); see fabric-init.*.log" }
             $result.effort = $Effort
             $verPolicy = Set-TaskVerificationConfig $taskPath $entry
@@ -652,6 +661,7 @@ foreach ($entry in $entries) {
             Set-Content -NoNewline -Encoding utf8 (Join-Path $taskOutDir 'verification-argv.log') $verPolicy.ArgvText
             $runArgs = @(Get-NativeRunArgs $taskPath $entry.task ([bool]$ParallelWriters) $MaxParallel)
             $result.parallel_writers_requested = [bool]$ParallelWriters
+            $result.writer_edit_validation_requested = [bool]$ValidateWriterEdits
             $result.max_parallel_requested = if ($MaxParallel -eq 0) { $null } else { $MaxParallel }
             & $FabricExe @runArgs 1> (Join-Path $taskOutDir 'fabric-run.stdout.log') 2> (Join-Path $taskOutDir 'fabric-run.stderr.log')
             if ($LASTEXITCODE -ne 0) { throw "fabric run --autonomous failed for $($entry.id); see fabric-run.*.log" }
@@ -917,6 +927,7 @@ $evalRecord = [ordered]@{
     model                  = $Model
     effort                 = $Effort
     parallel_writers_requested = [bool]$ParallelWriters
+    writer_edit_validation_requested = [bool]$ValidateWriterEdits
     max_parallel_requested = if ($MaxParallel -eq 0) { $null } else { $MaxParallel }
     fabric_sha256          = if ($EvalMode -eq 'Native') { $fabricSha } else { $null }
     fabric_go_version_m    = if ($EvalMode -eq 'Native') { $fabricProv.VersionM } else { $null }

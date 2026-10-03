@@ -618,7 +618,20 @@ func RepairDesignExtension(g Graph, failedTaskID, failedEvidence string, seq int
 	return repairExtension(g, failedTaskID, failedEvidence, seq, true)
 }
 
+// RepairDesignExtensionScoped inserts a bounded design task and repair slot
+// using the runner-supplied immutable union of original implementation scopes.
+func RepairDesignExtensionScoped(g Graph, failedTaskID, failedEvidence string, seq int, originalScope []string) (Graph, error) {
+	if err := validatePaths(originalScope, true); err != nil || len(originalScope) == 0 {
+		return Graph{}, errors.New("invalid original repair scope")
+	}
+	return repairExtensionWithScope(g, failedTaskID, failedEvidence, seq, true, originalScope)
+}
+
 func repairExtension(g Graph, failedTaskID, failedEvidence string, seq int, withDesign bool) (Graph, error) {
+	return repairExtensionWithScope(g, failedTaskID, failedEvidence, seq, withDesign, nil)
+}
+
+func repairExtensionWithScope(g Graph, failedTaskID, failedEvidence string, seq int, withDesign bool, originalScope []string) (Graph, error) {
 	if err := g.Validate(); err != nil {
 		return Graph{}, err
 	}
@@ -670,16 +683,20 @@ func repairExtension(g Graph, failedTaskID, failedEvidence string, seq int, with
 		}
 	}
 	var scope, writes []string
-	for _, t := range g.Tasks {
-		if t.Kind == Implementation && len(t.WritePaths) != 0 {
-			scope = append([]string(nil), t.ScopePaths...)
-			writes = append([]string(nil), t.WritePaths...)
-			break
+	if originalScope != nil {
+		scope = append([]string(nil), originalScope...)
+	} else {
+		for _, t := range g.Tasks {
+			if t.Kind == Implementation && len(t.WritePaths) != 0 {
+				scope = append([]string(nil), t.ScopePaths...)
+				writes = append([]string(nil), t.WritePaths...)
+				break
+			}
 		}
-	}
-	if len(scope) == 0 {
-		scope = []string{"src"}
-		writes = []string{"src/repair"}
+		if len(scope) == 0 {
+			scope = []string{"src"}
+			writes = []string{"src/repair"}
+		}
 	}
 	if strings.TrimSpace(failedEvidence) == "" || len(failedEvidence) > 256 {
 		return Graph{}, errors.New("repair requires bounded recorded failure evidence")
@@ -745,8 +762,8 @@ func RefineRepairWritePaths(g Graph, implementationID string, writePaths, origin
 	if target == nil || target.Kind != Implementation || target.ParentID == "" || len(target.WritePaths) != 0 || target.Completed || len(target.Attempts) != 0 {
 		return Graph{}, errors.New("repair implementation is not an unstarted design slot")
 	}
-	if !stringListEqual(target.ScopePaths, originalScope) {
-		return Graph{}, errors.New("repair implementation changed its original scope ceiling")
+	if !pathsWithinScopes(target.ScopePaths, originalScope) {
+		return Graph{}, errors.New("repair implementation scope exceeds original ceiling")
 	}
 	designFound := false
 	for _, dep := range target.Dependencies {
@@ -768,8 +785,8 @@ func RefineRepairWritePaths(g Graph, implementationID string, writePaths, origin
 		return Graph{}, errors.New("repair implementation lacks completed matching design evidence")
 	}
 	for _, p := range writePaths {
-		if !withinAny(p, originalScope) {
-			return Graph{}, fmt.Errorf("repair path %q outside original implementation scope", p)
+		if !withinAny(p, target.ScopePaths) {
+			return Graph{}, fmt.Errorf("repair path %q outside persisted repair slot scope", p)
 		}
 	}
 	next := g
@@ -783,6 +800,18 @@ func RefineRepairWritePaths(g Graph, implementationID string, writePaths, origin
 		return Graph{}, err
 	}
 	return next, nil
+}
+
+func pathsWithinScopes(paths, ceilings []string) bool {
+	if len(paths) == 0 || validatePaths(paths, true) != nil || validatePaths(ceilings, true) != nil || len(ceilings) == 0 {
+		return false
+	}
+	for _, p := range paths {
+		if !withinAny(p, ceilings) {
+			return false
+		}
+	}
+	return true
 }
 
 // Ready returns deterministic independent work whose dependencies completed.

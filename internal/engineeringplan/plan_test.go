@@ -214,3 +214,95 @@ func TestRepairDesignReservesScopedWritePathsUntilDesignCompletes(t *testing.T) 
 		t.Fatal("refinement admitted with unresolved UNKNOWN task")
 	}
 }
+
+func TestScopedRepairDesignUsesAcceptedUnionAndPreservesNarrowLegacySlots(t *testing.T) {
+	makeFailedGraph := func(firstScope []string) Graph {
+		g := Graph{Version: Version, Mode: ModeGraph, Summary: "parallel scoped repair", Tasks: []Task{
+			{ID: "impl-a", Kind: Implementation, Title: "writer a", ScopePaths: firstScope, WritePaths: []string{firstScope[0] + "/initial.go"}, ExpectedEvidence: []Evidence{{Kind: "file", Description: "a"}}, EstimatedSeconds: 30},
+			{ID: "impl-b", Kind: Implementation, Title: "writer b", ScopePaths: []string{"src/b"}, WritePaths: []string{"src/b/initial.go"}, ExpectedEvidence: []Evidence{{Kind: "file", Description: "b"}}, EstimatedSeconds: 30},
+			{ID: "verify", Kind: Verification, Title: "verify", Dependencies: []string{"impl-a", "impl-b"}, ScopePaths: []string{"."}, ExpectedEvidence: []Evidence{{Kind: "test", Description: "native"}}, EstimatedSeconds: 10},
+			{ID: "review", Kind: Review, Title: "review", Dependencies: []string{"verify"}, ScopePaths: []string{"."}, ExpectedEvidence: []Evidence{{Kind: "review", Description: "native"}}, EstimatedSeconds: 10},
+		}}
+		g.Tasks[0].Completed, g.Tasks[1].Completed = true, true
+		g.Tasks[0].Attempts = []Attempt{{ID: "a1", Outcome: AttemptCompleted}}
+		g.Tasks[1].Attempts = []Attempt{{ID: "b1", Outcome: AttemptCompleted}}
+		g.Tasks[2].Attempts = []Attempt{{ID: "v1", Outcome: AttemptFailed}}
+		return g
+	}
+	union := []string{"src/a", "src/b"}
+	base := makeFailedGraph([]string{"src/a"})
+	scoped, err := RepairDesignExtensionScoped(base, "verify", "verification-plan", 1, union)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateAutonomousRevision(base, scoped); err != nil {
+		t.Fatal("scoped extension invalid", err)
+	}
+	var design, writer Task
+	for _, task := range scoped.Tasks {
+		if task.ParentID == "verify" && task.Kind == Design {
+			design = task
+		}
+		if task.ParentID == "verify" && task.Kind == Implementation {
+			writer = task
+		}
+	}
+	if !stringListEqual(design.ScopePaths, union) || !stringListEqual(writer.ScopePaths, union) {
+		t.Fatalf("repair design did not use accepted union: design=%v writer=%v", design.ScopePaths, writer.ScopePaths)
+	}
+	for i := range scoped.Tasks {
+		if scoped.Tasks[i].ID == design.ID {
+			scoped.Tasks[i].Completed = true
+			scoped.Tasks[i].Attempts = []Attempt{{ID: "d1", Outcome: AttemptCompleted}}
+		}
+	}
+	refined, err := RefineRepairWritePaths(scoped, writer.ID, []string{"src/b/generated.go"}, union)
+	if err != nil || !stringListEqual(refined.Tasks[len(refined.Tasks)-3].WritePaths, []string{"src/b/generated.go"}) {
+		t.Fatalf("path owned by the second initial implementation was rejected: %v", err)
+	}
+	if _, err := RefineRepairWritePaths(scoped, writer.ID, []string{"src/c/outside.go"}, union); err == nil {
+		t.Fatal("write outside accepted union admitted")
+	}
+	widened := scoped
+	widened.Tasks = append([]Task(nil), scoped.Tasks...)
+	for i := range widened.Tasks {
+		if widened.Tasks[i].ID == writer.ID {
+			widened.Tasks[i].ScopePaths = []string{"src/a", "src/b", "src/c"}
+		}
+	}
+	if _, err := RefineRepairWritePaths(widened, writer.ID, []string{"src/c/outside.go"}, union); err == nil {
+		t.Fatal("persisted slot scope wider than immutable union admitted")
+	}
+
+	legacyBase := makeFailedGraph([]string{"src/z", "src/a"})
+	legacy, err := RepairDesignExtension(legacyBase, "verify", "verification-plan", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacyDesign, legacyWriter Task
+	for _, task := range legacy.Tasks {
+		if task.ParentID == "verify" && task.Kind == Design {
+			legacyDesign = task
+		}
+		if task.ParentID == "verify" && task.Kind == Implementation {
+			legacyWriter = task
+		}
+	}
+	legacyScope := []string{"src/z", "src/a"}
+	if !stringListEqual(legacyDesign.ScopePaths, legacyScope) || !stringListEqual(legacyWriter.ScopePaths, legacyScope) {
+		t.Fatalf("legacy extension bytes/order changed: design=%v writer=%v", legacyDesign.ScopePaths, legacyWriter.ScopePaths)
+	}
+	for i := range legacy.Tasks {
+		if legacy.Tasks[i].ID == legacyDesign.ID {
+			legacy.Tasks[i].Completed = true
+			legacy.Tasks[i].Attempts = []Attempt{{ID: "d1", Outcome: AttemptCompleted}}
+		}
+	}
+	allScope := []string{"src/a", "src/b", "src/z"}
+	if _, err := RefineRepairWritePaths(legacy, legacyWriter.ID, []string{"src/a/repair.go"}, allScope); err != nil {
+		t.Fatalf("narrow legacy slot with unsorted scope did not refine: %v", err)
+	}
+	if _, err := RefineRepairWritePaths(legacy, legacyWriter.ID, []string{"src/b/repair.go"}, allScope); err == nil {
+		t.Fatal("legacy repair slot borrowed the second writer scope")
+	}
+}

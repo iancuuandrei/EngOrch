@@ -9,6 +9,7 @@ import (
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/repository"
 	"harness.local/engorch/internal/ri"
+	"harness.local/engorch/internal/runtime"
 	"harness.local/engorch/internal/sourcetools"
 )
 
@@ -31,6 +32,18 @@ type ToolResponse struct {
 
 // SourceTools returns the explicit immutable-source tool catalog for this adapter.
 func (a *Adapter) SourceTools() []any {
+	return a.sourceTools(false)
+}
+
+// SourceToolsForInvocation adds candidate edit validation only to explicitly
+// opted-in writer and serial-fixer invocations.
+func (a *Adapter) SourceToolsForInvocation(i runtime.Invocation) []any {
+	includeAnchored := a.Candidate != nil && a.Candidate.AnchorValidationVersion == candidatetools.AnchorValidationVersion &&
+		(i.Profile.Role == "writer" || i.Profile.Role == "fixer")
+	return a.sourceTools(includeAnchored)
+}
+
+func (a *Adapter) sourceTools(includeAnchored bool) []any {
 	if a.Source == nil {
 		return nil
 	}
@@ -49,7 +62,11 @@ func (a *Adapter) SourceTools() []any {
 		tools = append(tools, map[string]any{"type": "function", "deferLoading": false, "name": "ri_status", "description": "Read counts and exact provenance from the fixed RI snapshot. Does not run an indexer or prove graph completeness.", "inputSchema": object(map[string]any{}, []string{})})
 	}
 	if a.Candidate != nil {
-		for _, definition := range candidatetools.Catalog() {
+		catalog := candidatetools.Catalog()
+		if includeAnchored {
+			catalog = candidatetools.CatalogWithAnchoredEdits()
+		}
+		for _, definition := range catalog {
 			tools = append(tools, map[string]any{"type": "function", "deferLoading": false, "name": definition.Name, "description": definition.Description, "inputSchema": definition.InputSchema})
 		}
 	}
@@ -94,7 +111,10 @@ func (a *Adapter) handleTool(ctx context.Context, raw json.RawMessage, readLexic
 		if readErr == nil {
 			content, readErr = readLexical(ctx, *binding, request.Arguments)
 		}
-	case candidatetools.ListName, candidatetools.ReadName:
+	case candidatetools.ListName, candidatetools.ReadName, candidatetools.ValidateAnchoredEditsName:
+		if request.Tool == candidatetools.ValidateAnchoredEditsName && (s.Candidate == nil || s.Candidate.AnchorValidationVersion != candidatetools.AnchorValidationVersion || s.Intent == nil || (s.Intent.Invocation.Profile.Role != "writer" && s.Intent.Invocation.Profile.Role != "fixer")) {
+			return nil, errors.New("candidate anchored edit validation is not enabled for this invocation")
+		}
 		content, _, readErr = candidatetools.Execute(ctx, *s.Candidate, request.Tool, request.Arguments)
 	case "ri_locate", "ri_definition", "ri_references":
 		content, readErr = semanticRead(ctx, *s.RI, request.Tool, request.Arguments)
@@ -174,6 +194,9 @@ func (s *State) toolEvent(kind string, payload json.RawMessage) error {
 		if err := binding.Validate(*s.Source); err != nil {
 			return err
 		}
+		if binding.AnchorValidationVersion == candidatetools.AnchorValidationVersion && (s.Intent.Invocation.Profile.Role != "writer" && s.Intent.Invocation.Profile.Role != "fixer") {
+			return errors.New("candidate anchored edit validation role mismatch")
+		}
 		s.Candidate = &binding
 	case "runtime.ri":
 		if s.Intent == nil || s.Source == nil || s.Thread != nil || s.RI != nil {
@@ -207,7 +230,9 @@ func (s *State) toolEvent(kind string, payload json.RawMessage) error {
 		if err := canonical.Decode(payload, &request); err != nil {
 			return err
 		}
-		if request.Namespace != nil || request.ThreadID != s.Thread.ThreadID || request.CallID == "" || len(request.CallID) > 256 || request.TurnID == "" || len(request.TurnID) > 256 || request.Tool != "source_read" && request.Tool != "source_list" && !(request.Tool == "ri_search" && (s.Lexical != nil || s.LexicalRecord != nil)) && !(riTool(request.Tool) && s.RI != nil) && !((request.Tool == candidatetools.ListName || request.Tool == candidatetools.ReadName) && s.Candidate != nil) {
+		candidateTool := request.Tool == candidatetools.ListName || request.Tool == candidatetools.ReadName
+		anchoredTool := request.Tool == candidatetools.ValidateAnchoredEditsName && s.Candidate != nil && s.Candidate.AnchorValidationVersion == candidatetools.AnchorValidationVersion && s.Intent != nil && (s.Intent.Invocation.Profile.Role == "writer" || s.Intent.Invocation.Profile.Role == "fixer")
+		if request.Namespace != nil || request.ThreadID != s.Thread.ThreadID || request.CallID == "" || len(request.CallID) > 256 || request.TurnID == "" || len(request.TurnID) > 256 || request.Tool != "source_read" && request.Tool != "source_list" && !(request.Tool == "ri_search" && (s.Lexical != nil || s.LexicalRecord != nil)) && !(riTool(request.Tool) && s.RI != nil) && !(candidateTool && s.Candidate != nil) && !anchoredTool {
 			return errors.New("tool scope mismatch")
 		}
 		if s.TurnID != "" && request.TurnID != s.TurnID || s.ToolTurnID != "" && request.TurnID != s.ToolTurnID {

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -117,6 +118,80 @@ func runFixtureAppServer() int {
 			}
 			if json.Unmarshal([]byte(params.Input[0].Text), &input) != nil || input.CandidateID == "" {
 				return 5
+			}
+			if strings.Contains(input.Instruction, "candidate_validate_anchored_edits") {
+				before := sha256.Sum256([]byte("base\n"))
+				beforeHash := hex.EncodeToString(before[:])
+				emitTool := func(sequence int, callID, toolName string, arguments any) (string, bool) {
+					argumentsJSON, marshalErr := json.Marshal(arguments)
+					if marshalErr != nil {
+						return "", false
+					}
+					requestID := json.RawMessage([]byte(fmt.Sprintf("%d", sequence)))
+					if encoder.Encode(map[string]any{
+						"jsonrpc": "2.0", "id": requestID, "method": "item/tool/call",
+						"params": map[string]any{"threadId": "thread-v2", "turnId": "turn-v2", "callId": callID, "tool": toolName, "arguments": json.RawMessage(argumentsJSON)},
+					}) != nil || !scanner.Scan() {
+						return "", false
+					}
+					var reply struct {
+						ID     json.RawMessage `json:"id"`
+						Result struct {
+							Success      bool `json:"success"`
+							ContentItems []struct {
+								Text string `json:"text"`
+							} `json:"contentItems"`
+						} `json:"result"`
+					}
+					if json.Unmarshal(scanner.Bytes(), &reply) != nil || string(reply.ID) != string(requestID) || !reply.Result.Success || len(reply.Result.ContentItems) != 1 {
+						return "", false
+					}
+					return reply.Result.ContentItems[0].Text, true
+				}
+
+				if encoder.Encode(response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"turn": map[string]any{"id": "turn-v2", "status": "inProgress", "items": []any{}}}}) != nil {
+					return 15
+				}
+				invalidText, invalidOK := emitTool(101, "anchor-invalid", "candidate_validate_anchored_edits", map[string]any{
+					"candidate_id": input.CandidateID, "path": "file.txt", "before_hash": beforeHash,
+					"edits": []any{map[string]any{"before": "not present", "after": "hello"}},
+				})
+				var invalidValidation struct {
+					Valid bool `json:"valid"`
+				}
+				if !invalidOK || json.Unmarshal([]byte(invalidText), &invalidValidation) != nil || invalidValidation.Valid {
+					return 16
+				}
+				readText, readOK := emitTool(102, "anchor-source-read", "candidate_read", map[string]any{"path": "file.txt", "offset": 0, "limit": 64})
+				var sourceRead struct {
+					ContentUTF8 *string `json:"content_utf8"`
+				}
+				if !readOK || json.Unmarshal([]byte(readText), &sourceRead) != nil || sourceRead.ContentUTF8 == nil || *sourceRead.ContentUTF8 != "base\n" {
+					return 18
+				}
+				validText, validOK := emitTool(103, "anchor-corrected", "candidate_validate_anchored_edits", map[string]any{
+					"candidate_id": input.CandidateID, "path": "file.txt", "before_hash": beforeHash,
+					"edits": []any{map[string]any{"before": "base", "after": "hello"}},
+				})
+				var validValidation struct {
+					Valid bool `json:"valid"`
+				}
+				if !validOK || json.Unmarshal([]byte(validText), &validValidation) != nil || !validValidation.Valid {
+					return 19
+				}
+				proposal, _ := json.Marshal(map[string]any{"candidate_id": input.CandidateID, "changes": []any{map[string]any{
+					"path": "file.txt", "before_hash": beforeHash,
+					"edits":            []any{map[string]any{"before": "base", "after": "hello"}},
+					"new_content_utf8": nil, "executable": false,
+				}}})
+				if encoder.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{
+					"threadId": "thread-v2", "turn": map[string]any{"id": "turn-v2", "status": "completed", "itemsView": "full", "error": nil,
+						"items": []any{map[string]any{"type": "agentMessage", "id": "message-v2", "phase": "final_answer", "text": string(proposal)}},
+					},
+				}}) != nil {
+					return 17
+				}
+				continue
 			}
 			if strings.Contains(input.Instruction, "Review the current candidate") {
 				decision := "approve"
