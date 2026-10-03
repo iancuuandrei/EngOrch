@@ -1,0 +1,459 @@
+{
+  "schema": "fabric.humanize.matched_policy_observation.v1",
+  "task": {
+    "id": "go-humanize-feature-performance",
+    "upstream": "github.com/dustin/go-humanize",
+    "upstream_commit": "a1b4e66b9a6d890e9e15e7091cf16c8032367d6e",
+    "objective_summary": "ParseBytes integer separators and Commaf allocation reductions."
+  },
+  "product_source_commit": "a4ca05692465bedc6b98d6ffbb8219b6d076f5d1",
+  "native_binary_sha256": "aa59471dcd99e5a119506a0f0282a031aa2639341631b42685221b74a382b247",
+  "runtime_sha256": "1722907aa64401bcc9b34467ef5c2af43f6aef9a5045ef04d11d19dfae4589fb",
+  "arms": [
+    {
+      "policy": "SER",
+      "run_id": "ser1",
+      "fabric_run_id": "0166f29744fe647b37df4401fa885abebdfd886a20a546ea3e95e003858273e2",
+      "eval_id": "eval-20261003T083420Z-bf7e7b6a",
+      "eval_json_sha256": "ea9c685f39fafcd3e14d8ce6835f295ae29197952bd687fb0c6eef016e82d2ba",
+      "terminal_state": "PASS",
+      "max_parallel": 1,
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "elapsed_ms": 484962,
+      "runtime_invocations": 8,
+      "runtime_invocations_completed": 8,
+      "provider_calls": null,
+      "runtime_usage": {
+        "input_tokens": 1434159,
+        "output_tokens": 14719
+      },
+      "repair_attempts": 1,
+      "human_interventions": [],
+      "graph_plan_id": "7168f8e616007e874a1e9c3cd7bed8f8419207a0606459da04baafb7375a39c5",
+      "graph_digest": "d43ccd0ac8b4ea21732a3ea6b910d352c57ba65eb4c7e9d223b6ab9272573617",
+      "initial_graph_tasks": [
+        {
+          "id": "research_bytes",
+          "role": "research",
+          "depends_on": [],
+          "scope_paths": [
+            "bytes.go",
+            "bytes_test.go"
+          ],
+          "write_paths": []
+        },
+        {
+          "id": "research_commaf",
+          "role": "research",
+          "depends_on": [],
+          "scope_paths": [
+            "comma.go",
+            "comma_test.go",
+            "comma_fuzz_test.go",
+            "commaf.go"
+          ],
+          "write_paths": []
+        },
+        {
+          "id": "implement_bytes",
+          "role": "implementation",
+          "depends_on": [
+            "research_bytes"
+          ],
+          "scope_paths": [
+            "bytes.go",
+            "bytes_test.go"
+          ],
+          "write_paths": [
+            "bytes.go",
+            "bytes_test.go"
+          ]
+        },
+        {
+          "id": "implement_commaf",
+          "role": "implementation",
+          "depends_on": [
+            "research_commaf"
+          ],
+          "scope_paths": [
+            "comma.go",
+            "comma_test.go",
+            "comma_fuzz_test.go",
+            "commaf.go"
+          ],
+          "write_paths": [
+            "comma.go",
+            "comma_test.go"
+          ]
+        },
+        {
+          "id": "verify",
+          "role": "verification",
+          "depends_on": [
+            "implement_bytes",
+            "implement_commaf"
+          ],
+          "scope_paths": [
+            "."
+          ],
+          "write_paths": []
+        },
+        {
+          "id": "review",
+          "role": "review",
+          "depends_on": [
+            "verify"
+          ],
+          "scope_paths": [
+            "bytes.go",
+            "bytes_test.go",
+            "comma.go",
+            "comma_test.go",
+            "comma_fuzz_test.go",
+            "commaf.go"
+          ],
+          "write_paths": []
+        }
+      ],
+      "initial_writer_invocations": [
+        {
+          "event_sequence": 32,
+          "task_id": "implement_bytes",
+          "invocation_id": "028a200b3958acfe4992f752d0fe652b8908c5454b06ab023eddc9ba19f6f7fd",
+          "model": "gpt-6-luna",
+          "effort": "high",
+          "input_tokens": 247675,
+          "output_tokens": 2967,
+          "dispatch_started_at": "2026-10-03T08:36:39.7264199Z",
+          "dispatch_ended_at": "2026-10-03T08:38:03.250321Z",
+          "controller_wrapper_ms": 83523.902,
+          "write_paths": [
+            "bytes.go",
+            "bytes_test.go"
+          ]
+        },
+        {
+          "event_sequence": 37,
+          "task_id": "implement_commaf",
+          "invocation_id": "fc5eac7bbfd478dfb8c61eeb5366ac3a867a7be37cb19e45858adebc633247ec",
+          "model": "gpt-6-luna",
+          "effort": "high",
+          "input_tokens": 170600,
+          "output_tokens": 3756,
+          "dispatch_started_at": "2026-10-03T08:38:06.6297907Z",
+          "dispatch_ended_at": "2026-10-03T08:39:25.2637719Z",
+          "controller_wrapper_ms": 78633.981,
+          "write_paths": [
+            "comma.go",
+            "comma_test.go"
+          ]
+        }
+      ],
+      "initial_writer_cohort": {
+        "writer_count": 2,
+        "overlap_ms": 0.0,
+        "inter_task_gap_ms": 3379.469,
+        "measure_definition": "Span is earliest recorded dispatch start to latest dispatch end and includes idle inter-task gaps. Merged interval union sums the recorded wrapper intervals without double-counting overlap. Both are controller wrapper timings, not provider request durations.",
+        "span_ms": 165537.35199999998,
+        "merged_interval_union_ms": 162157.883
+      },
+      "writer_batch_proposals": [
+        {
+          "event_sequence": 38,
+          "candidate_id": "2d63a2c26721a1050c8740e5993a8b982ede1832c01feba708c44ac9f11628a0",
+          "paths": [
+            "bytes.go",
+            "bytes_test.go",
+            "comma.go",
+            "comma_test.go"
+          ],
+          "files_hash_before": "30567a0e0253782a01599be33a74d67b83faddc41efbc94a57dbabe5f480194e",
+          "files_hash_proposed": "275d9a27b100838941a2bcbdb15e1ba84814a6b9cf9901d7f32a469b41db683c"
+        }
+      ],
+      "confirmed_file_effects": [
+        {
+          "event_sequence": 40,
+          "outcome": "CONFIRMED",
+          "files_hash": "275d9a27b100838941a2bcbdb15e1ba84814a6b9cf9901d7f32a469b41db683c",
+          "file_count": 39
+        },
+        {
+          "event_sequence": 64,
+          "outcome": "CONFIRMED",
+          "files_hash": "c3d26a6ab58fda3e242e11f8e45cdc3fb3780d996155a24a686418cb615f2085",
+          "file_count": 39
+        }
+      ],
+      "verification_observations": [
+        {
+          "event_sequence": 45,
+          "candidate_id": "7e8bb9ec8666b264cecc58a018535ecfbf9479081b654fd14a48c750d939a3c0",
+          "status": "FAIL",
+          "exit_code": 1,
+          "invocation_id": "fb608a9dddebbc451314da5663be9633e3406624aa773994ceac045c421a858f"
+        },
+        {
+          "event_sequence": 68,
+          "candidate_id": "dd55a2fdd92f4ee6030ea7bed76221bd96cc919b38fab6f1aa05251e28df0643",
+          "status": "PASS",
+          "exit_code": 0,
+          "invocation_id": "c39bcae6291e893ac67efa1ab288688a82c95a7f4a75077d8aed3499adee2587"
+        }
+      ],
+      "quality": {
+        "native_test_scope": "full",
+        "native_argv": "go test -count=1 ./...",
+        "native_exit_code": 0,
+        "verification_checks": 1,
+        "review_decision": "approve",
+        "review_findings": 0,
+        "review_candidate_id": "dd55a2fdd92f4ee6030ea7bed76221bd96cc919b38fab6f1aa05251e28df0643",
+        "heldout_classification": "pass",
+        "heldout_exit_code": 0,
+        "accepted_candidate_id": "dd55a2fdd92f4ee6030ea7bed76221bd96cc919b38fab6f1aa05251e28df0643",
+        "candidate_files_sha256": "c3d26a6ab58fda3e242e11f8e45cdc3fb3780d996155a24a686418cb615f2085",
+        "candidate_file_count": 39,
+        "candidate_copies_share_id": true,
+        "candidate_copies_share_file_hash": true
+      },
+      "inspect_event_export_sha256": "9838d9a3c12402cdba279b424babfe6a51c2fc6893debb83b9d7dc86303c650c"
+    },
+    {
+      "policy": "PAR",
+      "run_id": "par1",
+      "fabric_run_id": "34a95374deab24e8a05f9a830252f96bfbc6b797bcb157f23ca9b207e73ffd9b",
+      "eval_id": "eval-20261003T084227Z-56ec9b4e",
+      "eval_json_sha256": "db1dd649e139f2f9265446c55659f0f85a0f7d6fcfe02e345968796c8f79282a",
+      "terminal_state": "PASS",
+      "max_parallel": 2,
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "elapsed_ms": 304622,
+      "runtime_invocations": 5,
+      "runtime_invocations_completed": 5,
+      "provider_calls": null,
+      "runtime_usage": {
+        "input_tokens": 1428349,
+        "output_tokens": 14953
+      },
+      "repair_attempts": 0,
+      "human_interventions": [],
+      "graph_plan_id": "747e7370aeefb768c854e8597d698b1803bf392279e54f292d74187d3b081ef3",
+      "graph_digest": "c02e4c608547d26f122f9882da128aa61657f59d2450260ec4ac5e01d91a402f",
+      "initial_graph_tasks": [
+        {
+          "id": "decomposition",
+          "role": "design",
+          "depends_on": [],
+          "scope_paths": [
+            "bytes.go",
+            "bytes_test.go",
+            "comma.go",
+            "comma_test.go"
+          ],
+          "write_paths": []
+        },
+        {
+          "id": "parsebytes_underscores",
+          "role": "implementation",
+          "depends_on": [
+            "decomposition"
+          ],
+          "scope_paths": [
+            "bytes.go",
+            "bytes_test.go"
+          ],
+          "write_paths": [
+            "bytes.go",
+            "bytes_test.go"
+          ]
+        },
+        {
+          "id": "commaf_allocations",
+          "role": "implementation",
+          "depends_on": [
+            "decomposition"
+          ],
+          "scope_paths": [
+            "comma.go",
+            "comma_test.go"
+          ],
+          "write_paths": [
+            "comma.go",
+            "comma_test.go"
+          ]
+        },
+        {
+          "id": "native_verification",
+          "role": "verification",
+          "depends_on": [
+            "parsebytes_underscores",
+            "commaf_allocations"
+          ],
+          "scope_paths": [
+            "bytes.go",
+            "bytes_test.go",
+            "comma.go",
+            "comma_test.go"
+          ],
+          "write_paths": []
+        },
+        {
+          "id": "review",
+          "role": "review",
+          "depends_on": [
+            "native_verification"
+          ],
+          "scope_paths": [
+            "bytes.go",
+            "bytes_test.go",
+            "comma.go",
+            "comma_test.go"
+          ],
+          "write_paths": []
+        }
+      ],
+      "initial_writer_invocations": [
+        {
+          "event_sequence": 30,
+          "task_id": "commaf_allocations",
+          "invocation_id": "6a3e60a8a6d2d0082a207c3d338796307f5f94ba92779f6a1e736b3a1aa4ecef",
+          "model": "gpt-6-luna",
+          "effort": "high",
+          "input_tokens": 373413,
+          "output_tokens": 5337,
+          "dispatch_started_at": "2026-10-03T08:44:22.0392419Z",
+          "dispatch_ended_at": "2026-10-03T08:46:15.7440207Z",
+          "controller_wrapper_ms": 113704.779,
+          "write_paths": [
+            "comma.go",
+            "comma_test.go"
+          ]
+        },
+        {
+          "event_sequence": 28,
+          "task_id": "parsebytes_underscores",
+          "invocation_id": "0445eecbe06892aa97afe51a88391d5f46a7f4cb4b34785588502ca67a0c54ae",
+          "model": "gpt-6-luna",
+          "effort": "high",
+          "input_tokens": 412172,
+          "output_tokens": 4637,
+          "dispatch_started_at": "2026-10-03T08:44:22.1527428Z",
+          "dispatch_ended_at": "2026-10-03T08:46:08.2412192Z",
+          "controller_wrapper_ms": 106088.477,
+          "write_paths": [
+            "bytes.go",
+            "bytes_test.go"
+          ]
+        }
+      ],
+      "initial_writer_cohort": {
+        "writer_count": 2,
+        "overlap_ms": 106088.477,
+        "inter_task_gap_ms": 0.0,
+        "measure_definition": "Span is earliest recorded dispatch start to latest dispatch end and includes idle inter-task gaps. Merged interval union sums the recorded wrapper intervals without double-counting overlap. Both are controller wrapper timings, not provider request durations.",
+        "span_ms": 113704.779,
+        "merged_interval_union_ms": 113704.779
+      },
+      "writer_batch_proposals": [
+        {
+          "event_sequence": 31,
+          "candidate_id": "55071a8f4c82ffe2dcb098d08dcb1f1cf0565dfbfa9032f8130300c6d0379123",
+          "paths": [
+            "bytes.go",
+            "bytes_test.go",
+            "comma.go",
+            "comma_test.go"
+          ],
+          "files_hash_before": "30567a0e0253782a01599be33a74d67b83faddc41efbc94a57dbabe5f480194e",
+          "files_hash_proposed": "cfbf1cab3894d1bd7e2f85a5d8c77bd6c87b4545d9a5889cc0865b15d5ed2f93"
+        }
+      ],
+      "confirmed_file_effects": [
+        {
+          "event_sequence": 33,
+          "outcome": "CONFIRMED",
+          "files_hash": "cfbf1cab3894d1bd7e2f85a5d8c77bd6c87b4545d9a5889cc0865b15d5ed2f93",
+          "file_count": 39
+        }
+      ],
+      "verification_observations": [
+        {
+          "event_sequence": 38,
+          "candidate_id": "64d77be87bf6377ccc95bd69f3020493897af4fa88878f5255b7c7fd0d6e9028",
+          "status": "PASS",
+          "exit_code": 0,
+          "invocation_id": "e18be0ff4be9cfbca7705f2531bc9fdc212350aa935f1edf109e6c18787cdce4"
+        }
+      ],
+      "quality": {
+        "native_test_scope": "full",
+        "native_argv": "go test -count=1 ./...",
+        "native_exit_code": 0,
+        "verification_checks": 1,
+        "review_decision": "approve",
+        "review_findings": 0,
+        "review_candidate_id": "64d77be87bf6377ccc95bd69f3020493897af4fa88878f5255b7c7fd0d6e9028",
+        "heldout_classification": "pass",
+        "heldout_exit_code": 0,
+        "accepted_candidate_id": "64d77be87bf6377ccc95bd69f3020493897af4fa88878f5255b7c7fd0d6e9028",
+        "candidate_files_sha256": "cfbf1cab3894d1bd7e2f85a5d8c77bd6c87b4545d9a5889cc0865b15d5ed2f93",
+        "candidate_file_count": 39,
+        "candidate_copies_share_id": true,
+        "candidate_copies_share_file_hash": true
+      },
+      "inspect_event_export_sha256": "e2418d04f8f4afaaec5fd6175f0db8bba7175ff5887398c17f86c2032301aca1"
+    }
+  ],
+  "comparison": {
+    "source_commit_matches": true,
+    "upstream_pin_matches": true,
+    "native_binary_matches": true,
+    "runtime_model_effort_match": true,
+    "writer_ownership_sets_match": true,
+    "graph_isomorphism": false,
+    "graph_structure": "SER has separate research nodes for bytes and commaf, each gating its implementation. PAR has one decomposition node gating both implementations. Both execute the same two disjoint implementation write-path groups; graph structure differs.",
+    "PAR_initial_writer_overlap_ms": 106088.477,
+    "SER_initial_writer_overlap_ms": 0.0,
+    "SER_whole_run_elapsed_ms": 484962,
+    "PAR_whole_run_elapsed_ms": 304622,
+    "PAR_whole_run_elapsed_percent_lower": 37.18641872971491,
+    "PAR_repairs": 0,
+    "SER_repairs": 1,
+    "both_final_accepted_candidates_pass_native_review_heldout": true,
+    "provider_calls": null,
+    "provider_calls_note": "The evaluator records runtime invocation counts and observed token usage; provider call counts are unknown. Runtime invocations are not labeled as provider requests.",
+    "interpretation": "Single matched policy-arm pair, descriptive only. The initial writer groups have identical disjoint path ownership and recorded PAR overlap, but plans differ and SER had one repair while PAR had none. Whole-run duration cannot be attributed to concurrency alone and does not generalize beyond this pair.",
+    "release_qualified": false,
+    "SER_initial_writer_span_ms": 165537.35199999998,
+    "PAR_initial_writer_span_ms": 113704.779,
+    "initial_writer_span_ms_PAR_minus_SER": -51832.57299999999,
+    "initial_writer_span_percent_lower_in_PAR": 31.31170842940631,
+    "SER_initial_writer_interval_union_ms": 162157.883,
+    "PAR_initial_writer_interval_union_ms": 113704.779,
+    "initial_writer_interval_union_ms_PAR_minus_SER": -48453.10400000001,
+    "initial_writer_interval_union_percent_lower_in_PAR": 29.88020261710003
+  },
+  "prior_attempts": {
+    "excluded": true,
+    "bom_toml_setup_eval_ids": [
+      "eval-20261003T081651Z-08591d67",
+      "eval-20261003T081653Z-546d1e2b"
+    ],
+    "workspace_blocked_run_ids": [
+      "5a98c2c9cc82303f7a561f313e90e0f67886dc55471d1020191cca48914c32d6",
+      "744cfd040ac4dd44d2841e22aee2d69df54ad7b2332d4454f7c1f8450b5fe8c4"
+    ],
+    "note": "Earlier setup failures remain preserved and are not task outcomes, members of this pair, or resumed runs."
+  },
+  "release_qualified": false,
+  "evidence": {
+    "ser_eval_json_sha256": "ea9c685f39fafcd3e14d8ce6835f295ae29197952bd687fb0c6eef016e82d2ba",
+    "par_eval_json_sha256": "db1dd649e139f2f9265446c55659f0f85a0f7d6fcfe02e345968796c8f79282a",
+    "ser_inspect_event_export_sha256": "9838d9a3c12402cdba279b424babfe6a51c2fc6893debb83b9d7dc86303c650c",
+    "par_inspect_event_export_sha256": "e2418d04f8f4afaaec5fd6175f0db8bba7175ff5887398c17f86c2032301aca1",
+    "external_measurement_receipt_sha256": "61243d2e145d21a59ec0c521d0f290420ca46a678eba363d45b7f86a564e780e"
+  }
+}
