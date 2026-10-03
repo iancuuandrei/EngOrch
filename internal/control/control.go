@@ -711,13 +711,13 @@ func validateRepairPlanningBinding(c Creation) error {
 	if c.Execution != nil {
 		parallelVersion = c.Execution.ParallelImplementationVersion
 	}
-	contractV3 := c.Config.PlannerContract == plannerContractGraphV3
-	contractV4 := c.Config.PlannerContract == "plan-graph-v4"
-	if version == 1 && !(contractV3 && parallelVersion == 0 || contractV4 && parallelVersion == 1) ||
-		version == 0 && (contractV3 || contractV4 || parallelVersion != 0) {
+	serialContract := c.Config.PlannerContract == plannerContractGraphV3 || c.Config.PlannerContract == plannerContractGraphV5
+	parallelContract := c.Config.PlannerContract == plannerContractGraphV4 || c.Config.PlannerContract == plannerContractGraphV6
+	if version == 1 && !(serialContract && parallelVersion == 0 || parallelContract && parallelVersion == 1) ||
+		version == 0 && (serialContract || parallelContract || parallelVersion != 0) {
 		return errors.New("repair planning policy and planner contract must be enabled together")
 	}
-	if (parallelVersion == 1) != contractV4 {
+	if (parallelVersion == 1) != parallelContract {
 		return errors.New("parallel implementation policy and planner contract must be enabled together")
 	}
 	return nil

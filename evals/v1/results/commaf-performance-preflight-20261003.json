@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "kind": "performance-task-preflight",
+  "date_utc": "2026-10-03",
+  "task_id": "go-humanize-commaf-performance",
+  "repository": "https://github.com/dustin/go-humanize.git",
+  "source_sha": "a1b4e66b9a6d890e9e15e7091cf16c8032367d6e",
+  "license": "MIT",
+  "source_clean_after": true,
+  "go_version": "go1.27.1 windows/amd64",
+  "native": {"command": "go test -count=1 ./...", "status": "PASS", "exit_code": 0},
+  "benchmark": {"command": "go test -run ^$ -bench ^BenchmarkCommaf$ -benchmem -count=5 .", "allocations_per_operation": 4, "bytes_per_operation": 136, "timing_is_acceptance_gate": false},
+  "allocation_probe": {
+    "repetitions": 1000,
+    "ordinary": 4,
+    "fraction": 4,
+    "negative": 4,
+    "largest_finite": 11,
+    "smallest_subnormal": 9,
+    "negative_zero": 4,
+    "requested_finite_budget": 2
+  },
+  "heldout": {
+    "command": "go test -count=1 -v -run=^TestFabricV1Heldout$ .",
+    "output_equivalence": "PASS boundaries and 1000 deterministic float bit patterns",
+    "allocation_budget": "FAIL_EXPECTED on all six finite representatives",
+    "exit_code": 1,
+    "classification": "targeted_assertion",
+    "fixture_sha256": "e7788794290324db9f276b1c95ae1afd2cec4da70ad1da084f639b7661d3fd6a",
+    "original_checkout_contains_heldout": false
+  },
+  "native_stdout_sha256": "0ffb861652e4459274081d229e9bf5c7378dddef37c830b176ae5ae9a300375fe",
+  "benchmark_stdout_sha256": "3a25a548ce9df3f18713c8483ae34ac2d0fa77b695f023965aff9502faa669d2",
+  "heldout_stdout_sha256": "a5819c64b9b28175f2af8781fb81a0886d66624015fc0d419a72cb716a7526c8",
+  "provider_calls": 0,
+  "fabric_task_completion": "NOT RUN",
+  "release_qualification": false
+}

@@ -133,10 +133,10 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 	// conservative initial implementation scope; repair design may refine only
 	// never-started repair writes within that scope. Nil/old policies remain
 	// compatible and replay with their historical repair behavior.
-	cfg.PlannerContract = "plan-graph-v3"
+	cfg.PlannerContract = "plan-graph-v5"
 	parallelImplementationVersion := 0
 	if parallelWriters {
-		cfg.PlannerContract = "plan-graph-v4"
+		cfg.PlannerContract = "plan-graph-v6"
 		parallelImplementationVersion = 1
 		// Validate the opt-in against the configured implementation route before
 		// creating a run or dispatching any planner intent.
@@ -315,6 +315,9 @@ func autonomousPhase(state string) string {
 func autonomousBlockReason(err error) string {
 	if err == nil {
 		return "unknown"
+	}
+	if errors.Is(err, control.ErrAutonomousVerificationNotRun) {
+		return "verification_not_run"
 	}
 	message := strings.ToLower(err.Error())
 	switch {

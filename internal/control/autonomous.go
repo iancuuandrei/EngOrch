@@ -259,6 +259,9 @@ func RunAutonomous(ctx context.Context, path string) (Snapshot, error) {
 				}
 				continue
 			}
+			if err := preflightAutonomousVerification(s); err != nil {
+				return s, err
+			}
 			// A confirmed initial effect restarts directly at verification,
 			// never with another writer request.
 			if autonomousFilesApplied(s) {
@@ -314,6 +317,9 @@ func RunAutonomous(ctx context.Context, path string) (Snapshot, error) {
 					return InspectOr(s, path, fmt.Errorf("autonomous file effect remains UNKNOWN: %w", err))
 				}
 				continue
+			}
+			if err := rejectUnstartedAutonomousVerification(s); err != nil {
+				return s, err
 			}
 			// Verify the exact confirmed repair before admitting another
 			// slot. Checking the slot first would consume budget for an

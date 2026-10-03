@@ -10,6 +10,7 @@ import (
 	"harness.local/engorch/internal/access"
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/hostenvironment"
+	"harness.local/engorch/internal/modelpolicy"
 	"harness.local/engorch/internal/providergateway"
 	"harness.local/engorch/internal/runtime"
 	"harness.local/engorch/internal/taskpool"
@@ -787,5 +788,92 @@ func providerBackedConfig(selectedRuntime, providerID string) Config {
 			Models:      []ProviderModel{{Name: "planner-model", Version: 2, Provider: providerID, Model: "deployment/opaque-model", AdapterID: providergateway.OpenAIChatCompletionsAdapter, Capabilities: ProviderCapabilities{Tools: true, OutputCap: true, CompleteUsage: true}, AdapterCapabilitiesJSON: "{}", ContextWindowTokens: 100, MaxCalls: 3, MaxRequestBytes: 4096, MaxResponseBytes: 8192, MaxOutputTokens: 10, Pricing: &ProviderPricing{Currency: "USD", Unit: "micro_usd_per_million_tokens", MaxInputMicroUSDPerMillion: 1001, MaxOutputMicroUSDPerMillion: 2001}}},
 			Roles:       map[string]ProviderRole{"planner": {Endpoint: "primary", Model: "planner-model", AdapterControlsJSON: "{}", Variant: ProviderVariant{Effort: "none"}, RequiredCapabilities: &ProviderRequiredCapabilities{StructuredOutput: providergateway.StructuredOutputTextParseRequired}}},
 		},
+	}
+}
+
+func TestModelPolicyTOMLExample(t *testing.T) {
+	raw := Example + `
+[writer]
+runtime = "fake"
+provider = "deterministic"
+model = "writer-standard"
+effort = "medium"
+role = "writer"
+
+[explorer]
+runtime = "fake"
+provider = "deterministic"
+model = "explorer-standard"
+effort = "medium"
+role = "explorer"
+
+[model_policy]
+Version = 1
+
+[[model_policy.Profiles]]
+Name = "writer-standard"
+Runtime = "fake"
+Provider = "deterministic"
+Model = "writer-standard"
+Effort = "medium"
+
+[[model_policy.Profiles]]
+Name = "writer-strong"
+Runtime = "fake"
+Provider = "deterministic"
+Model = "writer-strong"
+Effort = "high"
+
+[[model_policy.Profiles]]
+Name = "explorer-economy"
+Runtime = "fake"
+Provider = "deterministic"
+Model = "explorer-economy"
+Effort = "low"
+
+[[model_policy.Profiles]]
+Name = "explorer-standard"
+Runtime = "fake"
+Provider = "deterministic"
+Model = "explorer-standard"
+Effort = "medium"
+
+[[model_policy.Profiles]]
+Name = "explorer-strong"
+Runtime = "fake"
+Provider = "deterministic"
+Model = "explorer-strong"
+Effort = "high"
+
+[model_policy.Rules.writer]
+DefaultProfile = "writer-standard"
+EscalatedProfile = "writer-strong"
+ContextEscalationTokens = 1000000000
+ContextEscalationBytes = 16384
+FailureEscalationCount = 1
+
+[model_policy.Rules.explorer]
+DefaultProfile = "explorer-standard"
+CheapProfile = "explorer-economy"
+CheapContextBytes = 2048
+EscalatedProfile = "explorer-strong"
+ContextEscalationTokens = 1000000000
+ContextEscalationBytes = 16384
+FailureEscalationCount = 1
+`
+	c, err := Parse([]byte(raw))
+	if err != nil || c.ModelPolicy == nil {
+		t.Fatalf("CamelCase model policy TOML rejected: %v", err)
+	}
+	explorer, err := modelpolicy.Select(*c.ModelPolicy, modelpolicy.Request{Role: "explorer", ReadOnly: true, Complexity: modelpolicy.LevelMedium, Risk: modelpolicy.LevelMedium, Uncertainty: modelpolicy.LevelMedium, ContextBytes: 2048})
+	if err != nil || explorer.Profile.Name != "explorer-economy" {
+		t.Fatalf("bounded explorer economy route differs: %+v %v", explorer, err)
+	}
+	writer, err := modelpolicy.Select(*c.ModelPolicy, modelpolicy.Request{Role: "writer", Complexity: modelpolicy.LevelMedium, Risk: modelpolicy.LevelMedium, Uncertainty: modelpolicy.LevelMedium, ContextBytes: 1, Failures: 1})
+	if err != nil || writer.Profile.Name != "writer-strong" || writer.Reason != "prior-failures" {
+		t.Fatalf("accepted writer failure did not escalate: %+v %v", writer, err)
+	}
+	if _, err := Parse([]byte(strings.Replace(raw, "DefaultProfile", "default_profile", 1))); err == nil {
+		t.Fatal("JSON snake_case policy field was accepted")
 	}
 }

@@ -88,7 +88,7 @@ func TestRunAutonomousCreatesBoundPolicyAndReportsResumableBlocker(t *testing.T)
 	if s.Creation.Objective != "Make a bounded fixture change" || s.Creation.Execution == nil || s.Creation.Execution.Mode != "autonomous-v1" || s.Creation.Execution.MaxRepairs != 3 {
 		t.Fatalf("autonomous input was not durably bound: %#v", s.Creation)
 	}
-	if s.Creation.Execution.GraphVersion != 1 || s.Creation.Execution.MaxParallel != 3 || s.Creation.Execution.Context != "bounded-v1" || s.Creation.Execution.RepairPlanningVersion != 1 || s.Creation.Execution.ParallelImplementationVersion != 0 || s.Creation.Config.PlannerContract != "plan-graph-v3" {
+	if s.Creation.Execution.GraphVersion != 1 || s.Creation.Execution.MaxParallel != 3 || s.Creation.Execution.Context != "bounded-v1" || s.Creation.Execution.RepairPlanningVersion != 1 || s.Creation.Execution.ParallelImplementationVersion != 0 || s.Creation.Config.PlannerContract != "plan-graph-v5" {
 		t.Fatalf("graph execution and bounded context not defaulted: %#v", s.Creation.Execution)
 	}
 	if s.State != "IMPLEMENTING" || result.RunID != s.RunID || result.State != s.State || result.Phase != "implementation" || result.BlockedReason == "" {
@@ -170,6 +170,36 @@ func TestAutonomousUncertaintySummaryIsSanitized(t *testing.T) {
 	}
 	if summary.RunID != s.RunID || summary.State != s.State || summary.Phase != "approval" || summary.BlockedReason != "effect_requires_reconciliation" || strings.Contains(out.String(), "credential") {
 		t.Fatalf("uncertainty summary leaked details or lost state: %#v (%s)", summary, out.String())
+	}
+}
+
+func TestAutonomousVerificationNotRunSummaryUsesTrustedSentinel(t *testing.T) {
+	path, s, out := planAutonomousFailureFixture(t, "verification preflight fixture")
+	trustedSecret := "trusted-provider-token-must-not-print"
+	cause := errors.Join(errors.New("verification unavailable token="+trustedSecret), control.ErrAutonomousVerificationNotRun)
+	err := reportAutonomousFailure(&out, path, s.RunID, cause)
+	if err == nil || strings.Contains(err.Error(), trustedSecret) || strings.Contains(out.String(), trustedSecret) {
+		t.Fatalf("trusted verification blocker leaked its cause: err=%v output=%s", err, out.String())
+	}
+	var summary autonomousFailure
+	if decodeErr := json.Unmarshal(out.Bytes(), &summary); decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	if summary.BlockedReason != "verification_not_run" {
+		t.Fatalf("trusted verification blocker lost stable classification: %#v", summary)
+	}
+
+	ordinarySecret := "ordinary-provider-token-must-not-print"
+	out.Reset()
+	err = reportAutonomousFailure(&out, path, s.RunID, errors.New("verification_not_run unavailable token="+ordinarySecret))
+	if err == nil || strings.Contains(err.Error(), ordinarySecret) || strings.Contains(out.String(), ordinarySecret) {
+		t.Fatalf("ordinary error leaked its cause: err=%v output=%s", err, out.String())
+	}
+	if decodeErr := json.Unmarshal(out.Bytes(), &summary); decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	if summary.BlockedReason != "execution_blocked" {
+		t.Fatalf("ordinary message spoofed trusted verification classification: %#v", summary)
 	}
 }
 
@@ -275,7 +305,7 @@ func TestAutonomousParallelFlagDefaultsSequentialOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Creation.Execution == nil || s.Creation.Execution.GraphVersion != 1 || s.Creation.Execution.MaxParallel != 1 || s.Creation.Execution.RepairPlanningVersion != 1 || s.Creation.Execution.ParallelImplementationVersion != 0 || s.Creation.Config.PlannerContract != "plan-graph-v3" {
+	if s.Creation.Execution == nil || s.Creation.Execution.GraphVersion != 1 || s.Creation.Execution.MaxParallel != 1 || s.Creation.Execution.RepairPlanningVersion != 1 || s.Creation.Execution.ParallelImplementationVersion != 0 || s.Creation.Config.PlannerContract != "plan-graph-v5" {
 		t.Fatalf("sequential override not bound: %#v", s.Creation.Execution)
 	}
 }
@@ -321,7 +351,7 @@ role = "explorer"
 		t.Fatal(err)
 	}
 	policy := s.Creation.Execution
-	if policy == nil || policy.ParallelImplementationVersion != 1 || policy.GraphVersion != 1 || policy.RepairPlanningVersion != 1 || policy.Context != "bounded-v1" || policy.MaxParallel != 1 || s.Creation.Config.PlannerContract != "plan-graph-v4" {
+	if policy == nil || policy.ParallelImplementationVersion != 1 || policy.GraphVersion != 1 || policy.RepairPlanningVersion != 1 || policy.Context != "bounded-v1" || policy.MaxParallel != 1 || s.Creation.Config.PlannerContract != "plan-graph-v6" {
 		t.Fatalf("parallel writer policy or serial scheduler was not durably bound: %#v, %#v", policy, s.Creation.Config)
 	}
 }
