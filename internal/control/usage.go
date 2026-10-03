@@ -259,16 +259,34 @@ func MeasureRunUsage(path string) (RunUsage, error) {
 				return RunUsage{}, err
 			}
 			add(intent.Invocation, filepath.Join(intent.Launch.Root, "writer.jsonl"))
+		case "graph.writer.host-intent":
+			var event GraphWriterHostEvent
+			if err := canonical.Decode(e.Payload, &event); err != nil {
+				return RunUsage{}, err
+			}
+			if event.Intent == nil || event.TaskID == "" {
+				return RunUsage{}, errors.New("graph writer usage intent lacks task binding")
+			}
+			add(event.Intent.Invocation, filepath.Join(event.Intent.Launch.Root, "writer.jsonl"))
 		case "review.host-intent":
 			var intent ReviewHostIntent
 			if err := canonical.Decode(e.Payload, &intent); err != nil {
 				return RunUsage{}, err
 			}
 			add(intent.Invocation, filepath.Join(intent.Launch.Root, "review.jsonl"))
-		case "planning.runtime-observed", "writer.runtime-observed", "review.runtime-observed", "explorer.runtime-observed":
+		case "planning.runtime-observed", "writer.runtime-observed", "review.runtime-observed", "explorer.runtime-observed", "graph.writer.runtime-observed":
 			// These receipt schemas deliberately have the same correlation fields.
 			var receipt PlannerReceipt
-			if err := canonical.Decode(e.Payload, &receipt); err != nil {
+			if e.Kind == "graph.writer.runtime-observed" {
+				var event GraphWriterHostEvent
+				if err := canonical.Decode(e.Payload, &event); err != nil {
+					return RunUsage{}, err
+				}
+				if event.RuntimeReceipt == nil || event.TaskID == "" {
+					return RunUsage{}, errors.New("graph writer usage receipt lacks task binding")
+				}
+				receipt = PlannerReceipt{InvocationID: event.RuntimeReceipt.InvocationID, JournalHead: event.RuntimeReceipt.JournalHead, ResultHash: event.RuntimeReceipt.ResultHash}
+			} else if err := canonical.Decode(e.Payload, &receipt); err != nil {
 				return RunUsage{}, err
 			}
 			index, ok := indices[receipt.InvocationID]

@@ -45,13 +45,23 @@ func autonomousFileAuthorization(s Snapshot, intent effects.Intent) (effects.Aut
 // prepared effect prevents an unrelated or older file receipt from advancing
 // this run.
 func autonomousFilesApplied(s Snapshot) bool {
+	if graphWriterBatchEffectApplied(s) {
+		return true
+	}
 	return s.FileOutcome == "CONFIRMED" && s.FileIntent != nil && s.WriterProposal != nil &&
 		s.FileIntent.Prepared.Intent == s.WriterProposal.Prepared.Intent &&
 		s.Candidate != nil && *s.Candidate == s.FileIntent.Prepared.Proposal.After
 }
 
+func graphWriterBatchEffectApplied(s Snapshot) bool {
+	return s.GraphWriterBatch != nil && s.FileOutcome == "CONFIRMED" && s.FileIntent != nil &&
+		s.FileIntent.Prepared.Intent == s.GraphWriterBatch.Prepared.Intent && s.Candidate != nil &&
+		*s.Candidate == s.GraphWriterBatch.Prepared.Proposal.After
+}
+
 func autonomousRepairApplied(s Snapshot) bool {
-	if !autonomousFilesApplied(s) || s.RepairCandidateID == "" {
+	if !autonomousFilesApplied(s) || s.RepairCandidateID == "" || s.WriterProposal == nil || s.FileIntent == nil ||
+		s.FileIntent.Prepared.Intent != s.WriterProposal.Prepared.Intent {
 		return false
 	}
 	beforeID, err := s.WriterProposal.Prepared.Proposal.Before.ID()
@@ -99,6 +109,11 @@ func autonomousDispatchBlocked(s Snapshot) error {
 	}
 	if s.WriterHost != nil && s.WriterHost.RuntimeReceipt == nil {
 		return errors.New("writer runtime remains unresolved and cannot be resent automatically")
+	}
+	for taskID, host := range s.GraphWriterHosts {
+		if host.RuntimeReceipt == nil {
+			return fmt.Errorf("graph writer task %s runtime remains unresolved and cannot be resent automatically", taskID)
+		}
 	}
 	if s.ReviewHost != nil && s.ReviewHost.RuntimeReceipt == nil {
 		return errors.New("review runtime remains unresolved and cannot be resent automatically")

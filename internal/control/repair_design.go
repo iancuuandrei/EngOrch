@@ -3,6 +3,7 @@ package control
 import (
 	"errors"
 	"fmt"
+	"sort"
 
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/engineeringplan"
@@ -19,12 +20,23 @@ func initialImplementationScope(s Snapshot) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	seen := map[string]bool{}
+	var scope []string
 	for _, task := range g.Tasks {
 		if task.Kind == engineeringplan.Implementation {
-			return append([]string(nil), task.ScopePaths...), nil
+			for _, p := range task.ScopePaths {
+				if !seen[p] {
+					seen[p] = true
+					scope = append(scope, p)
+				}
+			}
 		}
 	}
-	return nil, errors.New("accepted graph has no initial implementation scope")
+	if len(scope) == 0 {
+		return nil, errors.New("accepted graph has no initial implementation scope")
+	}
+	sort.Strings(scope)
+	return scope, nil
 }
 
 func repairFailureID(ev GraphTaskEvidence) string {

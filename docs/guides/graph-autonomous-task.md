@@ -14,9 +14,11 @@ unproven; see the real-repository evaluation report.
 
 - `fabric run --autonomous` creates
   `ExecutionPolicy{Mode: autonomous-v1, MaxRepairs, Context: bounded-v1,
-  GraphVersion: 1, MaxParallel}`.
+  GraphVersion: 1, RepairPlanningVersion: 1, MaxParallel}`.
 - `--max-parallel` is 1..8, default 3; `1` is the sequential override
   (graph still applies, but without overlap). `--max-repairs` remains 0..8.
+- `--parallel-writers` is an experimental opt-in, off by default; see its
+  separate contract and pending acceptance below.
 - `--prepare-only` accepts the graph, confirms the isolated workspace and
   pristine candidate, and returns `status: PREPARED` before explorer or writer
   dispatch. The durable run remains `IMPLEMENTING`; continue that exact run
@@ -24,13 +26,13 @@ unproven; see the real-repository evaluation report.
 - Empty `Context` and `GraphVersion 0 / MaxParallel 0` preserve the legacy
   sequential workflow byte-for-byte; `canonical.Hash("harness.run.v1")` and
   `canonical.Hash("harness.execution-policy.v1")` are unchanged for old runs.
-- `Config.PlannerContract` may be `""`, `plan-v1` (legacy) or `plan-graph-v1` / `plan-graph-v2`
+- `Config.PlannerContract` may be `""`, `plan-v1` (legacy) or `plan-graph-v1` / `plan-graph-v2` / `plan-graph-v3` / `plan-graph-v4`
   (strict autonomous graph). Empty retains historical raw planner input
   identity.
 
 ## Planner contract
 
-- New autonomous CLI runs freeze `plan-graph-v2`, including the exact JSON schema in the invocation and Codex request. Legacy `plan-graph-v1` invocation recipes are unchanged. Evidence entries require `kind` and `description`; root scope `.` is allowed, but writes require concrete paths. Strict wire objects include every property; empty parent IDs and empty dependency/write arrays represent absent values.
+- Default new autonomous CLI runs freeze `plan-graph-v3`; the parallel-writer opt-in freezes `plan-graph-v4`. Both include the exact JSON schema in the invocation and Codex request. Legacy graph invocation recipes are unchanged. Evidence entries require `kind` and `description`; root scope `.` is allowed, but writes require concrete paths. Strict wire objects include every property; empty parent IDs and empty dependency/write arrays represent absent values. Initial implementation scope also bounds subsequent repair designs.
 
 - `plan-graph-v1` instructs planners to return only the engineeringplan v1
   strict JSON schema (version, mode, summary, tasks). `completed` and
@@ -70,7 +72,8 @@ unproven; see the real-repository evaluation report.
   completed results preserved; UNKNOWN blocks retry and revision.
 - Repair/review failure in historical graph policies appends the original
   scoped implementation/verification/review extension byte-for-byte. New CLI
-  runs bind `RepairPlanningVersion: 1` with `plan-graph-v3`: each repair slot
+  runs bind `RepairPlanningVersion: 1`, with v3 by default or v4 for the parallel
+  writer opt-in: each repair slot
   first adds a read-only design task bound to the exact failed gate and current
   candidate. Its recorded `Exploration.Paths` may fill only that never-started
   repair implementation's empty `WritePaths`, and every path must remain
@@ -89,13 +92,35 @@ unproven; see the real-repository evaluation report.
   evidence plus native verification/review evidence; otherwise it stays
   blocked.
 
+## Experimental parallel implementation opt-in
+
+`fabric run --autonomous --parallel-writers "OBJECTIVE"` selects the new
+`plan-graph-v4` recipe and immutable `ParallelImplementationVersion: 1`.
+The default remains the v3 singleton writer path. The opt-in requires bounded
+context, graph execution, repair planning, the anchored-edits writer contract,
+and the JSON-v2 explorer contract. Unsupported writer routes reject before run
+creation; the first production route is Codex.
+
+The planner may choose one initial implementation task, or two independent
+tasks with disjoint concrete write paths. A small objective does not need a
+second writer. `--max-parallel 1` remains valid with the opt-in, allowing the
+same two-task shape to execute serially for comparison.
+
+Parallel implementation acceptance is pending. CLI and planner regression
+checks pass, but they do not prove two model invocations overlap, safe merged
+application, or improved real-task latency. Those require the cohort
+integration tests and a candidate-bound real-repository trial.
+
 ## Parallel seams
 
 - `taskscheduler.Bind/Tick/Pump` plus `ScheduledDispatchAdapter` carry durable
   static claims. `scheduledInvocation` still requires v2 except for the narrow
-  static V1 `OperationExplorer` case: graph-enabled, `IMPLEMENTING` with
+  static V1 `OperationExplorer` case: graph-enabled, `IMPLEMENTING` (or the
+  exact repair-design cohort in `REPAIRING` with repair planning enabled) with
   resolved candidate/workspace/plan/graph, no `TaskPool`, no dynamic turn.
-  V1 writer/reviewer/planner and dynamic `agent_turn` are never broadened.
+  Default V1 writer/reviewer/planner and dynamic `agent_turn` retain their
+  existing gates. The parallel-writer opt-in adds a separately bound static
+  writer cohort; it does not enable dynamic turns.
   V1 `TaskPool` remains forbidden; `PumpOptions.Workers` is
   `min(MaxParallel, readyCount, remaining MaxExplorationRecords)` (1..8).
 - `ExplorerHost` singleton is retained for legacy compatibility; graph runs
@@ -113,9 +138,10 @@ unproven; see the real-repository evaluation report.
   dispatch/replay. Questions embed bounded task ID/title/scope/evidence and
   are <=4096 bytes. Completion requires the exact matching `ExplorerRecord`
   and scheduler terminal receipt. Dependent tasks run after dependencies;
-  only a single writer runs after all required research/design.
+  the default single writer runs after all required research/design. The
+  opt-in permits at most two independent implementations with disjoint paths.
 - Head exception (`ExecuteScheduledClaim` checks `ControllerHead` twice):
-  legacy/exclusive gates remain. The sole exception is static graph-bound
+  legacy/exclusive gates remain. The explorer exception is static graph-bound
   explorers in the same frozen batch: recomputed InvocationID/RunID/PlanID/
   candidate/lifecycle/host must be unchanged, and every journal event since
   the bound head must be attributable to exact cohort explorer invocations
@@ -175,7 +201,7 @@ acceptance or `READY`.
   unrelated/mutation/lifecycle deltas, frozen drift rejection, UNKNOWN
   blocking, and repair evolution preserving evidence with fresh
   verification/review.
-- No shell, real providers, or subagents were run here. Root runs the suite
-  and independent review, then real-repository parallel acceptance with
-  measured wall-clock benefit. Until then, parallel benefit is architectural
-  (bounded overlap of read-only explorers) rather than measured.
+- Actual development trials and the matched six-task evaluation are recorded
+  in [the evaluation report](../evaluation/v1-real-repository-comparison.md).
+  Explorer overlap has been observed; a controlled wall-clock improvement
+  and parallel implementation acceptance remain unproven.

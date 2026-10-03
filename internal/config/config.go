@@ -137,8 +137,20 @@ func (c Config) Validate() error {
 	if c.WriterContract != "" && c.WriterContract != "nonempty-v1" && c.WriterContract != "utf8-v2" && c.WriterContract != writercontract.ContractChangesJSONV1 && c.WriterContract != writercontract.ContractUTF8ReplaceV3 && c.WriterContract != writercontract.ContractUTF8ScopedV4 && c.WriterContract != writercontract.ContractAnchoredEditsV1 {
 		return errors.New("unsupported writer contract")
 	}
-	if c.PlannerContract != "" && c.PlannerContract != "plan-v1" && c.PlannerContract != plannerContractGraphV1 && c.PlannerContract != "plan-graph-v2" && c.PlannerContract != "plan-graph-v3" {
+	if c.PlannerContract != "" && c.PlannerContract != "plan-v1" && c.PlannerContract != plannerContractGraphV1 && c.PlannerContract != "plan-graph-v2" && c.PlannerContract != "plan-graph-v3" && c.PlannerContract != "plan-graph-v4" {
 		return errors.New("unsupported planner contract")
+	}
+	if c.PlannerContract == "plan-graph-v4" {
+		if c.WriterContract != writercontract.ContractAnchoredEditsV1 || c.ExplorerContract != "json-v2" || c.Writer == nil || c.Explorer == nil {
+			return errors.New("plan-graph-v4 requires anchored-edits writer and json-v2 explorer contracts")
+		}
+		// The production parallel writer route is deliberately limited to the
+		// pinned Codex runtime. The deterministic fake route remains available
+		// for local contract tests; provider-backed routes need separate
+		// qualification before they can receive parallel writer dispatches.
+		if c.Writer.Runtime != "codex-app-server" && c.Writer.Runtime != "fake" {
+			return errors.New("plan-graph-v4 requires a Codex writer runtime")
+		}
 	}
 	if c.ExplorerContract != "" && c.ExplorerContract != "json-v1" && c.ExplorerContract != "json-v2" {
 		return errors.New("unsupported explorer contract")

@@ -55,7 +55,7 @@ func selectLatestValidatedRun(root string, eligible runEligibility, noneErr, tie
 	}
 	candidates := make([]latestRunCandidate, 0, len(entries))
 	for _, path := range entries {
-		if graphSchedulerSidecar(path) {
+		if runJournalSidecar(path) {
 			continue
 		}
 		info, err := os.Stat(path)
@@ -89,12 +89,23 @@ func selectLatestValidatedRun(root string, eligible runEligibility, noneErr, tie
 	return candidates[0].id, nil
 }
 
-// Graph scheduler journals share the runs directory but have a separate event
+// Scheduler and model-access journals share the runs directory but have a separate event
 // contract. Ignore only their canonical names; other entries still fail replay
 // or repository binding validation rather than silently hiding corrupt runs.
-func graphSchedulerSidecar(path string) bool {
-	runID, cohort, found := strings.Cut(filepath.Base(path), ".jsonl.graph-schedule-")
-	if !found || len(runID) != 64 || strings.Trim(runID, "0123456789abcdef") != "" || !strings.HasSuffix(cohort, ".jsonl") {
+func runJournalSidecar(path string) bool {
+	runID, sidecar, found := strings.Cut(filepath.Base(path), ".jsonl.")
+	if !found || len(runID) != 64 || strings.Trim(runID, "0123456789abcdef") != "" {
+		return false
+	}
+	if sidecar == "model-access.jsonl" {
+		return true
+	}
+	scheduler, graph := strings.CutPrefix(sidecar, "graph-")
+	kind, cohort, separated := strings.Cut(scheduler, "-")
+	if !graph || !separated || (kind != "schedule" && kind != "writers") {
+		return false
+	}
+	if !strings.HasSuffix(cohort, ".jsonl") {
 		return false
 	}
 	cohortID := strings.TrimSuffix(cohort, ".jsonl")
