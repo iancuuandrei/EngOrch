@@ -68,10 +68,16 @@ unproven; see the real-repository evaluation report.
 - `graph.revised` uses `ValidateAutonomousRevision`: never-started nodes may
   change/remove; started/completed/UNKNOWN nodes keep identity and history;
   completed results preserved; UNKNOWN blocks retry and revision.
-- Repair/review failure appends scoped repair implementation/verification/review
-  nodes carrying actual failed evidence (`RepairExtension`) within the existing
-  `MaxRepairs` bound and `autonomous.repair-started` slot; no extra
-  authorization generations. Unknown/pending effects are never resent.
+- Repair/review failure in historical graph policies appends the original
+  scoped implementation/verification/review extension byte-for-byte. New CLI
+  runs bind `RepairPlanningVersion: 1` with `plan-graph-v3`: each repair slot
+  first adds a read-only design task bound to the exact failed gate and current
+  candidate. Its recorded `Exploration.Paths` may fill only that never-started
+  repair implementation's empty `WritePaths`, and every path must remain
+  within the initial implementation's immutable `ScopePaths`. The reviewer
+  never grants paths. The resulting graph revision is replay-validated from
+  the exact design record; it cannot alter other tasks or exceed the existing
+  `MaxRepairs` bound. Unknown/pending effects are never resent.
 
 ## Writer scope and READY
 

@@ -1,6 +1,33 @@
 # Real repository comparison and observed product failures
 
-## Matched six-task run
+## Latest six-task evaluation
+
+The fresh `eval-20261003T010038Z-dbbadab3` evaluation used clean Fabric
+`af34d3ffb39c0812c4f818822397e480b0e5d5a4`, the same pinned repositories,
+Codex executable (`1722907aa64401bcc9b34467ef5c2af43f6aef9a5045ef04d11d19dfae4589fb`),
+model (`gpt-6-luna`) and effort (`high`) as the initial comparison below.
+All six rows reached a terminal evaluation outcome.
+
+| Task | Latest Native | Earlier PR #5 baseline | Repair attempts in successful run |
+| --- | --- | --- | --- |
+| go-humanize | PASS | BLOCKED | 2 |
+| afero | PASS | BLOCKED | 1 |
+| go-multierror | PASS | PASS | None recorded |
+| go-atomic | BLOCKED | BLOCKED | Not established |
+| go-difflib | BLOCKED | BLOCKED | Not established |
+| logr | PASS | BLOCKED | None recorded |
+
+This run completed **4/6**, compared with the earlier baseline's **1/6**.
+Each PASS includes READY, native checks, an approving candidate-bound review
+with zero findings, and independent candidate-bound native and held-out tests.
+The successful humanize and Afero runs repaired failed gates without a human
+intervention recorded by the runner. Atomic and difflib stopped in implementation;
+their missing metrics remain unknown. The earlier baseline was not rerun, and
+these six observations do not establish a general success rate or a completed
+v1 release. Later CLI run-listing fixes and documentation changes were verified
+separately from this immutable evaluation binary.
+
+## Initial matched six-task run
 
 Two fresh sets of pinned repositories used the same Codex executable, model
 (`gpt-6-luna`) and reasoning effort (`high`). Native Fabric was built from clean
@@ -130,3 +157,20 @@ file effect. This is improved observed acceptance for these two tasks, not
 full v1 qualification. The console initially displayed an incorrect PASS count
 for a single result because PowerShell counted dictionary fields; `eval.json`
 retains the authoritative per-task states. The summary now counts result rows.
+
+## Separate autonomous repair acceptance
+
+Run `c78d41fc977e603b10673fd4363da2ebbe71f857da955b030cce069f92645b4f`
+on the pinned go-atomic repository initially failed native compilation because
+the generated test omitted `strconv`. It started under `3719c930545c16c9e7ffe20ef2eca7417918341d`.
+The repair design was blocked before provider dispatch by a configuration-v1
+scheduler guard. After the guard fix, an explicit resume under
+`af34d3ffb39c0812c4f818822397e480b0e5d5a4` completed design, a scoped repair,
+fresh native checks and approving review.
+
+Candidate `6845faaa71695a92e1b0d6e62d3ec18283e19e1547af5416b5c7fbf0334e93bd`
+then passed native and held-out acceptance on separate candidate-bound copies.
+Only `bool_ext.go` and `bool_test.go` changed. This demonstrates the repaired
+path and restart with the earlier failure preserved; it involved a product fix
+and an explicit resume. It is a separate result, not a fifth PASS in the latest
+six-task evaluation or a zero-intervention release qualification.

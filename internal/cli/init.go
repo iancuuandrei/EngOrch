@@ -25,6 +25,10 @@ func initCommand(ctx context.Context, root string, args []string, out io.Writer)
 	binary := flags.String("codex", "", "Codex executable")
 	model := flags.String("model", "", "model identifier")
 	effort := flags.String("effort", "medium", "reasoning effort")
+	writerModel := flags.String("writer-model", "", "writer model; defaults to --model")
+	writerEffort := flags.String("writer-effort", "", "writer reasoning effort; defaults to --effort")
+	reviewerModel := flags.String("reviewer-model", "", "reviewer model; defaults to --model")
+	reviewerEffort := flags.String("reviewer-effort", "", "reviewer reasoning effort; defaults to --effort")
 	auth := flags.String("auth-source", "", "existing Codex auth.json")
 	state := flags.String("state-root", "", "private runtime state directory")
 	if err := flags.Parse(args); err != nil {
@@ -96,7 +100,21 @@ func initCommand(ctx context.Context, root string, args []string, out io.Writer)
 			return errors.New("--state-root must be outside the project repository")
 		}
 		profile := func(role string) *runtime.Profile {
-			return &runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: *model, Effort: *effort, Role: role}
+			selectedModel, selectedEffort := *model, *effort
+			var overrideModel, overrideEffort string
+			switch role {
+			case "writer":
+				overrideModel, overrideEffort = *writerModel, *writerEffort
+			case "reviewer":
+				overrideModel, overrideEffort = *reviewerModel, *reviewerEffort
+			}
+			if overrideModel != "" {
+				selectedModel = overrideModel
+			}
+			if overrideEffort != "" {
+				selectedEffort = overrideEffort
+			}
+			return &runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: selectedModel, Effort: selectedEffort, Role: role}
 		}
 		cfg := config.Config{
 			Version: 1, Repository: filepath.Base(root), BaseBranch: "HEAD",

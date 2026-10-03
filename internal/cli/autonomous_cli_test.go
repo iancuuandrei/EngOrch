@@ -88,7 +88,7 @@ func TestRunAutonomousCreatesBoundPolicyAndReportsResumableBlocker(t *testing.T)
 	if s.Creation.Objective != "Make a bounded fixture change" || s.Creation.Execution == nil || s.Creation.Execution.Mode != "autonomous-v1" || s.Creation.Execution.MaxRepairs != 3 {
 		t.Fatalf("autonomous input was not durably bound: %#v", s.Creation)
 	}
-	if s.Creation.Execution.GraphVersion != 1 || s.Creation.Execution.MaxParallel != 3 || s.Creation.Execution.Context != "bounded-v1" {
+	if s.Creation.Execution.GraphVersion != 1 || s.Creation.Execution.MaxParallel != 3 || s.Creation.Execution.Context != "bounded-v1" || s.Creation.Execution.RepairPlanningVersion != 1 || s.Creation.Config.PlannerContract != "plan-graph-v3" {
 		t.Fatalf("graph execution and bounded context not defaulted: %#v", s.Creation.Execution)
 	}
 	if s.State != "IMPLEMENTING" || result.RunID != s.RunID || result.State != s.State || result.Phase != "implementation" || result.BlockedReason == "" {
@@ -275,7 +275,7 @@ func TestAutonomousParallelFlagDefaultsSequentialOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Creation.Execution == nil || s.Creation.Execution.GraphVersion != 1 || s.Creation.Execution.MaxParallel != 1 {
+	if s.Creation.Execution == nil || s.Creation.Execution.GraphVersion != 1 || s.Creation.Execution.MaxParallel != 1 || s.Creation.Execution.RepairPlanningVersion != 1 || s.Creation.Config.PlannerContract != "plan-graph-v3" {
 		t.Fatalf("sequential override not bound: %#v", s.Creation.Execution)
 	}
 }

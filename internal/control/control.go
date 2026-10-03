@@ -51,6 +51,9 @@ type ExecutionPolicy struct {
 	Context      string `json:"context,omitempty"`
 	GraphVersion int    `json:"graph_version,omitempty"`
 	MaxParallel  int    `json:"max_parallel,omitempty"`
+	// RepairPlanningVersion opts new graph runs into candidate-bound design
+	// tasks that refine never-started repair write paths within original scope.
+	RepairPlanningVersion int `json:"repair_planning_version,omitempty"`
 }
 
 // Validate admits only the bounded autonomous workflow with a repair budget
@@ -58,6 +61,8 @@ type ExecutionPolicy struct {
 // GraphVersion must be 0 (legacy) or 1 (graph); MaxParallel must be 0
 // (legacy/unspecified) or 1..8. Graph version 1 requires an explicit 1..8
 // bound; legacy runs keep MaxParallel 0 for identical canonical identity.
+// RepairPlanningVersion 1 requires graph execution and a matching graph-v3
+// planner contract at creation replay; zero preserves the prior repair recipe.
 func (p ExecutionPolicy) Validate() error {
 	if p.Mode != "autonomous-v1" || p.MaxRepairs < 0 || p.MaxRepairs > 8 {
 		return errors.New("invalid execution policy")
@@ -76,6 +81,12 @@ func (p ExecutionPolicy) Validate() error {
 	}
 	if p.GraphVersion == 0 && p.MaxParallel > 1 {
 		return errors.New("sequential execution cannot request parallelism")
+	}
+	if p.RepairPlanningVersion != 0 && p.RepairPlanningVersion != 1 {
+		return errors.New("invalid repair planning version")
+	}
+	if p.RepairPlanningVersion == 1 && p.GraphVersion != 1 {
+		return errors.New("repair planning requires graph execution")
 	}
 	return nil
 }
@@ -342,6 +353,9 @@ func Replay(events []journal.Event) (Snapshot, error) {
 				if err := c.Execution.Validate(); err != nil {
 					return s, err
 				}
+			}
+			if err := validateRepairPlanningBinding(c); err != nil {
+				return s, err
 			}
 			if err := c.Repository.Validate(); err != nil {
 				return s, err
@@ -644,6 +658,18 @@ func Replay(events []journal.Event) (Snapshot, error) {
 		}
 	}
 	return s, nil
+}
+
+func validateRepairPlanningBinding(c Creation) error {
+	version := 0
+	if c.Execution != nil {
+		version = c.Execution.RepairPlanningVersion
+	}
+	contract := c.Config.PlannerContract == plannerContractGraphV3
+	if (version == 1) != contract {
+		return errors.New("repair planning policy and planner contract must be enabled together")
+	}
+	return nil
 }
 
 // Append validates semantic state inside journal.Append's exclusive lock. This
