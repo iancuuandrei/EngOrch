@@ -635,3 +635,83 @@ integrated increment, without resurrecting a G0 promotion ladder.
   conversation. Its shared runtime parent is a private protocol deviation,
   not proof of the entire original private protocol. Round-two acceptance and
   pause/resume remain pending.
+
+## Checkpoint — v1.0.21 integrated; observed parallel and token evidence
+
+- Public main/dev contain `d3c1b581c8ea98c182b257eae7cc9762fee9196c`.
+  Automation PR #28 merged. The exact clean complete Go suite exited zero
+  (log SHA256 `567fc4d97b06c5beed09383130ca9d71243992a25166a34039ddcc518cc3ba49`),
+  all ten frozen PowerShell harnesses passed, and independent source review,
+  Sonar and security checks passed. The graph-size correction preserves the
+  generic 1 MiB boundary and historical small graph identities.
+- The corrected frozen v1.0.19 eight-task cohort completed **2/8 PASS**:
+  Humanize and go-atomic. Numeric-text exhausted its two repairs; the other
+  five stopped at review admission. The original failed cohort and individual
+  run records are preserved. A later version's normal review continuation does
+  not change that frozen result or establish fixed-six 6/6.
+- The actual Humanize topology comparison completed: serial **BLOCKED** after
+  an in-run repair and parallel **PASS** with two isolated writers, one serial
+  aggregate integration, candidate-bound native and held-out verification,
+  independent review approval and an accepted, quiescent checkpoint. The
+  independent review approved the final private paired receipt SHA256
+  `5e3ef1536c2600cf8e3f9f7d6133b2b78f2bdfe941f5e3f0161c3919aea49a78`.
+  Both arms used candidate-facts cache v1; neither requested planner parse
+  caching or explicit native compaction. Different plans and review outcomes
+  prevent a causal speedup or token-saving claim.
+
+| Observed Codex token category | Serial | Parallel |
+| --- | ---: | ---: |
+| Input, including cached | 1,587,874 | 1,013,808 |
+| Cached input | 1,350,400 | 775,424 |
+| Uncached input | 237,474 | 238,384 |
+| Output, including reasoning | 20,533 | 14,132 |
+| Reasoning output | 10,363 | 5,913 |
+
+The accounting deltas are receipt-matched, completed and OBSERVED. Cached
+input is a subset of input; reasoning output is a subset of output. Cost and
+physical provider-call count remain unknown. Sampled process CPU is a lower
+bound, sampled RSS can miss peaks, and evaluator elapsed time includes its
+acceptance checks rather than measuring exact time to READY.
+
+An independently reviewed metadata addendum observes 94,964.7481 ms of overlap
+between the two isolated writer dispatch-wrapper intervals. These intervals
+include setup; provider-turn-only overlap and reservation activation timing
+remain unknown. Its SHA256 is
+`87c2eff243a49df13b36f4aa0cfce6c5db1b76cd7757a765d871cd54ee6a74da`.
+
+- The generator ownership problem is now localized: discovery and graph edges
+  correctly bind numeric outputs to `gen.go`, the generator tool and template,
+  but contract-context v5 exposes opaque graph endpoints and exhausts its
+  source-excerpt slots before showing the actionable generation chain. A new
+  explicit context recipe will project the existing admitted metadata, while
+  preserving v5 prompt identities and replay. No generator commands or extra
+  write authority are implied.
+- The real six-arm fixer comparison and the second long-horizon round remain
+  active. A task accepted without any fixer invocation is NOT_EXERCISED for
+  fixer quality. Failed or incomplete task evidence is not a successful role
+  outcome. Neither adaptive defaults nor v2 release readiness is claimed.
+
+## Candidate checkpoint — explicit generation chains and review arrays
+
+- The opt-in `go-contract-context-v3` writes record v6 and exposes only relevant,
+  already-admitted generator chains with owner/output/tool/template paths and
+  source hashes. The projection has eight-binding, eight-tool-reference and
+  16 KiB bounds. Source excerpts, write scopes and generator execution remain
+  governed by their existing rules. Tests cover durable replay, legacy v5
+  prompt shape and hash domain, substituted source evidence, filtering and
+  truncation. Fresh real generated-code acceptance is still required.
+- The normal Afero review through qualified v1.0.21 reached an accepted READY
+  candidate; fresh candidate-bound native and unchanged held-out checks passed.
+  This mixed-version continuation does not replace the frozen v1.0.19 result.
+  Its acceptance receipt SHA256 is
+  `19f7db2aa47885c91f4cd0346034a1e6c21e8f59d5b9b0b47bef4452b5cbd6d4`.
+- The second long-horizon candidate's first v1.0.21 review stopped before any
+  reviewer effect: an empty required projection `omissions` array became null.
+  The producer now preserves `[]`; the regression also checks all required
+  projection arrays. Strict decoding is unchanged. The failed attempt and
+  unchanged candidate/journal remain preserved; later acceptance is pending.
+- A new, independently reviewed `go-wordwrap-tabs` task extends the pinned MIT
+  package with an explicit tab-stop API. Native baseline passes and unchanged
+  held-out baseline fails on the missing API. It is unseen relative to the
+  retained Fabric task histories, not universally unseen. Existing ten task
+  definitions and oracles are unchanged. No new task dispatch is claimed.

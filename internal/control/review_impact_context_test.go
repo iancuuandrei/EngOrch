@@ -33,6 +33,11 @@ func TestReviewImpactContextPolicyAndHistoryAreBounded(t *testing.T) {
 	if err := receiverAware.Validate(); err != nil {
 		t.Fatalf("receiver-aware review-impact policy rejected: %v", err)
 	}
+	contractV3 := valid
+	contractV3.PlannerContext = plannerContextGoContractV3
+	if err := contractV3.Validate(); err != nil {
+		t.Fatalf("contract v3 review-impact policy rejected: %v", err)
+	}
 	cache := valid
 	cache.CandidateFactsCacheVersion = 1
 	if err := cache.Validate(); err != nil {
@@ -207,6 +212,18 @@ func TestReviewImpactContextAdmitsAndReplaysExactCandidateProjection(t *testing.
 	receiverAwareRecord, err := makeReviewImpactContextRecord(receiverAwareSnapshot, source, baseGraph, baseInventory, corpus)
 	if err != nil || validateReviewImpactContextRecord(receiverAwareSnapshot, receiverAwareRecord) != nil {
 		t.Fatalf("receiver-aware contract evidence did not admit review-impact context: make=%v validate=%v", err, validateReviewImpactContextRecord(receiverAwareSnapshot, receiverAwareRecord))
+	}
+	contractV3Snapshot := receiverAwareSnapshot
+	contractV3Execution := *receiverAwareSnapshot.Creation.Execution
+	contractV3Execution.PlannerContext = plannerContextGoContractV3
+	contractV3Snapshot.Creation.Execution = &contractV3Execution
+	contractV3Planner := *receiverAwareSnapshot.PlannerGoContext
+	contractV3Planner.Version = 6
+	contractV3Planner.RecordID = strings.Repeat("4", 64)
+	contractV3Snapshot.PlannerGoContext = &contractV3Planner
+	contractV3Record, err := makeReviewImpactContextRecord(contractV3Snapshot, source, baseGraph, baseInventory, corpus)
+	if err != nil || validateReviewImpactContextRecord(contractV3Snapshot, contractV3Record) != nil {
+		t.Fatalf("contract v3 evidence did not admit review-impact context: make=%v validate=%v", err, validateReviewImpactContextRecord(contractV3Snapshot, contractV3Record))
 	}
 	oversizedCorpus := corpus
 	oversizedGraph := corpus.Graph

@@ -26,18 +26,18 @@ policy (init defaults to `go test ./...`) and hashed. Native mode runs
 gathering. Fabric and PR5 child calls temporarily prepend the selected Go
 directory and verify bare `go` resolves to that exact executable; caller PATH
 is restored in finally and the executable hash/binding are recorded. The
-`go-source-context-v1`, `go-source-context-v2`, and `go-contract-context-v1` treatments require an explicit absolute, clean parser
-path and its lowercase SHA-256 via `-PlannerContextRIExecutable` and
+`go-source-context-v1/v2` and `go-contract-context-v1/v2/v3` treatments
+require an explicit absolute, clean parser path and its lowercase SHA-256 via `-PlannerContextRIExecutable` and
 `-PlannerContextRIExecutableSHA256`; no parser is discovered from PATH or the
 environment, and both values are bound in the prepared/evaluated receipts.
-The opt-in Native-only `-ReviewImpactContext` treatment requires
-`-PlannerContext go-contract-context-v1` and the same pinned parser binding.
+The opt-in Native-only `-ReviewImpactContext` treatment requires a contract
+planner context (`go-contract-context-v1/v2/v3`) and the same pinned parser binding.
 Its request is matched across Prepare and Evaluate; the inspected run must
 show `review_impact_context_version=1` and one durable context record for the
 exact reviewed candidate. Omitting it preserves the previous run argv.
 The separate `-CandidateFactsCache` switch is a version-1 cache-policy opt-in
 for that same Native review-impact treatment. It requires
-`-ReviewImpactContext`, `go-contract-context-v1`, and the pinned parser, and
+`-ReviewImpactContext`, a contract planner context, and the pinned parser, and
 must match across Prepare and Evaluate. The receipt distinguishes the request
 from the inspected `candidate_facts_cache_version=1` policy; cache-hit
 statistics are not exposed and are not inferred.
@@ -161,25 +161,25 @@ if ($Action -eq 'Evaluate' -and $EvalMode -eq 'PR5Matched' -and ($ParallelWriter
 }
 Assert-IsolatedRunnerOptionShape ([bool]$IsolatedWriters) $IsolationPolicyPath ([bool]$ParallelWriters) $EvalMode $MaxParallel
 function Test-GoSourceContextMode([string]$Mode) {
-    return $Mode -ceq 'go-source-context-v1' -or $Mode -ceq 'go-source-context-v2' -or $Mode -ceq 'go-contract-context-v1' -or $Mode -ceq 'go-contract-context-v2'
+    return $Mode -ceq 'go-source-context-v1' -or $Mode -ceq 'go-source-context-v2' -or $Mode -ceq 'go-contract-context-v1' -or $Mode -ceq 'go-contract-context-v2' -or $Mode -ceq 'go-contract-context-v3'
 }
 function Assert-ReviewImpactRunnerBindingShape([bool]$Enabled, [string]$PlannerMode, [string]$Mode) {
     if (-not $Enabled) { return }
     if ($Mode -ne 'Native') { throw 'ReviewImpactContext requires Native mode.' }
-    if ($PlannerMode -cne 'go-contract-context-v1' -and $PlannerMode -cne 'go-contract-context-v2') {
-        throw 'ReviewImpactContext requires PlannerContext go-contract-context-v1 or go-contract-context-v2 and its explicit pinned RI parser binding.'
+    if ($PlannerMode -cnotin @('go-contract-context-v1', 'go-contract-context-v2', 'go-contract-context-v3')) {
+        throw 'ReviewImpactContext requires a go-contract-context-v1/v2/v3 PlannerContext and its explicit pinned RI parser binding.'
     }
 }
 function Assert-CandidateFactsCacheRunnerBindingShape([bool]$Enabled, [bool]$ReviewImpactEnabled, [string]$PlannerMode, [string]$Mode) {
     if (-not $Enabled) { return }
     if ($Mode -ne 'Native') { throw 'CandidateFactsCache requires Native mode.' }
-    if (-not $ReviewImpactEnabled -or ($PlannerMode -cne 'go-contract-context-v1' -and $PlannerMode -cne 'go-contract-context-v2')) {
-        throw 'CandidateFactsCache requires ReviewImpactContext, PlannerContext go-contract-context-v1 or go-contract-context-v2, and its explicit pinned RI parser binding.'
+    if (-not $ReviewImpactEnabled -or $PlannerMode -cnotin @('go-contract-context-v1', 'go-contract-context-v2', 'go-contract-context-v3')) {
+        throw 'CandidateFactsCache requires ReviewImpactContext, a go-contract-context-v1/v2/v3 PlannerContext, and its explicit pinned RI parser binding.'
     }
 }
 function Assert-PlannerContextBindingShape([string]$Mode, [string]$Executable, [string]$ExecutableSHA256) {
-    if ($Mode -cnotin @('', 'source-bounded-v1', 'go-source-context-v1', 'go-source-context-v2', 'go-contract-context-v1', 'go-contract-context-v2')) {
-        throw 'PlannerContext must be empty, source-bounded-v1, go-source-context-v1, go-source-context-v2, go-contract-context-v1, or go-contract-context-v2.'
+    if ($Mode -cnotin @('', 'source-bounded-v1', 'go-source-context-v1', 'go-source-context-v2', 'go-contract-context-v1', 'go-contract-context-v2', 'go-contract-context-v3')) {
+        throw 'PlannerContext must be empty, source-bounded-v1, go-source-context-v1/v2, or go-contract-context-v1/v2/v3.'
     }
     if (Test-GoSourceContextMode $Mode) {
         if ([string]::IsNullOrWhiteSpace($Executable) -or [string]::IsNullOrWhiteSpace($ExecutableSHA256)) {
@@ -194,7 +194,7 @@ function Assert-PlannerContextBindingShape([string]$Mode, [string]$Executable, [
         return
     }
     if ($Executable -ne '' -or $ExecutableSHA256 -ne '') {
-        throw 'PlannerContextRIExecutable and PlannerContextRIExecutableSHA256 require go-source-context-v1, go-source-context-v2, or go-contract-context-v1.'
+        throw 'PlannerContextRIExecutable and PlannerContextRIExecutableSHA256 require a pinned Go planner context mode.'
     }
 }
 Assert-PlannerContextBindingShape $PlannerContext $PlannerContextRIExecutable $PlannerContextRIExecutableSHA256
@@ -625,6 +625,7 @@ function Get-HeldoutSource([string]$Check) {
         'difflib'    = 'difflib.heldout_test.go'
         'logr'       = 'logr.heldout_test.go'
         'godotenv'   = 'godotenv.heldout_test.go'
+        'wordwrap-tabs' = 'wordwrap_tabs.heldout_test.go'
     }
     if (-not $map.ContainsKey($Check)) { throw "Unknown held-out check: $Check" }
     $p = Join-Path $heldoutDir $map[$Check]

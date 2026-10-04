@@ -51,6 +51,11 @@ func TestPlannerParseCachePolicyIsOptInAndContextBound(t *testing.T) {
 	if err := receiverAware.Validate(); err != nil {
 		t.Fatalf("receiver-aware contract cache opt-in rejected: %v", err)
 	}
+	contractV3 := opted
+	contractV3.PlannerContext = plannerContextGoContractV3
+	if err := contractV3.Validate(); err != nil {
+		t.Fatalf("contract v3 cache opt-in rejected: %v", err)
+	}
 	for name, candidate := range map[string]ExecutionPolicy{
 		"unknown version": func() ExecutionPolicy { p := opted; p.PlannerParseCacheVersion = 2; return p }(),
 		"v1 context":      func() ExecutionPolicy { p := opted; p.PlannerContext = plannerContextGoSourceV1; return p }(),

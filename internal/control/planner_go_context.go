@@ -24,6 +24,7 @@ const (
 	plannerContextGoSourceV2   = "go-source-context-v2"
 	plannerContextGoContractV1 = "go-contract-context-v1"
 	plannerContextGoContractV2 = "go-contract-context-v2"
+	plannerContextGoContractV3 = "go-contract-context-v3"
 )
 
 const (
@@ -84,17 +85,60 @@ type PlannerGoContractSource struct {
 // record. It excludes the full graph/fact corpus while retaining the exact
 // selected evidence, its graph digest, and the immutable record identity.
 type plannerGoContextPrompt struct {
-	RecordID                       string                     `json:"record_id"`
-	Coverage                       string                     `json:"coverage"`
-	RIExecutableSHA256             string                     `json:"ri_executable_sha256"`
-	GraphDigest                    string                     `json:"graph_digest,omitempty"`
-	Context                        *ri.GoContextManifest      `json:"context,omitempty"`
-	ContractContext                *ri.GoContractContext      `json:"contract_context,omitempty"`
-	FocusTopology                  *ri.GoFocusTopology        `json:"focus_topology,omitempty"`
-	FocusTopologyUnavailableReason string                     `json:"focus_topology_unavailable_reason,omitempty"`
-	Unavailable                    string                     `json:"unavailable,omitempty"`
-	Generation                     *plannerGoGenerationPrompt `json:"generation,omitempty"`
+	RecordID                       string                             `json:"record_id"`
+	Coverage                       string                             `json:"coverage"`
+	RIExecutableSHA256             string                             `json:"ri_executable_sha256"`
+	GraphDigest                    string                             `json:"graph_digest,omitempty"`
+	Context                        *ri.GoContextManifest              `json:"context,omitempty"`
+	ContractContext                *ri.GoContractContext              `json:"contract_context,omitempty"`
+	FocusTopology                  *ri.GoFocusTopology                `json:"focus_topology,omitempty"`
+	FocusTopologyUnavailableReason string                             `json:"focus_topology_unavailable_reason,omitempty"`
+	Unavailable                    string                             `json:"unavailable,omitempty"`
+	Generation                     *plannerGoGenerationPrompt         `json:"generation,omitempty"`
+	ContractGeneration             *plannerGoContractGenerationPrompt `json:"contract_generation,omitempty"`
 }
+
+// plannerGoContractGenerationPrompt is a compact, source-bound projection of
+// generator chains visible in a v6 contract context. It carries no source
+// text, command execution result, or write authority.
+type plannerGoContractGenerationPrompt struct {
+	Schema                string                               `json:"schema"`
+	Version               int                                  `json:"version"`
+	SourceID              string                               `json:"source_id"`
+	GraphDigest           string                               `json:"graph_digest"`
+	MetadataDigest        string                               `json:"metadata_digest"`
+	Coverage              string                               `json:"coverage"`
+	Bindings              []plannerGoContractGenerationBinding `json:"bindings"`
+	KnownBindingCount     int                                  `json:"known_binding_count"`
+	FilteredBindingCount  int                                  `json:"filtered_binding_count"`
+	DiscoveryOmittedCount int                                  `json:"discovery_omitted_count"`
+	OmittedCount          int                                  `json:"omitted_count"`
+	Truncated             bool                                 `json:"truncated"`
+}
+
+type plannerGoContractGenerationBinding struct {
+	GeneratorPath           string                              `json:"generator_path"`
+	GeneratorRole           string                              `json:"generator_role"`
+	GeneratorSHA            string                              `json:"generator_sha256"`
+	GeneratedPath           string                              `json:"generated_path"`
+	GeneratedRole           string                              `json:"generated_role"`
+	GeneratedSHA            string                              `json:"generated_sha256"`
+	Directive               string                              `json:"directive"`
+	DirectiveRange          ri.GoRange                          `json:"directive_range"`
+	ToolProvenanceComplete  bool                                `json:"tool_provenance_complete"`
+	ToolSources             []plannerGoContractGenerationSource `json:"tool_sources"`
+	ToolSourcesOmittedCount int                                 `json:"tool_sources_omitted_count,omitempty"`
+}
+
+type plannerGoContractGenerationSource struct {
+	Path   string `json:"path"`
+	Role   string `json:"role"`
+	SHA256 string `json:"sha256"`
+}
+
+const plannerGoContractGenerationPromptBindings = 8
+const plannerGoContractGenerationPromptSources = 8
+const plannerGoContractGenerationPromptMaxBytes = 16 << 10
 
 // plannerGoGenerationPrompt is the compact planner view of source-bound
 // generation evidence. The durable record retains full metadata; this view
@@ -142,6 +186,81 @@ func plannerGoGenerationPromptFor(metadata *ri.GoGenerationMetadata, generation 
 	return view
 }
 
+func plannerGoContractGenerationPromptFor(record *PlannerGoContextRecord) *plannerGoContractGenerationPrompt {
+	if record == nil || record.Graph == nil || record.ContractContext == nil || record.GenerationMetadata == nil {
+		return nil
+	}
+	metadata := record.GenerationMetadata
+	visiblePaths := make(map[string]bool)
+	for _, excerpt := range record.ContractContext.Excerpts {
+		visiblePaths[excerpt.Path] = true
+	}
+	visibleOutputs := make(map[string]bool)
+	for _, relation := range record.ContractContext.Relations {
+		if relation.Relation == "GENERATED_BY" && relation.Resolution == "EXPLICIT_SOURCE_BOUND" && visiblePaths[relation.Path] {
+			visibleOutputs[relation.Path] = true
+		}
+	}
+	graphBindings := make(map[string]bool, len(record.Graph.Generators))
+	for _, binding := range record.Graph.Generators {
+		graphBindings[binding.GeneratorPath+"\x00"+binding.GeneratedPath+"\x00"+binding.Directive] = true
+	}
+	sourceHashes := make(map[string]string, len(metadata.Sources))
+	for _, source := range metadata.Sources {
+		sourceHashes[source.Path] = source.SHA256
+	}
+	result := &plannerGoContractGenerationPrompt{
+		Schema: "engorch.control.planner-go-contract-generation.v1", Version: 1,
+		SourceID: metadata.SourceID, GraphDigest: record.Graph.Digest, MetadataDigest: metadata.Digest,
+		Coverage: "PARTIAL", Bindings: []plannerGoContractGenerationBinding{},
+		KnownBindingCount: len(metadata.Bindings), DiscoveryOmittedCount: metadata.OmittedCount,
+		Truncated: metadata.Truncated || metadata.OmittedCount > 0 || metadata.OmissionsTrimmed,
+	}
+	for _, binding := range metadata.Bindings {
+		key := binding.GeneratorPath + "\x00" + binding.GeneratedPath + "\x00" + binding.Directive
+		if !visibleOutputs[binding.GeneratedPath] || !graphBindings[key] {
+			result.FilteredBindingCount++
+			continue
+		}
+		if len(result.Bindings) >= plannerGoContractGenerationPromptBindings {
+			result.OmittedCount++
+			result.Truncated = true
+			continue
+		}
+		if sourceHashes[binding.GeneratorPath] == "" || sourceHashes[binding.GeneratedPath] == "" || binding.DirectiveSource.SHA256 != sourceHashes[binding.GeneratorPath] || binding.OutputSource.SHA256 != sourceHashes[binding.GeneratedPath] {
+			// Durable record validation rejects this mismatch before prompt
+			// construction; fail closed if the helper is called independently.
+			return nil
+		}
+		chain := plannerGoContractGenerationBinding{
+			GeneratorPath: binding.GeneratorPath, GeneratorRole: "directive_owner", GeneratorSHA: sourceHashes[binding.GeneratorPath],
+			GeneratedPath: binding.GeneratedPath, GeneratedRole: "generated_output", GeneratedSHA: sourceHashes[binding.GeneratedPath],
+			Directive: binding.Directive, DirectiveRange: binding.DirectiveRange,
+			ToolProvenanceComplete: binding.ToolProvenanceComplete,
+			ToolSources:            []plannerGoContractGenerationSource{},
+		}
+		for _, source := range binding.ToolSources {
+			if source.Source.SHA256 == "" || sourceHashes[source.Path] != source.Source.SHA256 {
+				return nil
+			}
+			if len(chain.ToolSources) >= plannerGoContractGenerationPromptSources {
+				chain.ToolSourcesOmittedCount++
+				result.Truncated = true
+				continue
+			}
+			chain.ToolSources = append(chain.ToolSources, plannerGoContractGenerationSource{Path: source.Path, Role: source.Role, SHA256: source.Source.SHA256})
+		}
+		result.Bindings = append(result.Bindings, chain)
+		if encoded, err := canonical.Bytes(result); err != nil || len(encoded) > plannerGoContractGenerationPromptMaxBytes {
+			result.Bindings = result.Bindings[:len(result.Bindings)-1]
+			result.OmittedCount++
+			result.Truncated = true
+		}
+	}
+	result.Truncated = result.Truncated || result.FilteredBindingCount > 0
+	return result
+}
+
 func plannerGoContextPromptFor(record *PlannerGoContextRecord) *plannerGoContextPrompt {
 	if record == nil {
 		return nil
@@ -157,11 +276,14 @@ func plannerGoContextPromptFor(record *PlannerGoContextRecord) *plannerGoContext
 		contract := *record.ContractContext
 		prompt.ContractContext = &contract
 	}
-	if record.Version == 4 || record.Version == 5 {
+	if record.Version == 4 || record.Version == 5 || record.Version == 6 {
 		prompt.FocusTopology, prompt.FocusTopologyUnavailableReason = plannerGoFocusTopologyFor(record)
 	}
 	if record.Version == 3 && record.GenerationMetadata != nil {
 		prompt.Generation = plannerGoGenerationPromptFor(record.GenerationMetadata, record.GenerationContext)
+	}
+	if record.Version == 6 {
+		prompt.ContractGeneration = plannerGoContractGenerationPromptFor(record)
 	}
 	return prompt
 }
@@ -199,7 +321,7 @@ func plannerGoFocusTopologyFor(record *PlannerGoContextRecord) (*ri.GoFocusTopol
 }
 
 func plannerGoContextEnabled(s Snapshot) bool {
-	return s.Creation.Execution != nil && (s.Creation.Execution.PlannerContext == plannerContextGoSourceV1 || s.Creation.Execution.PlannerContext == plannerContextGoSourceV2 || s.Creation.Execution.PlannerContext == plannerContextGoContractV1 || s.Creation.Execution.PlannerContext == plannerContextGoContractV2)
+	return s.Creation.Execution != nil && (s.Creation.Execution.PlannerContext == plannerContextGoSourceV1 || s.Creation.Execution.PlannerContext == plannerContextGoSourceV2 || s.Creation.Execution.PlannerContext == plannerContextGoContractV1 || s.Creation.Execution.PlannerContext == plannerContextGoContractV2 || s.Creation.Execution.PlannerContext == plannerContextGoContractV3)
 }
 
 func plannerGoContextRecordID(rec PlannerGoContextRecord) (string, error) {
@@ -213,6 +335,9 @@ func plannerGoContextRecordID(rec PlannerGoContextRecord) (string, error) {
 	}
 	if rec.Version == 5 {
 		domain = "harness.control.planner-go-context.v4"
+	}
+	if rec.Version == 6 {
+		domain = "harness.control.planner-go-context.v5"
 	}
 	return canonical.Hash(domain, rec)
 }
@@ -273,14 +398,14 @@ func AdmitPlannerGoContext(ctx context.Context, path string) (PlannerGoContextRe
 	query, truncated, queryHash, queryLen := truncateTaskQuery(s.Creation.Objective)
 	client := ri.Client{Executable: policy.PlannerContextRIExecutable, ExecutableHash: policy.PlannerContextRIExecutableSHA256}
 	options := ri.GoCorpusOptions{}
-	if policy.PlannerContext == plannerContextGoContractV1 || policy.PlannerContext == plannerContextGoContractV2 {
+	if policy.PlannerContext == plannerContextGoContractV1 || policy.PlannerContext == plannerContextGoContractV2 || policy.PlannerContext == plannerContextGoContractV3 {
 		inventory, inventoryErr := ri.CollectGoModuleInventory(ctx, s.Creation.Repository)
 		if inventoryErr != nil {
 			return PlannerGoContextRecord{}, inventoryErr
 		}
 		options.ModuleInventory = &inventory
 	}
-	if policy.PlannerContext == plannerContextGoContractV2 {
+	if policy.PlannerContext == plannerContextGoContractV2 || policy.PlannerContext == plannerContextGoContractV3 {
 		options.SelectionVersion = ri.GoCorpusSelectionReceiverAwareV2
 	}
 	var corpus ri.GoCommittedCorpus
@@ -303,7 +428,7 @@ func AdmitPlannerGoContext(ctx context.Context, path string) (PlannerGoContextRe
 		ReadFiles: corpus.ReadFiles, OmittedCount: corpus.OmittedCount, Omissions: append([]taskcontext.Omission(nil), corpus.Omissions...),
 		OmissionsTrimmed: corpus.OmissionsTrimmed, Sources: append([]repository.SourceDigest(nil), corpus.Sources...),
 	}
-	if policy.PlannerContext == plannerContextGoContractV2 {
+	if policy.PlannerContext == plannerContextGoContractV2 || policy.PlannerContext == plannerContextGoContractV3 {
 		record.CorpusSelectionVersion = ri.GoCorpusSelectionReceiverAwareV2
 	}
 	// Corpus selection is relevance-ranked while durable source bindings are
@@ -313,13 +438,15 @@ func AdmitPlannerGoContext(ctx context.Context, path string) (PlannerGoContextRe
 	// An unavailable corpus has no admitted seed path. Preserve the legacy
 	// unavailable representation rather than asking generation discovery to
 	// manufacture an empty seed record.
-	if policy.PlannerContext == plannerContextGoSourceV2 || policy.PlannerContext == plannerContextGoContractV1 || policy.PlannerContext == plannerContextGoContractV2 {
+	if policy.PlannerContext == plannerContextGoSourceV2 || policy.PlannerContext == plannerContextGoContractV1 || policy.PlannerContext == plannerContextGoContractV2 || policy.PlannerContext == plannerContextGoContractV3 {
 		if policy.PlannerContext == plannerContextGoSourceV2 {
 			record.Version = 3
 		} else if policy.PlannerContext == plannerContextGoContractV1 {
 			record.Version = 4
-		} else {
+		} else if policy.PlannerContext == plannerContextGoContractV2 {
 			record.Version = 5
+		} else {
+			record.Version = 6
 		}
 		if record.ReadFiles > 0 {
 			metadata, discoverErr := ri.DiscoverCommittedGoGenerators(ctx, s.Creation.Repository, sourcePaths(record.Sources))
@@ -356,7 +483,7 @@ func AdmitPlannerGoContext(ctx context.Context, path string) (PlannerGoContextRe
 		if err := boundedCanonical(graph, plannerGoContextMaxGraphBytes); err != nil {
 			return PlannerGoContextRecord{}, errors.New("Go planner graph exceeds bounded admission size")
 		}
-		if policy.PlannerContext == plannerContextGoContractV1 || policy.PlannerContext == plannerContextGoContractV2 {
+		if policy.PlannerContext == plannerContextGoContractV1 || policy.PlannerContext == plannerContextGoContractV2 || policy.PlannerContext == plannerContextGoContractV3 {
 			compilerFiles := clonePlannerGoContractFiles(corpus.ContextFiles)
 			durableSources := plannerGoContractSources(corpus.ContextFiles)
 			generationFiles := plannerGoContractGenerationFiles(record.GenerationMetadata)
@@ -378,7 +505,7 @@ func AdmitPlannerGoContext(ctx context.Context, path string) (PlannerGoContextRe
 			record.Graph, record.Context = &graph, &manifest
 		}
 	}
-	if policy.PlannerContext == plannerContextGoContractV1 || policy.PlannerContext == plannerContextGoContractV2 {
+	if policy.PlannerContext == plannerContextGoContractV1 || policy.PlannerContext == plannerContextGoContractV2 || policy.PlannerContext == plannerContextGoContractV3 {
 		if !plannerGoContractRecordFits(record) {
 			record, err = retainPlannerGoContractRecord(ctx, s.Creation.Repository, sourceID, corpus, record)
 			if err != nil {
@@ -394,7 +521,7 @@ func AdmitPlannerGoContext(ctx context.Context, path string) (PlannerGoContextRe
 		return PlannerGoContextRecord{}, err
 	}
 	if err := boundedCanonical(record, plannerGoContextMaxRecord); err != nil {
-		if policy.PlannerContext != plannerContextGoContractV1 && policy.PlannerContext != plannerContextGoContractV2 {
+		if policy.PlannerContext != plannerContextGoContractV1 && policy.PlannerContext != plannerContextGoContractV2 && policy.PlannerContext != plannerContextGoContractV3 {
 			return PlannerGoContextRecord{}, errors.New("Go planner context record exceeds bounded journal size")
 		}
 		record = plannerGoContractUnavailable(record, "contract_record_budget")
@@ -508,6 +635,9 @@ func validatePlannerGoContextRecord(s Snapshot, rec PlannerGoContextRecord) erro
 	if s.Creation.Execution != nil && s.Creation.Execution.PlannerContext == plannerContextGoContractV2 {
 		wantVersion = 5
 	}
+	if s.Creation.Execution != nil && s.Creation.Execution.PlannerContext == plannerContextGoContractV3 {
+		wantVersion = 6
+	}
 	if s.State != "OBJECTIVE" || !plannerGoContextEnabled(s) || s.PlannerGoContext != nil || s.PlannerContext != nil || rec.Version != wantVersion || safepath.RequireDigest(rec.RIExecutableSHA256) != nil || s.Creation.Execution == nil || rec.RIExecutableSHA256 != s.Creation.Execution.PlannerContextRIExecutableSHA256 {
 		return errors.New("Go planner context transition rejected")
 	}
@@ -523,7 +653,7 @@ func validatePlannerGoContextRecord(s Snapshot, rec PlannerGoContextRecord) erro
 		return errors.New("Go planner context query substitution")
 	}
 	attemptedLimit := plannerGoContextMaxFiles
-	if rec.Version == 5 {
+	if rec.Version == 5 || rec.Version == 6 {
 		attemptedLimit = 48
 	}
 	if rec.InventoryFiles < 0 || rec.InventoryFiles > 500000 || rec.AttemptedFiles < 0 || rec.AttemptedFiles > attemptedLimit || rec.AttemptedFiles > rec.InventoryFiles || rec.ReadFiles < 0 || rec.ReadFiles > plannerGoContextMaxFiles || rec.ReadFiles > rec.AttemptedFiles || rec.ReadFiles != len(rec.Sources) || rec.OmittedCount < 0 || rec.OmittedCount < len(rec.Omissions) || len(rec.Omissions) > 64 || (rec.OmissionsTrimmed && rec.OmittedCount <= len(rec.Omissions)) || (!rec.OmissionsTrimmed && rec.OmittedCount != len(rec.Omissions)) {
@@ -534,7 +664,7 @@ func validatePlannerGoContextRecord(s Snapshot, rec PlannerGoContextRecord) erro
 			return errors.New("invalid Go planner context omission")
 		}
 	}
-	if rec.Version == 5 {
+	if rec.Version == 5 || rec.Version == 6 {
 		if rec.CorpusSelectionVersion != ri.GoCorpusSelectionReceiverAwareV2 {
 			return errors.New("receiver-aware Go planner context selection binding mismatch")
 		}
@@ -542,7 +672,7 @@ func validatePlannerGoContextRecord(s Snapshot, rec PlannerGoContextRecord) erro
 		return errors.New("legacy Go planner context carries selection version")
 	}
 	if rec.Unavailable != "" {
-		validUnavailable := rec.Unavailable == "no_eligible_complete_go_source" || (rec.Version == 4 || rec.Version == 5) && rec.Unavailable == "contract_record_budget"
+		validUnavailable := rec.Unavailable == "no_eligible_complete_go_source" || (rec.Version == 4 || rec.Version == 5 || rec.Version == 6) && rec.Unavailable == "contract_record_budget"
 		if !validUnavailable || rec.ReadFiles != 0 || len(rec.Sources) != 0 || rec.Graph != nil || rec.Context != nil || rec.ContractContext != nil || len(rec.ContractSources) != 0 || len(rec.ContractGenerationSources) != 0 {
 			return errors.New("invalid unavailable Go planner context")
 		}
@@ -565,7 +695,7 @@ func validatePlannerGoContextRecord(s Snapshot, rec PlannerGoContextRecord) erro
 		if err := boundedCanonical(*rec.Graph, plannerGoContextMaxGraphBytes); err != nil {
 			return errors.New("Go planner graph exceeds bound")
 		}
-		if rec.Version == 4 || rec.Version == 5 {
+		if rec.Version == 4 || rec.Version == 5 || rec.Version == 6 {
 			if rec.Context != nil || rec.ContractContext == nil || len(rec.ContractSources) == 0 {
 				return errors.New("Go planner contract context is missing or mixed")
 			}
@@ -626,7 +756,7 @@ func validatePlannerGoContextRecord(s Snapshot, rec PlannerGoContextRecord) erro
 			}
 		}
 	}
-	if rec.Version == 4 || rec.Version == 5 {
+	if rec.Version == 4 || rec.Version == 5 || rec.Version == 6 {
 		if rec.Context != nil || rec.GenerationContext != nil {
 			return errors.New("contract Go planner context carries v2 prompt evidence")
 		}
@@ -636,6 +766,10 @@ func validatePlannerGoContextRecord(s Snapshot, rec PlannerGoContextRecord) erro
 			}
 		} else if rec.GenerationMetadata == nil || rec.GenerationMetadata.SourceID != sourceID || ri.ValidateGoGenerationMetadata(*rec.GenerationMetadata) != nil {
 			return errors.New("invalid contract Go generation metadata")
+		} else if rec.Version == 6 {
+			if !reflect.DeepEqual(rec.Graph.Generators, admittedGoGenerationBindings(*rec.GenerationMetadata, rec.Sources)) || plannerGoContractGenerationPromptFor(&rec) == nil {
+				return errors.New("contract v3 generation prompt projection binding mismatch")
+			}
 		}
 	}
 	id, err := plannerGoContextRecordID(rec)

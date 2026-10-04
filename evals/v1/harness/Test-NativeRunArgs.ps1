@@ -15,6 +15,8 @@ $runnerOptions = $ast.Find({ param($node) $node -is [System.Management.Automatio
 if ($null -eq $runnerOptions) { throw 'Isolated runner option validator missing.' }
 $goMode = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Test-GoSourceContextMode' }, $true)
 if ($null -eq $goMode) { throw 'Go source context mode predicate missing.' }
+$heldoutSourceFunction = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-HeldoutSource' }, $true)
+if ($null -eq $heldoutSourceFunction) { throw 'Held-out source map missing.' }
 $fileHash = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-FileSha256' }, $true)
 $policyBinding = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-IsolationPolicyBinding' }, $true)
 $preparedBinding = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-IsolationPolicyPreparedBinding' }, $true)
@@ -52,6 +54,10 @@ if ($null -eq $fixerShape -or $null -eq $accessBinding -or $null -eq $currentAcc
     throw 'Fixer/access or writer-contract runner binding helpers missing.'
 }
 . ([scriptblock]::Create($goMode.Extent.Text))
+. ([scriptblock]::Create($heldoutSourceFunction.Extent.Text))
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+$heldoutDir = Join-Path $repoRoot 'evals\v1\heldout'
+if ([string]::IsNullOrWhiteSpace((Get-HeldoutSource 'wordwrap-tabs'))) { throw 'The wordwrap-tabs held-out source mapping is missing or empty.' }
 . ([scriptblock]::Create($fileHash.Extent.Text))
 . ([scriptblock]::Create($contextValidator.Extent.Text))
 . ([scriptblock]::Create($reviewImpactBinding.Extent.Text))
@@ -86,9 +92,10 @@ if (-not (Test-GoSourceContextMode 'go-source-context-v1') -or
     -not (Test-GoSourceContextMode 'go-source-context-v2') -or
     -not (Test-GoSourceContextMode 'go-contract-context-v1') -or
     -not (Test-GoSourceContextMode 'go-contract-context-v2') -or
+    -not (Test-GoSourceContextMode 'go-contract-context-v3') -or
     (Test-GoSourceContextMode 'source-bounded-v1') -or
     (Test-GoSourceContextMode '')) {
-    throw 'Pinned Go planner context predicate does not distinguish v1, v2, contract v1, and legacy modes.'
+    throw 'Pinned Go planner context predicate does not distinguish the supported Go context modes from legacy modes.'
 }
 Assert-IsolatedRunnerOptionShape $false '' $false 'Native' 0
 foreach ($invalidOptions in @(
@@ -247,6 +254,9 @@ if (($goContractV1 | ConvertTo-Json -Compress) -ne ($expectedGoContractV1 | Conv
 $goContractV2 = @(Get-NativeRunArgs $taskPath $objective $false 0 'go-contract-context-v2' '' $parserPath $parserHash)
 $expectedGoContractV2 = @('--root', $taskPath, 'run', '--autonomous', '--planner-context', 'go-contract-context-v2', '--planner-context-ri-executable', $parserPath, '--planner-context-ri-executable-sha256', $parserHash, $objective)
 if (($goContractV2 | ConvertTo-Json -Compress) -ne ($expectedGoContractV2 | ConvertTo-Json -Compress)) { throw 'go-contract-context-v2 argv does not preserve the exact explicit parser binding.' }
+$goContractV3 = @(Get-NativeRunArgs $taskPath $objective $false 0 'go-contract-context-v3' '' $parserPath $parserHash)
+$expectedGoContractV3 = @('--root', $taskPath, 'run', '--autonomous', '--planner-context', 'go-contract-context-v3', '--planner-context-ri-executable', $parserPath, '--planner-context-ri-executable-sha256', $parserHash, $objective)
+if (($goContractV3 | ConvertTo-Json -Compress) -ne ($expectedGoContractV3 | ConvertTo-Json -Compress)) { throw 'go-contract-context-v3 argv does not preserve the exact explicit parser binding.' }
 $reviewImpact = @(Get-NativeRunArgs $taskPath $objective $false 1 'go-contract-context-v1' '' $parserPath $parserHash $false '' 0 $true)
 $expectedReviewImpact = @('--root', $taskPath, 'run', '--autonomous', '--planner-context', 'go-contract-context-v1', '--planner-context-ri-executable', $parserPath, '--planner-context-ri-executable-sha256', $parserHash, '--review-impact-context', '--max-parallel', '1', $objective)
 if (($reviewImpact | ConvertTo-Json -Compress) -ne ($expectedReviewImpact | ConvertTo-Json -Compress)) { throw 'Review-impact argv does not bind the contract planner and exact pinned parser.' }
@@ -256,14 +266,19 @@ if (($reviewImpactFactsCache | ConvertTo-Json -Compress) -ne ($expectedReviewImp
 $reviewImpactFactsCacheV2 = @(Get-NativeRunArgs $taskPath $objective $false 1 'go-contract-context-v2' '' $parserPath $parserHash $false '' 0 $true $true)
 $expectedReviewImpactFactsCacheV2 = @('--root', $taskPath, 'run', '--autonomous', '--planner-context', 'go-contract-context-v2', '--planner-context-ri-executable', $parserPath, '--planner-context-ri-executable-sha256', $parserHash, '--review-impact-context', '--review-impact-candidate-facts-cache', '--max-parallel', '1', $objective)
 if (($reviewImpactFactsCacheV2 | ConvertTo-Json -Compress) -ne ($expectedReviewImpactFactsCacheV2 | ConvertTo-Json -Compress)) { throw 'Candidate facts cache argv does not add the explicit v1 cache policy to the v2 reviewer-impact treatment.' }
+$reviewImpactFactsCacheV3 = @(Get-NativeRunArgs $taskPath $objective $false 1 'go-contract-context-v3' '' $parserPath $parserHash $false '' 0 $true $true)
+$expectedReviewImpactFactsCacheV3 = @('--root', $taskPath, 'run', '--autonomous', '--planner-context', 'go-contract-context-v3', '--planner-context-ri-executable', $parserPath, '--planner-context-ri-executable-sha256', $parserHash, '--review-impact-context', '--review-impact-candidate-facts-cache', '--max-parallel', '1', $objective)
+if (($reviewImpactFactsCacheV3 | ConvertTo-Json -Compress) -ne ($expectedReviewImpactFactsCacheV3 | ConvertTo-Json -Compress)) { throw 'Candidate facts cache argv does not add the explicit v1 cache policy to the v3 reviewer-impact treatment.' }
 Assert-ReviewImpactRunnerBindingShape $false '' 'Native'
 Assert-ReviewImpactRunnerBindingShape $true 'go-contract-context-v1' 'Native'
 Assert-ReviewImpactRunnerBindingShape $true 'go-contract-context-v2' 'Native'
+Assert-ReviewImpactRunnerBindingShape $true 'go-contract-context-v3' 'Native'
 foreach ($badReviewImpact in @(
     @{ Enabled=$true; Planner=''; Mode='Native' },
     @{ Enabled=$true; Planner='go-source-context-v2'; Mode='Native' },
     @{ Enabled=$true; Planner='go-contract-context-v1'; Mode='PR5Matched' },
-    @{ Enabled=$true; Planner='go-contract-context-v2'; Mode='PR5Matched' }
+    @{ Enabled=$true; Planner='go-contract-context-v2'; Mode='PR5Matched' },
+    @{ Enabled=$true; Planner='go-contract-context-v3'; Mode='PR5Matched' }
 )) {
     $rejected = $false
     try { Assert-ReviewImpactRunnerBindingShape $badReviewImpact.Enabled $badReviewImpact.Planner $badReviewImpact.Mode } catch { $rejected = $true }
@@ -272,7 +287,8 @@ foreach ($badReviewImpact in @(
 $validFactsCache = @(
     @{ Enabled=$false; ReviewImpact=$false; Planner=''; Mode='Native' },
     @{ Enabled=$true; ReviewImpact=$true; Planner='go-contract-context-v1'; Mode='Native' },
-    @{ Enabled=$true; ReviewImpact=$true; Planner='go-contract-context-v2'; Mode='Native' }
+    @{ Enabled=$true; ReviewImpact=$true; Planner='go-contract-context-v2'; Mode='Native' },
+    @{ Enabled=$true; ReviewImpact=$true; Planner='go-contract-context-v3'; Mode='Native' }
 )
 foreach ($case in $validFactsCache) { Assert-CandidateFactsCacheRunnerBindingShape $case.Enabled $case.ReviewImpact $case.Planner $case.Mode }
 foreach ($badFactsCache in @(
@@ -280,7 +296,8 @@ foreach ($badFactsCache in @(
     @{ Enabled=$true; ReviewImpact=$true; Planner='go-source-context-v2'; Mode='Native' },
     @{ Enabled=$true; ReviewImpact=$true; Planner='go-source-context-v1'; Mode='Native' },
     @{ Enabled=$true; ReviewImpact=$true; Planner='go-contract-context-v1'; Mode='PR5Matched' },
-    @{ Enabled=$true; ReviewImpact=$true; Planner='go-contract-context-v2'; Mode='PR5Matched' }
+    @{ Enabled=$true; ReviewImpact=$true; Planner='go-contract-context-v2'; Mode='PR5Matched' },
+    @{ Enabled=$true; ReviewImpact=$true; Planner='go-contract-context-v3'; Mode='PR5Matched' }
 )) {
     $rejected = $false
     try { Assert-CandidateFactsCacheRunnerBindingShape $badFactsCache.Enabled $badFactsCache.ReviewImpact $badFactsCache.Planner $badFactsCache.Mode } catch { $rejected = $true }
@@ -491,6 +508,9 @@ $invalidBindings = @(
     @{ Mode='go-contract-context-v2'; Path=''; Hash='' },
     @{ Mode='go-contract-context-v2'; Path=$parserPath; Hash='' },
     @{ Mode='go-contract-context-v2'; Path=$parserPath; Hash=$parserHash.ToUpperInvariant() },
+    @{ Mode='go-contract-context-v3'; Path=''; Hash='' },
+    @{ Mode='go-contract-context-v3'; Path=$parserPath; Hash='' },
+    @{ Mode='go-contract-context-v3'; Path=$parserPath; Hash=$parserHash.ToUpperInvariant() },
     @{ Mode='GO-CONTRACT-CONTEXT-V1'; Path=''; Hash='' },
     @{ Mode='GO-CONTRACT-CONTEXT-V2'; Path=''; Hash='' },
     @{ Mode='source-bounded-v1'; Path=$parserPath; Hash=$parserHash }
@@ -508,4 +528,4 @@ foreach ($invalid in @(-1, 9)) {
     try { Get-NativeRunArgs $taskPath $objective $true $invalid | Out-Null } catch { $rejected = $true }
     if (-not $rejected) { throw "Invalid limit $invalid was admitted." }
 }
-Write-Output 'PASS: legacy argv is byte-order stable; Go planner context v1/v2 modes bind exact parser provenance; review-impact/cache and fixer/access/writer-contract options match Prepare/Evaluate; access bytes and observed policies are bound; invalid combinations and mutations reject; objectives stay one argument; no provider calls.'
+Write-Output 'PASS: legacy argv is byte-order stable; Go planner context modes bind exact parser provenance; review-impact/cache and fixer/access/writer-contract options match Prepare/Evaluate; access bytes and observed policies are bound; invalid combinations and mutations reject; objectives stay one argument; no provider calls.'

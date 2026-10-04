@@ -1,8 +1,9 @@
 # Autonomous planner parse cache
 
 `ExecutionPolicy.planner_parse_cache_version: 1` opts `go-source-context-v2`
-into reuse of the pinned RI's validated committed-Go syntax facts. Zero or an
-omitted field keeps the uncached collection path and its existing run identity.
+and `go-contract-context-v1/v2/v3` into reuse of the pinned RI's validated
+committed-Go syntax facts. Zero or an omitted field keeps the uncached
+collection path and its existing run identity.
 The opt-in is local to planner-context preparation; it does not enable reuse
 for candidate observations, native checks, review, or final verification.
 

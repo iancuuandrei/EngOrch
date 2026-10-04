@@ -111,7 +111,9 @@ func QueryGoCandidateReviewTopology(baseGraph GoEngineeringGraph, baseInventory 
 	listedChanged := candidateReviewBoundedPaths(changed, goCandidateReviewTopologyMaxList)
 	listedAdmitted := candidateReviewBoundedPaths(admitted, goCandidateReviewTopologyMaxList)
 	listedDeleted := candidateReviewBoundedPaths(deleted, goCandidateReviewTopologyMaxList)
-	listedOmissions := append([]taskcontext.Omission(nil), corpus.Omissions...)
+	// Omissions is required by the projection schema. Preserve an empty JSON
+	// array rather than turning a nonnil empty input into null.
+	listedOmissions := append([]taskcontext.Omission{}, corpus.Omissions...)
 	if len(listedOmissions) > goCandidateReviewTopologyMaxList {
 		listedOmissions = listedOmissions[:goCandidateReviewTopologyMaxList]
 	}

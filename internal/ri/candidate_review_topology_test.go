@@ -1,6 +1,7 @@
 package ri
 
 import (
+	"bytes"
 	"fmt"
 	"reflect"
 	"strings"
@@ -75,8 +76,36 @@ func TestGoCandidateReviewTopologyDeletionOnlyIsExplicitlyUnavailable(t *testing
 	if out.UnavailableReason != "no_candidate_go_seeds" || out.DeletedPathCount != 1 || !reflect.DeepEqual(out.DeletedPaths, []string{"api/deleted.go"}) || len(out.ReviewGroups) != 0 || len(out.BaseGeneratorHints) != 0 || out.CandidateID != corpus.CandidateID {
 		t.Fatalf("deletion-only evidence was misrepresented: %+v", out)
 	}
+	assertCandidateReviewTopologyArrays(t, out)
 	if err := ValidateGoCandidateReviewTopology(out, base, inventory, corpus, 8); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestGoCandidateReviewTopologyPreservesEmptyOmissionsArray(t *testing.T) {
+	base, inventory, corpus := candidateReviewTopologyFixture(t, true)
+	corpus.Omissions = []taskcontext.Omission{}
+	corpus.OmittedCount = 0
+	corpus.OmissionsTrimmed = false
+	corpus.ChangedPaths = []string{"api/a.go", "api/generated.go"}
+	corpus.DeletedPaths = []string{"api/deleted.go", "api/omitted.go"}
+	out, err := QueryGoCandidateReviewTopology(base, inventory, corpus, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Omissions == nil || len(out.Omissions) != 0 {
+		t.Fatalf("empty omissions became null or nonempty: %#v", out.Omissions)
+	}
+	assertCandidateReviewTopologyArrays(t, out)
+	encoded, err := canonical.Bytes(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(encoded, []byte(`"omissions":[]`)) || bytes.Contains(encoded, []byte(`"omissions":null`)) {
+		t.Fatalf("projection did not encode the required empty omissions array")
+	}
+	if err := ValidateGoCandidateReviewTopology(out, base, inventory, corpus, 8); err != nil {
+		t.Fatalf("empty omissions projection did not replay: %v", err)
 	}
 }
 
@@ -105,6 +134,7 @@ func TestGoCandidateReviewTopologyEncodesEmptyDeletedPathsAsArray(t *testing.T) 
 	if out.DeletedPaths == nil {
 		t.Fatal("empty deleted_paths must be a nonnil slice for the nonnullable projection field")
 	}
+	assertCandidateReviewTopologyArrays(t, out)
 	encoded, err := canonical.Bytes(out)
 	if err != nil {
 		t.Fatal(err)
@@ -114,6 +144,35 @@ func TestGoCandidateReviewTopologyEncodesEmptyDeletedPathsAsArray(t *testing.T) 
 	}
 	if err := ValidateGoCandidateReviewTopology(out, base, inventory, corpus, 8); err != nil {
 		t.Fatalf("empty deletion projection did not replay: %v", err)
+	}
+}
+
+func assertCandidateReviewTopologyArrays(t *testing.T, out GoCandidateReviewTopology) {
+	t.Helper()
+	for name, value := range map[string]any{
+		"changed_paths":        out.ChangedPaths,
+		"admitted_paths":       out.AdmittedPaths,
+		"deleted_paths":        out.DeletedPaths,
+		"omissions":            out.Omissions,
+		"observed_packages":    out.ObservedPackages,
+		"couplings":            out.Couplings,
+		"potential_tests":      out.PotentialTests,
+		"potential_call_hints": out.PotentialCallHints,
+		"base_generator_hints": out.BaseGeneratorHints,
+		"review_groups":        out.ReviewGroups,
+	} {
+		if reflect.ValueOf(value).IsNil() {
+			t.Fatalf("%s must encode as an array, not null", name)
+		}
+	}
+	encoded, err := canonical.Bytes(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"changed_paths", "admitted_paths", "deleted_paths", "omissions", "observed_packages", "couplings", "potential_tests", "potential_call_hints", "base_generator_hints", "review_groups"} {
+		if bytes.Contains(encoded, []byte(`"`+name+`":null`)) {
+			t.Fatalf("%s encoded as null", name)
+		}
 	}
 }
 

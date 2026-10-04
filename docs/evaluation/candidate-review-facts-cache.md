@@ -2,8 +2,8 @@
 
 `--review-impact-candidate-facts-cache` opts an autonomous run into version 1
 local reuse of candidate Go syntax facts during review-impact collection. It
-requires both `--review-impact-context` and
-`--planner-context go-contract-context-v1` with the same pinned RI executable.
+requires both `--review-impact-context` and a contract planner context
+(`go-contract-context-v1/v2/v3`) with the same pinned RI executable.
 
 The cache contains only per-file parser observations keyed by the RI runtime on
 normalized path, exact source SHA-256, parser schema/version, and producer

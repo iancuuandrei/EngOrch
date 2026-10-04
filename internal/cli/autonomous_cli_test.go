@@ -164,6 +164,9 @@ func TestAutonomousGoSourcePlannerContextRequiresAndBindsPinnedParser(t *testing
 	if err := validateAutonomousPlannerContext(autonomousPlannerContextGoContractV2, parser, parserHash); err != nil {
 		t.Fatalf("valid contract-context v2 pinned parser binding rejected: %v", err)
 	}
+	if err := validateAutonomousPlannerContext(autonomousPlannerContextGoContractV3, parser, parserHash); err != nil {
+		t.Fatalf("valid contract-context v3 pinned parser binding rejected: %v", err)
+	}
 
 	for _, test := range []struct {
 		name, mode, path, hash string
@@ -172,11 +175,13 @@ func TestAutonomousGoSourcePlannerContextRequiresAndBindsPinnedParser(t *testing
 		{name: "go context v2 missing binding", mode: autonomousPlannerContextGoSourceV2},
 		{name: "contract context missing binding", mode: autonomousPlannerContextGoContractV1},
 		{name: "contract context v2 missing binding", mode: autonomousPlannerContextGoContractV2},
+		{name: "contract context v3 missing binding", mode: autonomousPlannerContextGoContractV3},
 		{name: "go context missing hash", mode: autonomousPlannerContextGoSourceV1, path: parser},
 		{name: "relative parser path", mode: autonomousPlannerContextGoSourceV1, path: "ri.exe", hash: parserHash},
 		{name: "v2 relative parser path", mode: autonomousPlannerContextGoSourceV2, path: "ri.exe", hash: parserHash},
 		{name: "contract relative parser path", mode: autonomousPlannerContextGoContractV1, path: "ri.exe", hash: parserHash},
 		{name: "contract v2 relative parser path", mode: autonomousPlannerContextGoContractV2, path: "ri.exe", hash: parserHash},
+		{name: "contract v3 relative parser path", mode: autonomousPlannerContextGoContractV3, path: "ri.exe", hash: parserHash},
 		{name: "unclean parser path", mode: autonomousPlannerContextGoSourceV1, path: filepath.Dir(parser) + string(os.PathSeparator) + "." + string(os.PathSeparator) + filepath.Base(parser), hash: parserHash},
 		{name: "uppercase hash", mode: autonomousPlannerContextGoSourceV1, path: parser, hash: strings.ToUpper(parserHash)},
 		{name: "binding with legacy mode", mode: autonomousPlannerContextSourceBoundedV1, path: parser, hash: parserHash},
@@ -245,6 +250,47 @@ func TestAutonomousGoSourcePlannerContextRequiresAndBindsPinnedParser(t *testing
 	v2Policy := v2Snapshot.Creation.Execution
 	if v2Policy == nil || v2Policy.PlannerContext != autonomousPlannerContextGoSourceV2 || v2Policy.PlannerParseCacheVersion != 1 || v2Policy.PlannerContextRIExecutable != parser || v2Policy.PlannerContextRIExecutableSHA256 != parserHash {
 		t.Fatalf("v2 parser provenance was not bound unchanged in run creation: %#v", v2Policy)
+	}
+}
+
+func TestAutonomousContractPlannerContextV3BindsNewRecordMode(t *testing.T) {
+	parser, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary, err := os.ReadFile(parser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(binary)
+	parserHash := hex.EncodeToString(sum[:])
+	root := autonomousCLIFixture(t)
+	var out bytes.Buffer
+	err = Execute(context.Background(), []string{
+		"run", "--autonomous", "--prepare-only", "--max-parallel", "1",
+		"--planner-context", autonomousPlannerContextGoContractV3,
+		"--planner-context-parse-cache",
+		"--planner-context-ri-executable", parser,
+		"--planner-context-ri-executable-sha256", parserHash,
+		"--review-impact-context", "--review-impact-candidate-facts-cache",
+		"A bounded contract v3 fixture objective",
+	}, root, &out)
+	if err == nil {
+		t.Fatal("test executable unexpectedly satisfied the RI protocol")
+	}
+	var failure autonomousFailure
+	if decodeErr := json.Unmarshal(out.Bytes(), &failure); decodeErr != nil || failure.RunID == "" {
+		t.Fatalf("contract v3 admission failure did not identify the prepared run: %s (%v)", out.String(), decodeErr)
+	}
+	snapshot, err := control.Inspect(filepath.Join(root, ".harness", "runs", failure.RunID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := snapshot.Creation.Execution
+	if policy == nil || policy.PlannerContext != autonomousPlannerContextGoContractV3 || policy.PlannerParseCacheVersion != 1 ||
+		policy.ReviewImpactContextVersion != 1 || policy.CandidateFactsCacheVersion != 1 ||
+		policy.PlannerContextRIExecutable != parser || policy.PlannerContextRIExecutableSHA256 != parserHash {
+		t.Fatalf("contract v3/cache/review/parser policy was not immutably bound: %#v", policy)
 	}
 }
 

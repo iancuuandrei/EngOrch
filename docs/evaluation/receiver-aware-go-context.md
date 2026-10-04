@@ -32,3 +32,17 @@ These checks establish selection behavior, not a successful new coding task.
 The historical fixed-six cohorts remain 5/6 with different failing tasks.
 Their passing sets are not pooled. The difflib held-out gate remains unchanged.
 Fresh full qualification and actual coding-task evaluation are pending.
+
+## Generated ownership projection
+
+`--planner-context go-contract-context-v3` is a separate opt-in on the same
+bounded receiver-aware corpus. It writes durable record version 6 with a
+new record-hash domain, leaving v1/v2 invocation and replay identities intact.
+The v3 prompt adds a bounded, source-hash-bound projection of generator
+directives, marked outputs, and already-validated tool/template references
+when the output and its `GENERATED_BY` relation are visible in the selected
+contract context. It does not execute generators, add files to write scope,
+or grant generator-derived permissions. Missing or truncated discovery stays
+explicitly partial. The projection is limited to eight bindings, eight tool
+references per binding, and 16 KiB; omitted evidence remains unavailable to
+the planner. This adds evidence visibility, not coding-task qualification.
