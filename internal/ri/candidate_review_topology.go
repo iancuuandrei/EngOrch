@@ -147,9 +147,11 @@ func QueryGoCandidateReviewTopology(baseGraph GoEngineeringGraph, baseInventory 
 			return GoCandidateReviewTopology{}, err
 		}
 		out.ImpactTruncated = base.ImpactTruncated
-		out.Couplings = append([]GoTopologyCoupling(nil), base.Couplings...)
-		out.PotentialTests = append([]string(nil), base.PotentialTests...)
-		out.ReviewGroups = append([]GoTopologyReviewGroup(nil), base.ReviewGroups...)
+		// These are required array fields in the projection. Copy into empty,
+		// nonnil slices so an empty query result remains [] in JSON, not null.
+		out.Couplings = append([]GoTopologyCoupling{}, base.Couplings...)
+		out.PotentialTests = append([]string{}, base.PotentialTests...)
+		out.ReviewGroups = append([]GoTopologyReviewGroup{}, base.ReviewGroups...)
 		selected := make(map[string]bool)
 		for _, group := range base.ReviewGroups {
 			for _, path := range group.Paths {

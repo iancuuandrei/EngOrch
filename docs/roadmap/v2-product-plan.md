@@ -742,3 +742,39 @@ remain unknown. Its SHA256 is
   with prepared file bindings and confirmation of the embedded policy. Default
   runs retain their previous arguments and receipt shape. A genuinely unseen
   Wordwrap evaluation with the declared fallback policy remains pending.
+
+## Checkpoint — v1.0.23 integrated; seeded review projection repair
+
+- Main/dev contain `88fb02c448ee737ed17950dc82074f20ca3da122`, merged through
+  automation PR #30. The optional model-policy runner treatment received
+  independent review, and all ten PowerShell harnesses passed on the clean
+  final commit (receipt SHA256
+  `2073d30c78cb0f055306afc5293bf6bf5872674a8e6e4e5e280a95271d705d2d`).
+  Hosted Sonar/security checks passed with zero unresolved issues and zero
+  new duplication. Sonar and harness fixes remain in the same increment.
+- Go/Rust source and dependencies are unchanged from qualified v1.0.22;
+  its fresh full Go result is the runtime qualification reference. No fresh
+  full final-v1.0.23 Go or Rust suite is claimed. An additional full Go run on
+  the earlier Go-identical v1.0.23 source passed, log SHA256
+  `df4c12ddc63a60efc367a196402113381c7aa10c76eb6f3369a7a3b10966d6d4`.
+  Script files in that checkout were briefly amended and restored during the
+  run; Go files were unchanged. It is not a continuously clean-checkout claim.
+- The independent policy review approved the declared baseline fallback,
+  not a measured improvement. Its calibration is unselected because of
+  UNKNOWN outcomes; Wordwrap is outside its objective scope. Astra is only
+  configured for static escalation, without live qualification evidence.
+  The single Wordwrap preparation passed native baseline and the unchanged
+  held-out baseline failed on the missing API as expected. Its new evaluation
+  is authorized once on frozen v1.0.23; acceptance remains pending.
+- The second long-horizon candidate now contains the requested benchmark
+  cases after one normal repair. Candidate-bound native verification passes,
+  one of two repairs remains, and active/uncertain intents are zero, but a
+  new reviewer result was not admitted. Frozen v1.0.22 Afero encountered the
+  same review boundary; neither result is counted as accepted.
+- Code inspection found a concrete seeded review-projection defect: copying
+  empty coupling/test/group slices with a nil destination restores JSON null
+  for required arrays. A direct producer correction and seeded regression
+  passed focused regression tests and independent review. Complete clean
+  qualification and integration remain pending. The blocked runs expose only
+  `execution_blocked`, so their
+  exact inner error is not yet proven; no uncertain effect was resent.

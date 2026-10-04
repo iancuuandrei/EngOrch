@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -144,6 +145,59 @@ func TestGoCandidateReviewTopologyEncodesEmptyDeletedPathsAsArray(t *testing.T) 
 	}
 	if err := ValidateGoCandidateReviewTopology(out, base, inventory, corpus, 8); err != nil {
 		t.Fatalf("empty deletion projection did not replay: %v", err)
+	}
+}
+
+func TestGoCandidateReviewTopologyKeepsEmptyImpactArrays(t *testing.T) {
+	base, inventory, corpus := candidateReviewTopologyFixture(t, false)
+	binding, err := DeclaredGoPackageBinding(corpus.ModuleInventory, "api/a.go", "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	producer := corpus.ProducerSHA256
+	source := "package api\nfunc Changed() {}\n"
+	replacement := graphInput("api/a.go", source, binding, nil, nil, nil, nil, producer)
+	deleted := make([]string, 0, len(base.Files)-1)
+	for _, file := range base.Files {
+		if file.Facts.Path != "api/a.go" {
+			deleted = append(deleted, file.Facts.Path)
+		}
+	}
+	sort.Strings(deleted)
+	graph, err := ApplyGoEngineeringOverlay(base, GoGraphOverlayInput{
+		BaseDigest: base.Digest, CandidateID: corpus.CandidateID, ProducerSHA256: producer,
+		Replacements: []GoGraphFileInput{replacement}, Deleted: deleted,
+		ModuleInventory: &corpus.ModuleInventory,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	corpus.Graph = graph
+	corpus.ChangedPaths = []string{"api/a.go"}
+	corpus.AdmittedPaths = []string{}
+	corpus.DeletedPaths = deleted
+	out, err := QueryGoCandidateReviewTopology(base, inventory, corpus, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Couplings == nil || len(out.Couplings) != 0 || out.PotentialTests == nil || len(out.PotentialTests) != 0 || out.BaseGeneratorHints == nil {
+		t.Fatalf("empty impact collections must remain nonnil arrays: couplings=%#v tests=%#v generators=%#v", out.Couplings, out.PotentialTests, out.BaseGeneratorHints)
+	}
+	assertCandidateReviewTopologyArrays(t, out)
+	encoded, err := canonical.Bytes(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"couplings", "potential_tests"} {
+		if !bytes.Contains(encoded, []byte(`"`+name+`":[]`)) {
+			t.Fatalf("empty %s did not encode as an array", name)
+		}
+	}
+	if bytes.Contains(encoded, []byte(`"base_generator_hints":null`)) {
+		t.Fatal("base_generator_hints encoded as null")
+	}
+	if err := ValidateGoCandidateReviewTopology(out, base, inventory, corpus, 8); err != nil {
+		t.Fatalf("empty impact projection did not replay: %v", err)
 	}
 }
 
