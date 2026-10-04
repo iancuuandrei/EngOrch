@@ -1,6 +1,6 @@
 # Fabric v1 real-repository evaluation: pinned custom tasks
 
-This suite defines ten custom real-repository tasks, each pinned to an
+This suite defines eleven custom real-repository tasks, each pinned to an
 audited upstream commit. It is not a SWE-bench score and it is not a general
 full-v1 proof; it reports per-task behavioral acceptance on the selected
 repositories only. `manifest.json` is the authoritative source, commit,
@@ -9,12 +9,34 @@ each pinned repository's LICENSE file: go-humanize MIT, afero Apache-2.0,
 go-multierror MPL-2.0, go-atomic MIT, go-difflib BSD-3-Clause, logr
 Apache-2.0, godotenv MIT (`LICENCE`). The original six-task comparison remains
 a six-task result; adding a manifest entry does not add a successful run.
+## Current accepted evidence
+
+A separate frozen v1.0.25 Sol High eight-task cohort reached **7/8 PASS**:
+go-humanize, afero, go-multierror, go-atomic, go-difflib and logr (fixed-six
+**6/6**), plus go-atomic-numeric-text. Each PASS binds native verification,
+approved review, copied candidate identity and unchanged held-out acceptance.
+Godotenv exhausted its two repairs and remains BLOCKED; no candidate-copy
+acceptance was performed for that row. Earlier frozen results retain their
+original outcomes. This is not a SWE-bench score or final v2 qualification.
+
+Across all eight tasks, 33 matched runtime observations report 9,885,990 input
+tokens (8,561,152 cached; 1,324,838 uncached), 101,281 output and 27,989 reasoning.
+Cached input is a subset of input and reasoning a subset of output. Costs,
+physical provider-call counts and exact READY transition times remain unknown.
+See the [product ledger](../../docs/roadmap/v2-product-plan.md) for identities
+and the paused checkpoint, and the [capability guide](../../docs/guides/features.md)
+for product boundaries.
+
+## Task contracts
+
 The seventh task exercises multiline dotenv parsing, compatibility and
 documentation in a previously unfamiliar parser repository. Its pinned
 upstream tests pass before the change; its held-out multiline assertions fail
 before the feature. A [fresh public-main attempt](results/godotenv-main10-20261003.json)
 was blocked before file application because a proposed source anchor did not
-match the current file. Actual Fabric completion is still pending.
+match the current file. That was an earlier, separate attempt. The later
+v1.0.25 cohort above exhausted two repairs and remained BLOCKED; godotenv
+acceptance is still incomplete.
 
 `go-atomic-numeric-text` uses the same pinned MIT go-atomic source for two
 text-encoding API extensions: Int64 and Uint64. Both wrappers share a generator
@@ -27,7 +49,8 @@ records zero provider calls. The earlier parallel attempt used an incorrect
 independence assumption and exhausted two repairs with native PASS but review
 changes requested for generated-source drift. See
 [the retained failure](results/numeric-generated-code-de2f587-20261003.json).
-The task now explicitly requires generator consistency; it is not the selected
+The task now explicitly requires generator consistency, and the separate
+v1.0.25 cohort above accepted that requirement; it is not the selected
 serial/parallel qualification case.
 Its Windows native check has the same narrow NocmpIntegration exclusion as
 go-atomic; its held-out check never excludes a test.
@@ -57,8 +80,9 @@ verify independence; the task does not force unsafe parallel execution. The
 uses fresh isolated arms with `MaxParallel` 1 and 2, the same resource policy,
 and candidate-bound reviewer impact enabled in both. It preserves the manifest
 objective, source, binary, model, runtime, full native check, and both held-out
-assertions. The recipe is not yet qualified; adding this task is not accepted
-parallel execution or a speedup claim.
+assertions. A later bounded v1.0.19 pair accepted the isolated parallel arm
+while the serial arm blocked. Different plans and outcomes prevent a causal
+speedup or token-saving claim; this qualifies the observed scenario only.
 The [composed preflight](results/humanize-composed-preflight-20261003.json)
 records full native baseline PASS and compiled, targeted baseline failures for
 both required improvements, with zero provider calls.

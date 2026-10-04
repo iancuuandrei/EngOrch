@@ -1,5 +1,20 @@
 # Implementation and evidence status
 
+## Current product checkpoint
+
+Integrated product code is v1.0.27 (`6205de9`). Full clean Go, ten PowerShell
+harnesses, independent review and hosted Sonar/security passed. A separate
+frozen v1.0.25 Sol High cohort reached 7/8 PASS: fixed-six 6/6 plus generated
+numeric ownership, with godotenv BLOCKED after its two repairs. Two independent
+v1.0.27 Windows builds matched byte for byte and passed offline smoke checks;
+this does not qualify a new installed-task release.
+
+Development is paused. Use the [capability guide](../guides/features.md) for
+current functionality and the [product ledger](../roadmap/v2-product-plan.md)
+for exact evidence, effects and open v2 gates. The detailed entries below are
+historical, scoped checkpoints; their pending labels do not override newer
+qualified evidence and their local PASS results are not general release proof.
+
 ### Anthropic native refusal classification
 
 Anthropic decoders now retain non-content identity/accounting metadata on

@@ -1,8 +1,16 @@
 # Humanize disjoint-feature topology
 
-Runner-supported, not-yet-qualified matched-pair recipe for the existing
+Runner-supported matched-pair recipe for the existing
 `go-humanize-feature-performance` manifest task. It adds no manifest row and
 does not modify the objective or held-out checks.
+
+The bounded v1.0.19 comparison completed: serial BLOCKED after one repair;
+parallel READY with native verification, approved review and both unchanged
+held-out checks passing. Two disjoint writers used isolated worktrees and
+serial parent integration. Different plans and acceptance outcomes prevent a
+causal speed or token-saving claim. See the
+[current product ledger](../../../../docs/roadmap/v2-product-plan.md) for
+source identities and the scope of qualification.
 
 The pinned source confirms two disjoint implementation clusters: integer
 separator parsing in `bytes.go` with `bytes_test.go`, and floating-point

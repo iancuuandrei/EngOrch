@@ -13,8 +13,22 @@ limits. Linux amd64 remains optional and unqualified.
 
 For the current development checkout, use the
 [source-build autonomous guide](docs/guides/autonomous-task.md).
-The [v2 product roadmap](docs/roadmap/v2-product-plan.md) records capability
-qualification separately from published release acceptance.
+The [capability guide](docs/guides/features.md) describes the current
+functionality and its limits. The [v2 product roadmap](docs/roadmap/v2-product-plan.md)
+records qualification separately from published release acceptance.
+
+## Current development status
+
+The latest capability increment is **v1.0.27** (`6205de9`); v1.0.28 updates
+documentation only. A separate frozen
+v1.0.25 Sol High cohort reached **7/8 PASS**: fixed-six **6/6** plus generated
+numeric ownership; godotenv remains BLOCKED after two repairs. The seven PASS rows
+have native verification, approved candidate-bound review and unchanged
+held-out acceptance. They do not establish v2.0.0 release completion.
+
+Development is paused at the user's request. See the
+[latest checkpoint](docs/roadmap/v2-product-plan.md) for the preserved run
+state, measured token types, cache limitations and remaining release work.
 
 ## Run your first real coding task
 
@@ -31,7 +45,7 @@ The earlier [source-built Windows first-task guide](docs/getting-started/real-ta
 covers the approval-based workflow accepted at its recorded source identity.
 Use the installed-task guide above for the v1.0.0 autonomous workflow.
 
-## Checkpoint
+## Historical bootstrap
 
 - [v0.0.1 trusted bootstrap checkpoint](docs/evaluation/v0.0.1.md): first
   trusted pre-alpha checkpoint (M2at: Luna planning, recursive Muse research,
@@ -83,6 +97,10 @@ qualify plugin installation or sandbox inheritance.
 - [Architecture](docs/architecture/system.md) and [ADRs](docs/adr/0001-language-split.md)
 - [Journal contract](docs/specifications/run-journal.md)
 - [CLI reference](docs/reference/cli.md)
+- [All implemented capabilities and qualification](docs/guides/features.md)
+- [Engineering ranking and semantic queries](docs/guides/engineering-orientation.md)
+- [Go file facts](docs/guides/go-file-facts.md)
+- [Resource-bounded isolated writers](docs/guides/isolated-writers.md)
 - [Local task schedules](docs/guides/task-schedules.md)
 - [Autonomous task graphs](docs/guides/graph-autonomous-task.md): dependency
   waves, bounded context and parallel read tasks; development qualification
@@ -91,6 +109,10 @@ qualify plugin installation or sandbox inheritance.
 - [Prompt-cache recipes](docs/guides/prompt-cache-recipes.md)
 - [Empirical model calibration and conservative fallback](docs/guides/empirical-model-calibration.md)
 - [Native runtime compaction](docs/guides/native-auto-compaction.md)
+- [Candidate-bound checkpoints](docs/guides/checkpoints.md)
+- [Verified fresh-context rounds](docs/guides/verified-fresh-rounds.md)
+- [Deterministic Go-format observations](docs/guides/deterministic-go-format-observation.md)
+- [Typed Codex usage observations](docs/guides/codex-native-usage-observations.md)
 - [Apply file changes](docs/guides/file-changes.md)
 - [Build and verify a local package](docs/guides/local-packaging.md): local directory only; never a signed, tagged, or published release.
 - [Reproducible release bundles and installation](docs/guides/release.md):

@@ -8,6 +8,18 @@ release. The v1.0.0 Windows package has separate recorded technical acceptance;
 its artifact metadata remains unsigned and `release_qualified = false`. No build
 command described below has been executed by this guide.
 
+## Current development packaging evidence
+
+Two independent native Windows v1.0.27 builds from clean source
+`6205de9b6b18d503cd45969a8a64660cb6bc65bb` produced the same 39,311,517-byte
+archive, SHA256
+`dc2e8dd8ccdff6c03deeb6aa7ee5c95fbc498813c23ab96e964f5fb644b0fada`.
+Both release verifiers and offline help/version/reference/fake-init/doctor
+checks passed. Their manifests keep `release_qualified: false`. These local
+artifacts are not a new published or installed-real-task release; the accepted
+v1.0.0 distribution below retains its exact identity. See the
+[product ledger](../roadmap/v2-product-plan.md) for evidence and remaining gates.
+
 ## Platform rule
 
 For the user-facing installed v1.0.0 flow, see the

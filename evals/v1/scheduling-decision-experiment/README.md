@@ -4,6 +4,11 @@ This is a deterministic, offline comparison of scheduling heuristics and a
 separate synthetic evidence-stopping rule. It does not change production
 scheduling and is not a formal JEV calculation.
 
+The implemented resource-vector and isolated-writer capabilities are described
+in the [capability guide](../../../docs/guides/features.md). Their bounded real
+topology acceptance does not qualify these modeled heuristics or promote a
+JEV scheduler.
+
 ## Run it
 
 From this directory, run:

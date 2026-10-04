@@ -1,6 +1,6 @@
 # Read-only run checkpoints
 
-`harness checkpoint RUN` reports one validated controller-journal prefix. It
+`fabric checkpoint RUN` reports one validated controller-journal prefix. It
 shows the source commit/tree and their repository identity, the current
 candidate and graph bindings, graph task IDs with confirmed completion
 evidence, configured native-check statuses, the structured reviewer decision,

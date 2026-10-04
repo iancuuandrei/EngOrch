@@ -1,5 +1,11 @@
 # Harness regression fixtures
 
+These fixtures qualify local classification and copy mechanics. Real task
+outcomes and token accounting are recorded separately in the
+[suite README](../README.md) and
+[product ledger](../../../docs/roadmap/v2-product-plan.md); fixture PASS is
+not a hosted or complete product acceptance result.
+
 `Classify-CheckOutput.ps1` (`Get-FabricV1CheckClassification`) exists so the
 old `evaluate-v1-baseline.ps1` defect cannot return silently:
 

@@ -1,9 +1,14 @@
 # Verified fresh-context rounds
 
-**Prepared procedure — NOT EXECUTED.** This guide describes a supported manual
+This guide describes a supported manual
 path from an accepted run to a fresh run based on that exact committed
-candidate. It does not claim that automatic compaction has triggered or that a
-multi-round Humanize evaluation has passed. Use only after the intended frozen
+candidate. Two Humanize coding rounds later reached accepted candidates;
+the second recorded six native compaction events and a run-scoped pause/resume
+without another model invocation. They used mixed Fabric versions and shared
+the recorded parent runtime state home, so this is bounded continuation
+evidence rather than qualification of the original fully isolated protocol.
+See the [product ledger](../roadmap/v2-product-plan.md) for exact identities.
+Use only after the intended frozen
 Fabric, runner, Go, Codex, RI, and acceptance inputs are qualified and pinned.
 
 ## Why a new source checkout is required

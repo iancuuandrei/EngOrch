@@ -880,3 +880,73 @@ remain unknown. Its SHA256 is
   policy promotion. Preparation passed; the evaluation is running. Overall
   model choice is bound by its external dispatch receipt because the existing
   prepare manifest records only the fixer override.
+
+## Checkpoint — v1.0.27 integrated; fresh fixed-six accepted
+
+- Main/dev contain `6205de9b6b18d503cd45969a8a64660cb6bc65bb`, integrated through automation PR #34. Fresh
+  clean full Go with the pinned RI, ten PowerShell harnesses, focused semantic
+  and ranking fixtures, independent review and hosted Sonar/security passed.
+  Sonar reported zero unresolved issues and zero new duplication.
+- The separately frozen v1.0.25 Sol High evaluation completed 7/8 PASS:
+  fixed-six 6/6 plus generated numeric ownership PASS; godotenv BLOCKED.
+  Each passing task has candidate-bound native verification, approved review,
+  fresh unchanged held-out acceptance and READY evidence. Independent review
+  approved the exact joins. This does not rewrite the v1.0.24 5/8 result,
+  pool cohorts or establish a complete v2 qualification.
+- Godotenv exhausted its two repairs after three changes-requested reviews.
+  Its nine model invocations are completed and receipt-matched, with zero
+  active or uncertain intents and three confirmed aggregate file effects.
+  Native and held-out candidate-copy acceptance were not run. The final
+  candidate has a real single-line compatibility defect in escaped-quote
+  comment scanning; native checks alone did not establish acceptance.
+- Across all eight tasks, 33 matched runtime observations report 9,885,990
+  input tokens: 8,561,152 cached and 1,324,838 uncached. Output is 101,281,
+  including 27,989 reasoning tokens. Costs, physical provider calls and exact
+  durable READY transition times remain unknown. The reviewed private terminal
+  receipt SHA256 is `ee772fc452ca5da371585f7a4be0cc2ce2d541e92bbbedc398d29e0068642ddc`.
+- Two independent clean v1.0.27 Windows amd64 package builds are byte-identical.
+  Archive SHA256 is `dc2e8dd8ccdff6c03deeb6aa7ee5c95fbc498813c23ab96e964f5fb644b0fada`; both release verifiers and offline help,
+  version, reference, fake-init and doctor smoke checks passed. This is packaging
+  evidence only: the manifest keeps release_qualified false, and no real
+  installed-task or v2 release qualification is inferred. Private packaging
+  receipt SHA256 is `9b524c3bc64faca936c8311e2c9ec3e1cd8de387626d4f6995b6188252268fe1`.
+- A profiled full-batch corpus fast path was tested and independently reviewed,
+  but the matched Humanize workload showed no useful latency gain. External-test
+  prefix collisions require fallback; the candidate was archived and removed
+  without integration. Product code remains unchanged. Caches stay opt-in.
+- One separate fresh v1.0.27 godotenv quality pilot started with Sol High
+  roles and an explicit gpt-6-astra/high fixer, the unchanged public task,
+  source pin, native checks, held-out fixtures and two-repair ceiling. This
+  tests a stronger static fixer; it is not a retry of the exhausted run or an
+  adaptive-policy/default promotion. The exact runtime model catalogue and
+  corrected embedded VCS provenance were checked before dispatch.
+- The first preparation attempt used a wrong model identifier and a binary
+  without embedded VCS metadata. Evaluation rejected before any provider call
+  or journal creation. Those records are preserved; the corrected one-task
+  preparation has a distinct identity. v2 remains OPEN.
+
+## Paused checkpoint — documentation update v1.0.28
+
+- The user paused development; the persistent goal is PAUSED. v1.0.28 updates
+  README navigation, the capability catalogue, evaluation status, topology,
+  continuation and packaging documentation. It adds no product-code change,
+  qualification score, release tag or resumed provider work.
+- The corrected one-task pilot is preparation run
+  `20261004T104730Z-0cc1a0a6`, evaluation `eval-20261004T104918Z-ad174e13`,
+  Fabric run `ed85fb8415da21396538a38c4de9c0a83b451d1f17ea94953b10b4e937a9e307`.
+  Its run-scoped pause request was accepted. At the recorded pause snapshot,
+  lifecycle was PAUSE_REQUESTED and workflow IMPLEMENTING: the planner was
+  completed, one writer access remained pending without a terminal receipt or
+  proposal, no candidate was accepted and zero file effects were confirmed.
+  PID 38784 was observed alive. This is not quiescence, completion or permission
+  to resend the pending writer.
+- The pause handoff observed at 2026-10-04T10:58:13Z has SHA256
+  `8ebf6c033db35a85e34dbd79dc35abae1464e967b45d9477b63037918864d18f`.
+  It retains exact journal, invocation, access, binary, runtime and dispatch
+  identities. No evaluator exit receipt was present at that snapshot. Do not
+  start another run or resume this one while development is paused. At an
+  explicitly authorized continuation, inspect the same journal and reconcile
+  the admitted attempt's recorded outcome before any further action.
+- The reviewed v1.0.25 cohort remains 7/8, fixed-six 6/6 and generated numeric
+  PASS. Its godotenv row stays BLOCKED. The pending newer pilot cannot replace
+  that frozen result, and v2.0.0 remains OPEN.
