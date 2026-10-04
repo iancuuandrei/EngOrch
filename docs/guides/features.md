@@ -1,10 +1,17 @@
 # Fabric capabilities
 
-Capabilities introduced through **v1.0.27**, commit
-`6205de9b6b18d503cd45969a8a64660cb6bc65bb`. The published installed acceptance
+Capabilities introduced through **v1.0.29**. The prior qualified code checkpoint
+is v1.0.27 (`6205de9b6b18d503cd45969a8a64660cb6bc65bb`). The published installed acceptance
 record applies to v1.0.0 on Windows amd64. Development capabilities below do
 not imply a completed v2.0.0 release. The v1.0.28 increment updates
 documentation only.
+
+Separately authorized local Muse route work passed one go-humanize task with
+native verification, approved review and unchanged held-out acceptance, using a
+custom development binary. See the [Muse guide](muse-go-route.md) and
+[capability fallback guide](graceful-capabilities.md). Later optional-capability
+source changes require their own verification; this single task does not change
+the frozen evaluation scores below.
 
 ## Start a coding task
 

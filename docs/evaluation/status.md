@@ -2,14 +2,22 @@
 
 ## Current product checkpoint
 
-Integrated product code is v1.0.27 (`6205de9`). Full clean Go, ten PowerShell
+The prior qualified product checkpoint is v1.0.27 (`6205de9`). Full clean Go, ten PowerShell
 harnesses, independent review and hosted Sonar/security passed. A separate
 frozen v1.0.25 Sol High cohort reached 7/8 PASS: fixed-six 6/6 plus generated
 numeric ownership, with godotenv BLOCKED after its two repairs. Two independent
 v1.0.27 Windows builds matched byte for byte and passed offline smoke checks;
 this does not qualify a new installed-task release.
 
-Development is paused. Use the [capability guide](../guides/features.md) for
+The persistent v2 goal is paused. Separately authorized Muse and graceful
+capability fixes are in local development. An all-Muse OpenCode Go run reached
+READY on the unchanged go-humanize task: native tests PASS, review APPROVE with
+zero findings, held-out PASS, eight accepted calls and receipts. See the
+[scoped acceptance receipt](../../evals/v1/results/muse-go-humanize-20261004.json)
+and [route guide](../guides/muse-go-route.md). This custom binary does not qualify
+later local fallback additions or a new release.
+
+Use the [capability guide](../guides/features.md) for
 current functionality and the [product ledger](../roadmap/v2-product-plan.md)
 for exact evidence, effects and open v2 gates. The detailed entries below are
 historical, scoped checkpoints; their pending labels do not override newer

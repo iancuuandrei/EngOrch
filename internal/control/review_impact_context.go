@@ -229,6 +229,7 @@ func maybeAdmitReviewImpactContext(ctx context.Context, path string) error {
 		cacheDir := ""
 		if policy.CandidateFactsCacheVersion == 1 {
 			cacheDir, err = ensureCandidateFactsCacheDir(s.Creation.Repository, policy.PlannerContextRIExecutableSHA256)
+			cacheDir, err = optionalCacheDirectory(cacheDir, err)
 			if err != nil {
 				return err
 			}

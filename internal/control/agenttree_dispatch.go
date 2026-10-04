@@ -144,6 +144,34 @@ func providerRoleJournalStem(role string, turn *taskscheduler.AgentTurnBinding) 
 	return role + ".turn-" + turn.TurnID
 }
 
+// A role may perform several independent turns in one engineering run. Keep
+// the historical first-turn path for exact recovery, but never bind another
+// invocation to that first turn's gateway or runtime state.
+func providerInvocationJournalStem(controllerPath string, invocation runtime.Invocation, turn *taskscheduler.AgentTurnBinding) (string, error) {
+	stem := providerRoleJournalStem(invocation.Profile.Role, turn)
+	if turn != nil {
+		return stem, nil
+	}
+	events, err := journal.Read(controllerPath + "." + stem + ".opencode-runtime.jsonl")
+	if err != nil {
+		return "", err
+	}
+	if len(events) == 0 {
+		return stem, nil
+	}
+	var prior opencoderuntime.Intent
+	if events[0].Kind != "opencode-runtime.intent" || canonical.Decode(events[0].Payload, &prior) != nil {
+		return "", errors.Join(opencoderuntime.ErrRecoveryRequired, errors.New("provider runtime first intent is invalid"))
+	}
+	if id, err := prior.ID(); err != nil || id != prior.IntentID {
+		return "", errors.Join(opencoderuntime.ErrRecoveryRequired, errors.New("provider runtime intent identity is invalid"))
+	}
+	if prior.Invocation.ID == invocation.ID {
+		return stem, nil
+	}
+	return stem + ".invocation-" + invocation.ID, nil
+}
+
 func beginAgentDispatchForTurn(controllerPath string, snapshot Snapshot, invocation runtime.Invocation, turn *taskscheduler.AgentTurnBinding) (agentDispatchBinding, error) {
 	contextHash, err := access.InputID(invocation.Input)
 	if err != nil {

@@ -331,6 +331,18 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 	if err != nil {
 		return err
 	}
+	capabilities := autonomousCapabilities{parallel: parallelWriters, isolation: isolationPolicy,
+		plannerContext: plannerContext, parser: plannerContextRIExecutable, parserHash: plannerContextRIExecutableSHA256,
+		parseCache: plannerParseCacheVersion, reviewImpact: reviewImpactContextVersion, candidateCache: candidateFactsCacheVersion, autoCompact: autoCompactTokenLimit}
+	if err := capabilities.resolve(cfg); err != nil {
+		return err
+	}
+	parallelWriters, isolationPolicy = capabilities.parallel, capabilities.isolation
+	plannerContext, plannerContextRIExecutable, plannerContextRIExecutableSHA256 = capabilities.plannerContext, capabilities.parser, capabilities.parserHash
+	plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion = capabilities.parseCache, capabilities.reviewImpact, capabilities.candidateCache
+	if capabilities.autoCompact == 0 {
+		autoCompact = nil
+	}
 	identity, err := repository.Discover(ctx, root, cfg.Repository)
 	if err != nil {
 		return err
@@ -408,7 +420,8 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 		Objective:  objective,
 		Config:     cfg,
 		Execution: &control.ExecutionPolicy{
-			Mode: "autonomous-v1", MaxRepairs: maxRepairs, PromptRecipe: promptRecipe, Context: "bounded-v1",
+			CapabilityFallbacks: capabilities.fallbacks,
+			Mode:                "autonomous-v1", MaxRepairs: maxRepairs, PromptRecipe: promptRecipe, Context: "bounded-v1",
 			PlannerContext: plannerContext, PlannerContextRIExecutable: plannerContextRIExecutable,
 			PlannerContextRIExecutableSHA256: plannerContextRIExecutableSHA256,
 			PlannerParseCacheVersion:         plannerParseCacheVersion,
@@ -516,10 +529,14 @@ func autonomousResumeCommand(ctx context.Context, root string, args []string, ou
 }
 
 type autonomousFailure struct {
-	RunID         string `json:"run_id"`
-	State         string `json:"state"`
-	Phase         string `json:"phase"`
-	BlockedReason string `json:"blocked_reason"`
+	Status            string                  `json:"status"`
+	Disposition       control.GateDisposition `json:"disposition"`
+	NextAction        string                  `json:"next_action"`
+	CandidateRetained bool                    `json:"candidate_retained"`
+	RunID             string                  `json:"run_id"`
+	State             string                  `json:"state"`
+	Phase             string                  `json:"phase"`
+	BlockedReason     string                  `json:"blocked_reason"`
 }
 
 // reportAutonomousFailure emits only the durable run identity and coarse
@@ -528,13 +545,21 @@ type autonomousFailure struct {
 // raw cause is never returned to the main stderr channel. Cancellation still
 // reports through errors.Is by wrapping the corresponding sentinel.
 func reportAutonomousFailure(out io.Writer, path, fallbackID string, cause error) error {
-	summary := autonomousFailure{RunID: fallbackID, State: "UNKNOWN", Phase: "blocked", BlockedReason: autonomousBlockReason(cause)}
+	summary := autonomousFailure{RunID: fallbackID, State: "UNKNOWN", Phase: "blocked", BlockedReason: autonomousBlockReason(cause), Status: "NEEDS_OPERATOR", Disposition: control.GateEscalate, NextAction: "inspect_run"}
 	if s, err := control.Inspect(path); err == nil {
 		if s.RunID != "" {
 			summary.RunID = s.RunID
 		}
 		summary.State = s.State
 		summary.Phase = autonomousPhase(s.State)
+		summary.CandidateRetained = s.Candidate != nil
+		if summary.BlockedReason == "effect_requires_reconciliation" {
+			summary.Status, summary.Disposition, summary.NextAction = "UNKNOWN", control.GateDeny, "reconcile_existing_effect_without_resend"
+		} else if summary.BlockedReason == "repair_budget_exhausted" {
+			summary.Status, summary.NextAction = "NEEDS_ATTENTION", "inspect_candidate_and_remaining_gates"
+		} else if errors.Is(cause, control.ErrScopeReplanRequired) {
+			summary.Status, summary.NextAction = "NEEDS_REPLAN", "request_candidate_bound_scope_replan"
+		}
 	}
 	boundary := sanitizedAutonomousError(summary, cause)
 	if err := output(out, summary); err != nil {
@@ -583,6 +608,9 @@ func autonomousBlockReason(err error) string {
 	}
 	if errors.Is(err, control.ErrAutonomousVerificationNotRun) {
 		return "verification_not_run"
+	}
+	if errors.Is(err, control.ErrScopeReplanRequired) {
+		return "scope_replan_required"
 	}
 	message := strings.ToLower(err.Error())
 	switch {

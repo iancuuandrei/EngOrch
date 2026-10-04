@@ -369,8 +369,8 @@ func TestOutOfScopeWriterRejectedBeforeApply(t *testing.T) {
 	proposal := *mutated.WriterProposal
 	// Directly exercise scope logic with a task that does not admit file.txt sibling.
 	outside := engineeringplan.Task{ID: "impl", Kind: engineeringplan.Implementation, Title: "narrow", ScopePaths: []string{"src"}, WritePaths: []string{"src/a.go"}, ExpectedEvidence: []engineeringplan.Evidence{{Kind: "file", Description: "d"}}, EstimatedSeconds: 10}
-	if err := requireWriterPathsInScope(outside, snap); err == nil {
-		t.Fatal("out-of-scope writer admitted")
+	if err := requireWriterPathsInScope(outside, snap); !errors.Is(err, ErrScopeReplanRequired) {
+		t.Fatal("out-of-scope writer did not request an authorized replan", err)
 	}
 	_ = proposal
 }

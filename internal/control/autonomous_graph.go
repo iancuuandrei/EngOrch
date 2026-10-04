@@ -491,7 +491,7 @@ func requireWriterPathsInScope(task engineeringplan.Task, s Snapshot) error {
 			}
 		}
 		if !ok {
-			return fmt.Errorf("writer path %q outside declared implementation scope", c.Path)
+			return fmt.Errorf("%w: writer path %q outside declared implementation scope", ErrScopeReplanRequired, c.Path)
 		}
 	}
 	return nil

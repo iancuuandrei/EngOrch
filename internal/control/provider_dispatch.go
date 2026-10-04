@@ -44,17 +44,17 @@ func staticExplorerQueueDepth(ctx context.Context, invocation runtime.Invocation
 	return compositeToolQueueLimit
 }
 
-// writerFixerQueueDepth grants the bounded serial FIFO transport queue to
-// writer and fixer turns, which never carry a composite receipts binding
-// (composite admission is explorer-only) yet burst parallel context reads
-// like any model. Queueing is transport admission only: the served catalog
-// stays context-only, so no agent-control authority is granted. Sync
-// explorer and all other non-composite dispatches keep immediate rejection.
-func writerFixerQueueDepth(invocation runtime.Invocation) int {
-	if invocation.Profile.Role != "writer" && invocation.Profile.Role != "fixer" {
+// contextRoleQueueDepth serializes bounded bursts of context reads for every
+// engineering role. The queue changes admission timing, never the served
+// catalog, candidate ownership or effect authority. Composite explorer turns
+// continue to use their independently bound receipts queue.
+func contextRoleQueueDepth(invocation runtime.Invocation) int {
+	switch invocation.Profile.Role {
+	case "planner", "explorer", "writer", "fixer", "reviewer":
+		return compositeToolQueueLimit
+	default:
 		return 0
 	}
-	return compositeToolQueueLimit
 }
 
 type providerDispatchReceipt struct {
@@ -184,7 +184,10 @@ func executeOpenCodeProviderRuntime(ctx context.Context, controllerPath string, 
 		return runtime.Result{}, providerDispatchReceipt{}, err
 	}
 	accessPath := controllerPath + ".model-access.jsonl"
-	journalStem := providerRoleJournalStem(invocation.Profile.Role, scheduledAgentTurn(ctx))
+	journalStem, err := providerInvocationJournalStem(controllerPath, invocation, scheduledAgentTurn(ctx))
+	if err != nil {
+		return runtime.Result{}, providerDispatchReceipt{}, err
+	}
 	gatewayPath := controllerPath + "." + journalStem + ".provider-gateway.jsonl"
 	runtimePath := controllerPath + "." + journalStem + ".opencode-runtime.jsonl"
 	paths := opencoderuntime.Paths{Version: 1, Session: runtimePath + ".session", Dispatch: runtimePath + ".dispatch", Broker: runtimePath + ".broker", Seal: runtimePath + ".seal", Gateway: gatewayPath}
@@ -329,7 +332,7 @@ func executeOpenCodeProviderRuntime(ctx context.Context, controllerPath string, 
 	}
 	mcpQueueDepth := staticExplorerQueueDepth(runtimeCtx, invocation)
 	if mcpQueueDepth == 0 {
-		mcpQueueDepth = writerFixerQueueDepth(invocation)
+		mcpQueueDepth = contextRoleQueueDepth(invocation)
 	}
 	var record opencoderuntime.ResultRecord
 	if recovering {

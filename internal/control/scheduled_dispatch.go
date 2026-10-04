@@ -390,6 +390,11 @@ func scheduledRuntimeJournal(s Snapshot, invocation runtime.Invocation, task tas
 	case "provider-api":
 		return task.ControllerPath + "." + stem + ".provider-runtime.jsonl", nil
 	case "opencode-http":
+		var err error
+		stem, err = providerInvocationJournalStem(task.ControllerPath, invocation, turn)
+		if err != nil {
+			return "", err
+		}
 		return task.ControllerPath + "." + stem + ".opencode-runtime.jsonl", nil
 	case "codex-app-server":
 		switch task.Operation {

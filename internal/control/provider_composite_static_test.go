@@ -71,7 +71,7 @@ func TestStaticExplorerQueueDepthGrantsQueueOnlyToStaticScheduledExplorers(t *te
 	}
 }
 
-func TestWriterFixerQueueDepthGrantsQueueOnlyToWriterAndFixer(t *testing.T) {
+func TestContextRoleQueueDepthSerializesEngineeringRoleBursts(t *testing.T) {
 	invocation := func(role string) runtime.Invocation {
 		return runtime.Invocation{Version: 1, ID: strings.Repeat("f", 64), Profile: runtime.Profile{Role: role}, Input: "question"}
 	}
@@ -81,13 +81,14 @@ func TestWriterFixerQueueDepthGrantsQueueOnlyToWriterAndFixer(t *testing.T) {
 	}{
 		{"writer", true},
 		{"fixer", true},
-		{"explorer", false},
-		{"planner", false},
-		{"reviewer", false},
+		{"explorer", true},
+		{"planner", true},
+		{"reviewer", true},
+		{"unknown", false},
 	}
 	for _, test := range cases {
 		t.Run(test.role, func(t *testing.T) {
-			got := writerFixerQueueDepth(invocation(test.role))
+			got := contextRoleQueueDepth(invocation(test.role))
 			want := 0
 			if test.wantQueued {
 				want = compositeToolQueueLimit

@@ -602,6 +602,32 @@ func TestAutonomousFailurePreservesCancellationWithoutLeakingDetail(t *testing.T
 	}
 }
 
+func TestAutonomousFailureReportsDispositionWithoutGrantingAcceptance(t *testing.T) {
+	path, s, out := planAutonomousFailureFixture(t, "failure disposition fixture")
+	for _, tc := range []struct {
+		cause       error
+		status      string
+		disposition control.GateDisposition
+		next        string
+	}{
+		{control.ErrScopeReplanRequired, "NEEDS_REPLAN", control.GateEscalate, "request_candidate_bound_scope_replan"},
+		{errors.New("repair budget exhausted"), "NEEDS_ATTENTION", control.GateEscalate, "inspect_candidate_and_remaining_gates"},
+		{errors.New("uncertain external effect"), "UNKNOWN", control.GateDeny, "reconcile_existing_effect_without_resend"},
+	} {
+		out.Reset()
+		if err := reportAutonomousFailure(&out, path, s.RunID, tc.cause); err == nil {
+			t.Fatal("unaccepted run returned success")
+		}
+		var summary autonomousFailure
+		if err := json.Unmarshal(out.Bytes(), &summary); err != nil {
+			t.Fatal(err)
+		}
+		if summary.Status != tc.status || summary.Disposition != tc.disposition || summary.NextAction != tc.next || summary.State != s.State || summary.CandidateRetained != (s.Candidate != nil) {
+			t.Fatalf("incorrect disposition or durable state: %#v", summary)
+		}
+	}
+}
+
 func TestAutonomousObjectiveValidationRejectsBeforeDurableCreation(t *testing.T) {
 	root := autonomousCLIFixture(t)
 	invalid := []string{"   \n\t ", string([]byte{0xff, 0xfe})}
@@ -788,7 +814,7 @@ role = "explorer"
 	return configPath
 }
 
-func TestIsolatedWritersRequireExternalControllerStateBeforeRunCreation(t *testing.T) {
+func TestIsolatedWritersFallbackForMissingStateButDenyUnsafeState(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		root func(string) string
@@ -806,6 +832,21 @@ func TestIsolatedWritersRequireExternalControllerStateBeforeRunCreation(t *testi
 			}
 			var out bytes.Buffer
 			err := Execute(context.Background(), []string{"run", "--autonomous", "--isolated-writers", "--isolation-policy", policyPath, "A fixture objective"}, root, &out)
+			if configuredRoot == "" {
+				entries, globErr := filepath.Glob(filepath.Join(root, ".harness", "runs", "*.jsonl"))
+				if globErr != nil || len(entries) != 1 {
+					t.Fatalf("serial fallback did not create one run: %v, %v", entries, globErr)
+				}
+				s, inspectErr := control.Inspect(entries[0])
+				if inspectErr != nil {
+					t.Fatal(inspectErr)
+				}
+				p := s.Creation.Execution
+				if p.IsolatedImplementationVersion != 0 || p.ParallelImplementationVersion != 0 || len(p.CapabilityFallbacks) != 1 || p.CapabilityFallbacks[0].Reason != "external_state_unavailable" {
+					t.Fatalf("missing optional isolation did not bind serial fallback: %#v", p)
+				}
+				return
+			}
 			if err == nil || !strings.Contains(err.Error(), "controller_state_root") {
 				t.Fatalf("isolated mode did not reject its invalid external state root: %v", err)
 			}

@@ -950,3 +950,35 @@ remain unknown. Its SHA256 is
 - The reviewed v1.0.25 cohort remains 7/8, fixed-six 6/6 and generated numeric
   PASS. Its godotenv row stays BLOCKED. The pending newer pilot cannot replace
   that frozen result, and v2.0.0 remains OPEN.
+
+## Separately authorized Muse and capability fixes — 2026-10-04
+
+The persistent goal remains PAUSED. The user separately authorized an exclusively
+Muse Spark Contributor run and graceful degradation of optional capabilities.
+The old pending pilot above is preserved and has not been resent.
+
+- The unchanged pinned go-humanize task reached READY using only
+  `muse-spark-1.3-contributor` through OpenCode Go. Native tests PASS, review
+  APPROVE with zero findings, and candidate-bound unchanged held-out PASS.
+  Eight provider calls have eight accepted receipts. Executed roles were
+  planner, writer and reviewer; explorer/fixer were configured but unnecessary.
+- The [acceptance receipt](../../evals/v1/results/muse-go-humanize-20261004.json)
+  binds the exact custom binary, configuration, candidate and controller export.
+  Input 244,969 includes 144,392 cached and 100,577 uncached; output 20,923
+  includes 18,387 reasoning tokens. Subscription cost stays UNKNOWN. Failed
+  exploratory attempts are preserved separately and excluded from these counters.
+- Local product fixes preserve structured-tool/advisory-text digest binding,
+  serialize bounded engineering-role context bursts, and separate repeated
+  OpenCode invocation journals with identical reconciliation path selection.
+- Optional preferences degrade before run creation: absent RI to bounded source,
+  unsupported/unadmittable isolated writers to serial, unsupported compaction
+  to disabled. Optional cache directory permission or disk-full failures permit
+  recomputation. Identity, path, pin, ownership and uncertain-effect gates remain
+  strict. See [capability behavior](../guides/graceful-capabilities.md).
+- Failure summaries distinguish NEEDS_ATTENTION, NEEDS_REPLAN and UNKNOWN while
+  retaining durable state. No automatic scope widening or new repair budget is
+  granted. Live memory adaptation and automatic proposal-correction/replan
+  continuations remain unimplemented; this increment does not claim them.
+- The Muse task used an earlier custom binary; later fallback/status additions
+  are covered by local regressions, not that live provider run. This is one-task
+  evidence, not a new fixed-six cohort, installed release or v2 qualification.

@@ -411,10 +411,11 @@ func AdmitPlannerGoContext(ctx context.Context, path string) (PlannerGoContextRe
 	var corpus ri.GoCommittedCorpus
 	if policy.PlannerParseCacheVersion == 1 {
 		cacheDir, cacheErr := ensurePlannerParseCacheDir(s.Creation.Repository, policy.PlannerContextRIExecutableSHA256)
+		cacheDir, cacheErr = optionalCacheDirectory(cacheDir, cacheErr)
 		if cacheErr != nil {
 			return PlannerGoContextRecord{}, cacheErr
 		}
-		options.EnableParseCache = true
+		options.EnableParseCache = cacheDir != ""
 		corpus, err = ri.CollectCommittedGoCorpusWithOptions(ctx, s.Creation.Repository, client, cacheDir, query, options)
 	} else {
 		corpus, err = ri.CollectCommittedGoCorpusWithOptions(ctx, s.Creation.Repository, client, "", query, options)

@@ -200,6 +200,21 @@ func TestFinalGatewayStructuredOutputBindsTerminalAndProjectsResult(t *testing.T
 	}
 }
 
+func TestFinalGatewayStructuredOutputAcceptsMatchedAdvisoryText(t *testing.T) {
+	fixture := writeStructuredGatewayTranscriptWithAdvisory(t, "Here is the proposed change.")
+	if _, err := validateFinalGateway(fixture.bound, fixture.observation); err != nil {
+		t.Fatal("matched advisory text blocked structured capture", err)
+	}
+	result, err := opencode.ResultFromSealedToolTurn(fixture.invocation, fixture.observation, fixture.receipt)
+	if err != nil || result.Output != string(fixture.value) {
+		t.Fatal("advisory text replaced the structured result", err)
+	}
+	fixture.observation.Generations[1].TextSHA256 = digestText("substituted text")
+	if _, err := validateFinalGateway(fixture.bound, fixture.observation); err == nil {
+		t.Fatal("mismatched advisory text was accepted")
+	}
+}
+
 func TestGatewayInitialBindingSurvivesCompletedTranscript(t *testing.T) {
 	_, bound := writeGatewayTranscript(t, false)
 	bound.SealExpected.Provider = &opencode.ProviderToolTurnSealExpected{}
@@ -280,6 +295,10 @@ type structuredGatewayFixture struct {
 }
 
 func writeStructuredGatewayTranscript(t *testing.T) structuredGatewayFixture {
+	return writeStructuredGatewayTranscriptWithAdvisory(t, "")
+}
+
+func writeStructuredGatewayTranscriptWithAdvisory(t *testing.T, advisory string) structuredGatewayFixture {
 	t.Helper()
 	value := json.RawMessage(`{"candidate_id":"candidate-1"}`)
 	expectation, err := opencode.NewStructuredOutputExpectation(json.RawMessage(`{"additionalProperties":false,"properties":{"candidate_id":{"type":"string"}},"required":["candidate_id"],"type":"object"}`))
@@ -329,7 +348,7 @@ func writeStructuredGatewayTranscript(t *testing.T) structuredGatewayFixture {
 	ordinaryIdentity := providergateway.ResponseToolIdentity{ID: "source-call", Name: "source_read", ArgumentsSHA256: digestText(string(ordinaryArguments))}
 	appendCall(1, strings.Repeat("d", 64), strings.Repeat("e", 64), "response-source", "tool_calls", &providergateway.ResponseSemanticProjection{Version: 1, Kind: "assistant-turn", ToolCalls: []providergateway.ResponseToolIdentity{ordinaryIdentity}, OutputTextSHA256: digestText("")})
 	terminalIdentity := providergateway.ResponseToolIdentity{ID: "structured-call", Name: providergateway.StructuredOutputToolName, ArgumentsSHA256: digestText(string(value))}
-	appendCall(2, strings.Repeat("f", 64), strings.Repeat("1", 64), "response-structured", "tool_calls", &providergateway.ResponseSemanticProjection{Version: 1, Kind: "assistant-turn", ToolCalls: []providergateway.ResponseToolIdentity{terminalIdentity}, OutputTextSHA256: digestText(""), TerminalTool: &terminalIdentity, TerminalSchemaSHA256: terminal.SchemaSHA256})
+	appendCall(2, strings.Repeat("f", 64), strings.Repeat("1", 64), "response-structured", "tool_calls", &providergateway.ResponseSemanticProjection{Version: 1, Kind: "assistant-turn", ToolCalls: []providergateway.ResponseToolIdentity{terminalIdentity}, OutputTextSHA256: digestText(advisory), TerminalTool: &terminalIdentity, TerminalSchemaSHA256: terminal.SchemaSHA256})
 	state, err := providergateway.Inspect(path)
 	if err != nil || !state.Finished || state.Exhausted {
 		t.Fatalf("structured gateway fixture did not close: %#v, %v", state, err)
@@ -354,7 +373,7 @@ func writeStructuredGatewayTranscript(t *testing.T) structuredGatewayFixture {
 	sourceCall := opencode.ToolCallObservation{MessageID: "message-source", PartID: "part-source", ProviderCallID: ordinaryIdentity.ID, Tool: ordinaryIdentity.Name, BindingID: strings.Repeat("2", 64), InvocationID: invocation.ID, RequestID: "request-source", BrokerCallID: "broker-source", ArgumentsSHA256: ordinaryIdentity.ArgumentsSHA256, ContentSHA256: strings.Repeat("3", 64)}
 	assistant := opencode.Assistant{ID: "message-final", Binding: openCodeBinding}
 	structuredTool := opencode.StructuredOutputToolObservation{PartID: "part-structured", CallID: terminalIdentity.ID, ArgumentsSHA256: terminalIdentity.ArgumentsSHA256, ResultSHA256: strings.Repeat("4", 64)}
-	observation := opencode.ToolTurnObservation{Final: assistant, Text: "", StructuredOutput: &value, StructuredOutputTool: &structuredTool, Generations: []opencode.ToolGenerationObservation{{Assistant: assistant, Finish: "tool-calls", Calls: []opencode.ToolCallObservation{sourceCall}, TextSHA256: digestText("")}, {Assistant: assistant, Finish: "tool-calls", Calls: []opencode.ToolCallObservation{}, StructuredOutputTool: &structuredTool, TextSHA256: digestText("")}}, Calls: []opencode.ToolCallObservation{sourceCall}, TranscriptSHA256: strings.Repeat("5", 64), BrokerBindingID: strings.Repeat("2", 64), BrokerStateID: strings.Repeat("6", 64)}
+	observation := opencode.ToolTurnObservation{Final: assistant, Text: "", StructuredOutput: &value, StructuredOutputTool: &structuredTool, Generations: []opencode.ToolGenerationObservation{{Assistant: assistant, Finish: "tool-calls", Calls: []opencode.ToolCallObservation{sourceCall}, TextSHA256: digestText("")}, {Assistant: assistant, Finish: "tool-calls", Calls: []opencode.ToolCallObservation{}, StructuredOutputTool: &structuredTool, TextSHA256: digestText(advisory)}}, Calls: []opencode.ToolCallObservation{sourceCall}, TranscriptSHA256: strings.Repeat("5", 64), BrokerBindingID: strings.Repeat("2", 64), BrokerStateID: strings.Repeat("6", 64)}
 	observationSHA, err := canonical.Hash("harness.opencode-tool-turn-seal-observation.v1", observation)
 	if err != nil {
 		t.Fatal(err)

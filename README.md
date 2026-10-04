@@ -19,14 +19,22 @@ records qualification separately from published release acceptance.
 
 ## Current development status
 
-The latest capability increment is **v1.0.27** (`6205de9`); v1.0.28 updates
-documentation only. A separate frozen
+**v1.0.29** adds Muse Go execution fixes and graceful optional-capability
+fallbacks. The prior qualified capability checkpoint is v1.0.27 (`6205de9`);
+v1.0.28 updates documentation only. A separate frozen
 v1.0.25 Sol High cohort reached **7/8 PASS**: fixed-six **6/6** plus generated
 numeric ownership; godotenv remains BLOCKED after two repairs. The seven PASS rows
 have native verification, approved candidate-bound review and unchanged
 held-out acceptance. They do not establish v2.0.0 release completion.
 
-Development is paused at the user's request. See the
+The earlier persistent v2 development goal remains paused. Separately authorized
+Muse route work completed one local go-humanize coding task using exclusively
+Muse Spark 1.3 Contributor on OpenCode Go: native tests, candidate-bound review
+and unchanged held-out tests passed. This used a custom development binary and
+does not qualify the entire task suite or a new release. See the
+[route guide](docs/guides/muse-go-route.md) and
+[capability fallback guide](docs/guides/graceful-capabilities.md).
+See the
 [latest checkpoint](docs/roadmap/v2-product-plan.md) for the preserved run
 state, measured token types, cache limitations and remaining release work.
 

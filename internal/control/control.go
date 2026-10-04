@@ -49,8 +49,11 @@ type Creation struct {
 // explorer concurrency between 1 and 8 inclusive; zero preserves legacy
 // identity and means sequential (1) for old runs.
 type ExecutionPolicy struct {
-	Mode       string `json:"mode"`
-	MaxRepairs int    `json:"max_repairs"`
+	// CapabilityFallbacks records pre-dispatch choices. These observations do
+	// not grant authority or change any previously bound run configuration.
+	CapabilityFallbacks []CapabilityFallback `json:"capability_fallbacks,omitempty"`
+	Mode                string               `json:"mode"`
+	MaxRepairs          int                  `json:"max_repairs"`
 	// PromptRecipe selects a versioned serialization recipe for new model
 	// invocations. Empty preserves every historical prompt byte.
 	PromptRecipe string `json:"prompt_recipe,omitempty"`
@@ -107,6 +110,30 @@ func codexAutoCompactForExecution(policy *ExecutionPolicy, profile runtime.Profi
 // RepairPlanningVersion 1 requires graph execution and a matching graph-v3
 // planner contract at creation replay; zero preserves the prior repair recipe.
 func (p ExecutionPolicy) Validate() error {
+	if len(p.CapabilityFallbacks) > 3 {
+		return errors.New("too many capability fallbacks")
+	}
+	seenFallbacks := map[string]bool{}
+	for _, fallback := range p.CapabilityFallbacks {
+		if fallback.Validate() != nil || seenFallbacks[fallback.Capability] {
+			return errors.New("invalid capability fallback")
+		}
+		seenFallbacks[fallback.Capability] = true
+		switch fallback.Capability {
+		case "planner_context":
+			if p.PlannerContext != "source-bounded-v1" {
+				return errors.New("context fallback differs from selected capability")
+			}
+		case "parallel_writers":
+			if p.ParallelImplementationVersion != 0 || p.IsolatedImplementationVersion != 0 {
+				return errors.New("writer fallback differs from selected capability")
+			}
+		case "auto_compaction":
+			if p.CodexAutoCompact != nil {
+				return errors.New("compaction fallback differs from selected capability")
+			}
+		}
+	}
 	if p.Mode != "autonomous-v1" || p.MaxRepairs < 0 || p.MaxRepairs > 8 {
 		return errors.New("invalid execution policy")
 	}
