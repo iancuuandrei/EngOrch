@@ -715,3 +715,30 @@ remain unknown. Its SHA256 is
   held-out baseline fails on the missing API. It is unseen relative to the
   retained Fabric task histories, not universally unseen. Existing ten task
   definitions and oracles are unchanged. No new task dispatch is claimed.
+
+## Checkpoint — v1.0.22 integrated; empirical treatment preparation
+
+- Main/dev contain `c46c5647d713dde198646925f84d7e598975f983`, merged through
+  automation PR #29. Fresh clean full Go verification and all ten PowerShell
+  harnesses passed, independent source review approved, and hosted security
+  and Sonar checks passed. Sonar reported zero unresolved issues and about
+  0.44% new duplication. The clean Go log SHA256 is
+  `2b5cb004ce3fb0c4e9ab3a6f04132876a7344817a6d0b8dd0418568b8698fcc8`.
+- A fresh frozen eight-task evaluation uses this exact qualified source with
+  contract-context v3. Its first Humanize task reached approved READY; the
+  cohort remains running. Fixed-six 6/6 and the two additional gates remain
+  pending; older cohorts are not pooled with this evaluation.
+- The second long-horizon review completed normally through v1.0.22 and
+  requested changes. Native verification passed and active/uncertain intents
+  were both zero, but the candidate is not accepted. A bounded normal repair
+  must satisfy the unchanged performance oracle before continuation evidence.
+- The real six-arm fixer calibration was independently checked against the
+  retained source/task/route/invocation receipts. The actual calibrator selected
+  no profile: `fallback_unknown_outcome`. Both training arms were UNKNOWN;
+  the hold-out arms include one accepted exercised Luna fixer, one accepted
+  Sol task without a fixer (NOT_EXERCISED), and two UNKNOWN tasks. This evidence
+  supports conservative fallback, not a model-quality improvement claim.
+- The next runner increment adds optional `-ModelPolicyPath` for Native runs,
+  with prepared file bindings and confirmation of the embedded policy. Default
+  runs retain their previous arguments and receipt shape. A genuinely unseen
+  Wordwrap evaluation with the declared fallback policy remains pending.

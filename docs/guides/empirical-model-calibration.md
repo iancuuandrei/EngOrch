@@ -44,6 +44,13 @@ The JSON contains the existing model policy profiles/rules and optional embedded
 calibration. Configuration validation binds its baseline and candidate to the
 fixer rule and configured runtime/provider.
 
+The official matched-task runner supports this treatment with `-ModelPolicyPath`
+on both `Prepare` and `Evaluate`. It requires the explicit fixer/access options,
+binds the absolute policy path and file hash/size in the prepared receipt,
+rechecks the file before initialization, and verifies that inspected creation
+config contains the same policy. Omitting the option keeps the runner's prior
+init arguments and receipt shape.
+
 Keep the static escalation profile separate from the empirical candidate:
 the policy has a configured baseline, calibrated alternative and static frontier
 route. Static escalation thresholds remain explicit operator choices.

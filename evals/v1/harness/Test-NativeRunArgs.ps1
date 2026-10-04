@@ -35,10 +35,17 @@ $reviewImpactObserved = $ast.Find({ param($node) $node -is [System.Management.Au
 $factsCacheBinding = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-CandidateFactsCacheRunnerBindingShape' }, $true)
 $factsCachePrepared = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-CandidateFactsCachePreparedBinding' }, $true)
 $factsCacheObserved = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-CandidateFactsCacheObserved' }, $true)
+$boundedConfigFile = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Read-BoundedConfigFile' }, $true)
 $fixerShape = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-FixerAccessRunnerBinding' }, $true)
 $accessBinding = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-AccessConfigBinding' }, $true)
 $currentAccessBinding = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-CurrentAccessConfigBinding' }, $true)
 $preparedFixerBinding = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-FixerAccessPreparedBinding' }, $true)
+$modelPolicyShape = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-ModelPolicyRunnerBinding' }, $true)
+$modelPolicyBinding = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-ModelPolicyBinding' }, $true)
+$currentModelPolicyBinding = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-CurrentModelPolicyBinding' }, $true)
+$preparedModelPolicyBinding = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-ModelPolicyPreparedBinding' }, $true)
+$observedModelPolicy = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-ModelPolicyObserved' }, $true)
+$comparableModelPolicy = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'ConvertTo-ComparableModelPolicyValue' }, $true)
 $preparedWriterContract = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-WriterContractPreparedBinding' }, $true)
 $writerContractRequest = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-WriterContractRequest' }, $true)
 $observedWriterContract = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-WriterContractObserved' }, $true)
@@ -48,10 +55,14 @@ if ($null -eq $reviewImpactBinding -or $null -eq $reviewImpactPrepared -or $null
     $null -eq $factsCacheBinding -or $null -eq $factsCachePrepared -or $null -eq $factsCacheObserved) {
     throw 'Review-impact/candidate-facts-cache treatment binding helpers missing.'
 }
-if ($null -eq $fixerShape -or $null -eq $accessBinding -or $null -eq $currentAccessBinding -or
+if ($null -eq $boundedConfigFile -or $null -eq $fixerShape -or $null -eq $accessBinding -or $null -eq $currentAccessBinding -or
     $null -eq $preparedFixerBinding -or $null -eq $preparedWriterContract -or $null -eq $writerContractRequest -or
     $null -eq $observedWriterContract -or $null -eq $observedFixerRoute -or $null -eq $nativeInitArgs) {
     throw 'Fixer/access or writer-contract runner binding helpers missing.'
+}
+if ($null -eq $modelPolicyShape -or $null -eq $modelPolicyBinding -or $null -eq $currentModelPolicyBinding -or
+    $null -eq $preparedModelPolicyBinding -or $null -eq $observedModelPolicy -or $null -eq $comparableModelPolicy) {
+    throw 'Model-policy runner binding helpers missing.'
 }
 . ([scriptblock]::Create($goMode.Extent.Text))
 . ([scriptblock]::Create($heldoutSourceFunction.Extent.Text))
@@ -66,10 +77,17 @@ if ([string]::IsNullOrWhiteSpace((Get-HeldoutSource 'wordwrap-tabs'))) { throw '
 . ([scriptblock]::Create($factsCacheBinding.Extent.Text))
 . ([scriptblock]::Create($factsCachePrepared.Extent.Text))
 . ([scriptblock]::Create($factsCacheObserved.Extent.Text))
+. ([scriptblock]::Create($boundedConfigFile.Extent.Text))
 . ([scriptblock]::Create($fixerShape.Extent.Text))
 . ([scriptblock]::Create($accessBinding.Extent.Text))
 . ([scriptblock]::Create($currentAccessBinding.Extent.Text))
 . ([scriptblock]::Create($preparedFixerBinding.Extent.Text))
+. ([scriptblock]::Create($modelPolicyShape.Extent.Text))
+. ([scriptblock]::Create($modelPolicyBinding.Extent.Text))
+. ([scriptblock]::Create($currentModelPolicyBinding.Extent.Text))
+. ([scriptblock]::Create($preparedModelPolicyBinding.Extent.Text))
+. ([scriptblock]::Create($comparableModelPolicy.Extent.Text))
+. ([scriptblock]::Create($observedModelPolicy.Extent.Text))
 . ([scriptblock]::Create($preparedWriterContract.Extent.Text))
 . ([scriptblock]::Create($writerContractRequest.Extent.Text))
 . ([scriptblock]::Create($observedWriterContract.Extent.Text))
@@ -118,8 +136,22 @@ if (($legacyInitArgs | ConvertTo-Json -Compress) -ne ($expectedLegacyInitArgs | 
 $pilotInitArgs = @(Get-NativeInitArgs $taskPath 'C:\tools\codex.exe' 'gpt-6-luna' 'high' $false 'gpt-6.1-sol' 'high' 'D:\policy\public-access-v1.json' $true)
 $expectedPilotInitArgs = @('--root', $taskPath, 'init', '--codex', 'C:\tools\codex.exe', '--model', 'gpt-6-luna', '--effort', 'high', '--fixer-model', 'gpt-6.1-sol', '--fixer-effort', 'high', '--access-config', 'D:\policy\public-access-v1.json', '--strict-writer-edits')
 if (($pilotInitArgs | ConvertTo-Json -Compress) -ne ($expectedPilotInitArgs | ConvertTo-Json -Compress)) { throw 'Pilot init argv does not select only the explicit fixer route/access file and strict writer contract.' }
+$policyInitArgs = @(Get-NativeInitArgs $taskPath 'C:\tools\codex.exe' 'gpt-6-luna' 'high' $false 'gpt-6-luna' 'high' 'D:\policy\public-access-v1.json' $true 'D:\policy\empirical-model-policy.json')
+$expectedPolicyInitArgs = @('--root', $taskPath, 'init', '--codex', 'C:\tools\codex.exe', '--model', 'gpt-6-luna', '--effort', 'high', '--fixer-model', 'gpt-6-luna', '--fixer-effort', 'high', '--access-config', 'D:\policy\public-access-v1.json', '--model-policy', 'D:\policy\empirical-model-policy.json', '--strict-writer-edits')
+if (($policyInitArgs | ConvertTo-Json -Compress) -ne ($expectedPolicyInitArgs | ConvertTo-Json -Compress)) { throw 'Model-policy treatment init argv does not append the explicit policy file.' }
 Assert-FixerAccessRunnerBinding 'Native' $true 'gpt-6.1-sol' $true 'high' $true 'D:\policy\access.json'
 Assert-FixerAccessRunnerBinding 'Native' $true 'gpt-6.1-sol' $false '' $true 'D:\policy\access.json'
+Assert-ModelPolicyRunnerBinding 'Native' $true 'D:\policy\policy.json' $true $true
+foreach ($badPolicyBinding in @(
+    @{ Mode='PR5Matched'; Explicit=$true; Path='D:\policy\policy.json'; Fixer=$true; Access=$true },
+    @{ Mode='Native'; Explicit=$true; Path=' '; Fixer=$true; Access=$true },
+    @{ Mode='Native'; Explicit=$true; Path='D:\policy\policy.json'; Fixer=$false; Access=$true },
+    @{ Mode='Native'; Explicit=$true; Path='D:\policy\policy.json'; Fixer=$true; Access=$false }
+)) {
+    $rejected = $false
+    try { Assert-ModelPolicyRunnerBinding $badPolicyBinding.Mode $badPolicyBinding.Explicit $badPolicyBinding.Path $badPolicyBinding.Fixer $badPolicyBinding.Access } catch { $rejected = $true }
+    if (-not $rejected) { throw 'Invalid model-policy treatment shape was accepted.' }
+}
 foreach ($badFixerBinding in @(
     @{ Mode='Native'; ModelOn=$true; Model='gpt-6-sol'; EffortOn=$false; Effort=''; AccessOn=$false; Access='' },
     @{ Mode='Native'; ModelOn=$false; Model=''; EffortOn=$false; Effort=''; AccessOn=$true; Access='D:\policy\access.json' },
@@ -191,6 +223,67 @@ try {
     if (-not $rejectedOversizedAccess) { throw 'Oversized access config was accepted.' }
 } finally {
     Remove-Item -LiteralPath $accessTestRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+$modelPolicyTestRoot = Join-Path $env:TEMP ('runner-model-policy-' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $modelPolicyTestRoot | Out-Null
+try {
+    $policyPath = Join-Path $modelPolicyTestRoot 'empirical-model-policy.json'
+    $policyJson = '{"version":1,"decision_evidence_version":0,"profiles":[{"name":"baseline","runtime":"codex-app-server","provider":"openai","model":"gpt-6-luna","effort":"high"},{"name":"escalated","runtime":"codex-app-server","provider":"openai","model":"gpt-6.1-sol","effort":"high"}],"rules":{"fixer":{"default_profile":"baseline","escalated_profile":"escalated","context_escalation_tokens":90000,"context_escalation_bytes":0,"failure_escalation_count":1}},"calibration":null}'
+    [IO.File]::WriteAllText($policyPath, $policyJson, (New-Object System.Text.UTF8Encoding($false)))
+    $policy = Get-ModelPolicyBinding $policyPath
+    if ($policy.Path -cne $policyPath -or $policy.Bytes -ne [Text.Encoding]::UTF8.GetByteCount($policyJson) -or $policy.Sha256 -notmatch '^[0-9a-f]{64}$') { throw 'Model policy path/size/hash binding is incomplete.' }
+    Assert-CurrentModelPolicyBinding $policy
+    foreach ($invalidPolicyPath in @('relative-policy.json', $modelPolicyTestRoot)) {
+        $rejected = $false
+        try { Get-ModelPolicyBinding $invalidPolicyPath | Out-Null } catch { $rejected = $true }
+        if (-not $rejected) { throw 'Relative path or directory was accepted as a model policy file.' }
+    }
+    $preparedPolicy = [pscustomobject]@{ model_policy_path_requested=$policy.Path; model_policy_sha256_requested=$policy.Sha256; model_policy_bytes_requested=$policy.Bytes }
+    Assert-ModelPolicyPreparedBinding $preparedPolicy $true $policy
+    Assert-ModelPolicyPreparedBinding ([pscustomobject]@{}) $false $null
+    foreach ($changed in @(
+        [pscustomobject]@{ model_policy_path_requested=(Join-Path $modelPolicyTestRoot 'other.json'); model_policy_sha256_requested=$policy.Sha256; model_policy_bytes_requested=$policy.Bytes },
+        [pscustomobject]@{ model_policy_path_requested=$policy.Path; model_policy_sha256_requested=('0' * 64); model_policy_bytes_requested=$policy.Bytes },
+        [pscustomobject]@{ model_policy_path_requested=$policy.Path; model_policy_sha256_requested=$policy.Sha256; model_policy_bytes_requested=($policy.Bytes + 1) }
+    )) {
+        $rejected = $false
+        try { Assert-ModelPolicyPreparedBinding $changed $true $policy } catch { $rejected = $true }
+        if (-not $rejected) { throw 'Evaluate accepted a changed model-policy path/hash/size binding.' }
+    }
+    $typedPolicy = [ordered]@{
+        Version=1
+        Profiles=@(
+            [ordered]@{ Name='baseline'; Runtime='codex-app-server'; Provider='openai'; Model='gpt-6-luna'; Effort='high' },
+            [ordered]@{ Name='escalated'; Runtime='codex-app-server'; Provider='openai'; Model='gpt-6.1-sol'; Effort='high' }
+        )
+        Rules=[ordered]@{ fixer=[ordered]@{ DefaultProfile='baseline'; EscalatedProfile='escalated'; ContextEscalationTokens=90000; FailureEscalationCount=1 } }
+    }
+    $observedPolicy = Assert-ModelPolicyObserved @{ creation=@{ config=@{ model_policy=$typedPolicy } } } $policy
+    if ($null -eq $observedPolicy -or -not $observedPolicy.Present -or $observedPolicy.NormalizedPolicySha256 -notmatch '^[0-9a-f]{64}$') { throw 'Inspected typed model policy was not observed.' }
+    $emptyOptional = ConvertTo-ComparableModelPolicyValue ([ordered]@{ observed_fixer_profiles=@(); context_escalation_bytes=0; cheap_context_bytes=0 })
+    $typedOmitted = ConvertTo-ComparableModelPolicyValue ([ordered]@{})
+    if ((ConvertTo-Json -InputObject $emptyOptional -Depth 100 -Compress) -cne (ConvertTo-Json -InputObject $typedOmitted -Depth 100 -Compress)) { throw 'Typed model-policy omitempty defaults were not normalized.' }
+    $typedPolicy.Rules.fixer.EscalatedProfile = 'baseline'
+    $rejectedPolicyConfig = $false
+    try { Assert-ModelPolicyObserved @{ creation=@{ config=@{ model_policy=$typedPolicy } } } $policy } catch { $rejectedPolicyConfig = $true }
+    if (-not $rejectedPolicyConfig) { throw 'Inspected config accepted a model policy with changed routing rules.' }
+    $missingPolicyConfig = $false
+    try { Assert-ModelPolicyObserved @{ creation=@{ config=@{} } } $policy } catch { $missingPolicyConfig = $true }
+    if (-not $missingPolicyConfig) { throw 'Inspected config without model policy was accepted.' }
+    [IO.File]::WriteAllText($policyPath, $policyJson + ' ', (New-Object System.Text.UTF8Encoding($false)))
+    $rejectedCurrentPolicyMutation = $false
+    try { Assert-CurrentModelPolicyBinding $policy } catch { $rejectedCurrentPolicyMutation = $true }
+    if (-not $rejectedCurrentPolicyMutation) { throw 'Changed model-policy bytes passed the pre-init binding check.' }
+    [IO.File]::WriteAllText($policyPath, ('x' * (128 * 1024 + 1)), (New-Object System.Text.UTF8Encoding($false)))
+    $rejectedOversizedPolicy = $false
+    try { Get-ModelPolicyBinding $policyPath | Out-Null } catch { $rejectedOversizedPolicy = $true }
+    if (-not $rejectedOversizedPolicy) { throw 'Oversized model policy was accepted.' }
+    [IO.File]::WriteAllText($policyPath, '[]', (New-Object System.Text.UTF8Encoding($false)))
+    $rejectedPolicyShape = $false
+    try { Get-ModelPolicyBinding $policyPath | Out-Null } catch { $rejectedPolicyShape = $true }
+    if (-not $rejectedPolicyShape) { throw 'Non-object model policy JSON was accepted.' }
+} finally {
+    Remove-Item -LiteralPath $modelPolicyTestRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 Assert-AutoCompactRunnerBinding 'Native' 0 $false
 Assert-AutoCompactRunnerBinding 'Native' 64000 $true
@@ -343,6 +436,18 @@ $rejectedMissingAccess = $false
 try { & $runner -Action Prepare -RunRoot $fixerPreEffectRoot -FixerModel 'gpt-6-sol' } catch { $rejectedMissingAccess = $true }
 if (-not $rejectedMissingAccess -or (Test-Path -LiteralPath $fixerPreEffectRoot)) {
     throw 'Missing fixer access policy was not rejected before creating the run root.'
+}
+$modelPolicyPreEffectRoot = Join-Path ([IO.Path]::GetTempPath()) ('fabric-v1-model-policy-invalid-' + [guid]::NewGuid().ToString('N'))
+$rejectedMissingPolicyRoute = $false
+try { & $runner -Action Prepare -RunRoot $modelPolicyPreEffectRoot -ModelPolicyPath 'D:\policy\model-policy.json' } catch { $rejectedMissingPolicyRoute = $true }
+if (-not $rejectedMissingPolicyRoute -or (Test-Path -LiteralPath $modelPolicyPreEffectRoot)) {
+    throw 'Model policy without an explicit fixer/access route was not rejected before creating the run root.'
+}
+$modelPolicyPR5Root = Join-Path ([IO.Path]::GetTempPath()) ('fabric-v1-model-policy-pr5-' + [guid]::NewGuid().ToString('N'))
+$rejectedModelPolicyPR5 = $false
+try { & $runner -Action Prepare -RunRoot $modelPolicyPR5Root -EvalMode PR5Matched -FixerModel 'gpt-6-sol' -AccessConfigPath 'D:\policy\access.json' -ModelPolicyPath 'D:\policy\model-policy.json' } catch { $rejectedModelPolicyPR5 = $true }
+if (-not $rejectedModelPolicyPR5 -or (Test-Path -LiteralPath $modelPolicyPR5Root)) {
+    throw 'Non-Native model-policy treatment was not rejected before creating the run root.'
 }
 $strictConflictRoot = Join-Path ([IO.Path]::GetTempPath()) ('fabric-v1-writer-contract-invalid-' + [guid]::NewGuid().ToString('N'))
 $rejectedWriterConflictBeforeEffects = $false
@@ -528,4 +633,4 @@ foreach ($invalid in @(-1, 9)) {
     try { Get-NativeRunArgs $taskPath $objective $true $invalid | Out-Null } catch { $rejected = $true }
     if (-not $rejected) { throw "Invalid limit $invalid was admitted." }
 }
-Write-Output 'PASS: legacy argv is byte-order stable; Go planner context modes bind exact parser provenance; review-impact/cache and fixer/access/writer-contract options match Prepare/Evaluate; access bytes and observed policies are bound; invalid combinations and mutations reject; objectives stay one argument; no provider calls.'
+Write-Output 'PASS: legacy argv is byte-order stable; Go planner context modes bind exact parser provenance; review-impact/cache, fixer/access/model-policy, and writer-contract options match Prepare/Evaluate; policy bytes and inspected model policy are bound; invalid combinations and mutations reject; objectives stay one argument; no provider calls.'

@@ -7,9 +7,11 @@ if ($parseErrors.Count -ne 0) { throw 'Evaluation runner does not parse.' }
 $initArgsBuilder = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-NativeInitArgs' }, $true)
 $writerContractBuilder = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-WriterContractRequest' }, $true)
 $fixerBindingBuilder = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-FixerAccessRunnerBinding' }, $true)
-if ($null -eq $initArgsBuilder -or $null -eq $writerContractBuilder -or $null -eq $fixerBindingBuilder) { throw 'Native init writer-contract selectors are missing.' }
+$modelPolicyBindingBuilder = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-ModelPolicyRunnerBinding' }, $true)
+if ($null -eq $initArgsBuilder -or $null -eq $writerContractBuilder -or $null -eq $fixerBindingBuilder -or $null -eq $modelPolicyBindingBuilder) { throw 'Native init writer-contract selectors are missing.' }
 . ([scriptblock]::Create($writerContractBuilder.Extent.Text))
 . ([scriptblock]::Create($fixerBindingBuilder.Extent.Text))
+. ([scriptblock]::Create($modelPolicyBindingBuilder.Extent.Text))
 . ([scriptblock]::Create($initArgsBuilder.Extent.Text))
 $builder = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-NativeGoArgs' }, $true)
 if ($null -eq $builder) { throw 'Native task policy builder missing.' }

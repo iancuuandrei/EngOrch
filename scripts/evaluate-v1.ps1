@@ -45,7 +45,12 @@ statistics are not exposed and are not inferred.
 with an explicit `-AccessConfigPath`. The bounded public config's resolved
 path and SHA-256 are bound by Prepare and must be unchanged at Evaluate; the
 runner rechecks its bytes immediately before `fabric init`. These Native-only
-options are appended to init only when requested. `-StrictWriterEdits` selects
+options are appended to init only when requested. Optional `-ModelPolicyPath`
+embeds a bounded JSON model policy through the existing `fabric init
+--model-policy` option; it requires the explicit fixer/access treatment and
+binds the policy file path, SHA-256, and byte count across Prepare/Evaluate.
+The inspected creation config must contain the same policy after typed config
+defaults are normalized. `-StrictWriterEdits` selects
 the anchored-edits-v3 writer contract and is mutually exclusive with the
 existing `-ValidateWriterEdits` v2 switch; its request is bound across
 Prepare/Evaluate and checked in the inspected creation config.
@@ -107,7 +112,8 @@ param(
     [ValidateRange(0, 10000000)][long]$AutoCompactTokenLimit = 0,
     [string]$RunRoot = 'D:\dev\Fabric-v1-eval-runs',
     [string[]]$TaskIds,
-    [string]$RunId
+    [string]$RunId,
+    [string]$ModelPolicyPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -134,6 +140,14 @@ $FixerModelExplicit = [bool]$PSBoundParameters.ContainsKey('FixerModel')
 $FixerEffortExplicit = [bool]$PSBoundParameters.ContainsKey('FixerEffort')
 $AccessConfigExplicit = [bool]$PSBoundParameters.ContainsKey('AccessConfigPath')
 Assert-FixerAccessRunnerBinding $EvalMode $FixerModelExplicit $FixerModel $FixerEffortExplicit $FixerEffort $AccessConfigExplicit $AccessConfigPath
+$ModelPolicyExplicit = [bool]$PSBoundParameters.ContainsKey('ModelPolicyPath')
+function Assert-ModelPolicyRunnerBinding([string]$Mode, [bool]$Explicit, [string]$Path, [bool]$FixerRequested, [bool]$AccessConfigRequested) {
+    if (-not $Explicit) { return }
+    if ($Mode -ne 'Native') { throw 'ModelPolicyPath requires Native mode.' }
+    if ([string]::IsNullOrWhiteSpace($Path)) { throw 'ModelPolicyPath must not be empty when explicitly supplied.' }
+    if (-not $FixerRequested -or -not $AccessConfigRequested) { throw 'ModelPolicyPath requires an explicit fixer override and AccessConfigPath.' }
+}
+Assert-ModelPolicyRunnerBinding $EvalMode $ModelPolicyExplicit $ModelPolicyPath ($FixerModelExplicit -or $FixerEffortExplicit) $AccessConfigExplicit
 function Get-WriterContractRequest([bool]$ValidateEnabled, [bool]$StrictEnabled, [string]$Mode) {
     if ($ValidateEnabled -and $StrictEnabled) { throw 'StrictWriterEdits and ValidateWriterEdits are mutually exclusive.' }
     if (($ValidateEnabled -or $StrictEnabled) -and $Mode -ne 'Native') { throw 'Writer contract overrides require Native mode.' }
@@ -223,13 +237,15 @@ $git = (Get-Command git -ErrorAction Stop).Source
 
 $DiffByteLimit = 1048576
 
-function Get-NativeInitArgs([string]$TaskPath, [string]$RuntimePath, [string]$WriterModel, [string]$WriterEffort, [bool]$EnableEditValidation, [string]$FixerModel = '', [string]$FixerEffort = '', [string]$AccessConfigPath = '', [bool]$EnableStrictWriterEdits = $false) {
+function Get-NativeInitArgs([string]$TaskPath, [string]$RuntimePath, [string]$WriterModel, [string]$WriterEffort, [bool]$EnableEditValidation, [string]$FixerModel = '', [string]$FixerEffort = '', [string]$AccessConfigPath = '', [bool]$EnableStrictWriterEdits = $false, [string]$ModelPolicyPath = '') {
     if ($EnableEditValidation -and $EnableStrictWriterEdits) { throw 'StrictWriterEdits and ValidateWriterEdits are mutually exclusive.' }
     Assert-FixerAccessRunnerBinding 'Native' ($FixerModel -ne '') $FixerModel ($FixerEffort -ne '') $FixerEffort ($AccessConfigPath -ne '') $AccessConfigPath
+    Assert-ModelPolicyRunnerBinding 'Native' ($ModelPolicyPath -ne '') $ModelPolicyPath (($FixerModel -ne '') -or ($FixerEffort -ne '')) ($AccessConfigPath -ne '')
     $nativeArgs = @('--root', $TaskPath, 'init', '--codex', $RuntimePath, '--model', $WriterModel, '--effort', $WriterEffort)
     if ($FixerModel -ne '') { $nativeArgs += @('--fixer-model', $FixerModel) }
     if ($FixerEffort -ne '') { $nativeArgs += @('--fixer-effort', $FixerEffort) }
     if ($AccessConfigPath -ne '') { $nativeArgs += @('--access-config', $AccessConfigPath) }
+    if ($ModelPolicyPath -ne '') { $nativeArgs += @('--model-policy', $ModelPolicyPath) }
     if ($EnableEditValidation) { $nativeArgs += '--validate-writer-edits' }
     if ($EnableStrictWriterEdits) { $nativeArgs += '--strict-writer-edits' }
     return $nativeArgs
@@ -300,31 +316,51 @@ function Get-FileSha256([string]$Path) {
     } finally { $h.Dispose() }
 }
 
-function Get-AccessConfigBinding([string]$Path) {
-    if ([string]::IsNullOrWhiteSpace($Path) -or -not [IO.Path]::IsPathFullyQualified($Path)) {
-        throw 'AccessConfigPath must be an absolute file path.'
+function Read-BoundedConfigFile([string]$Path, [int]$MaxBytes, [string]$PathError, [string]$TypeError, [string]$SizeError, [bool]$RequireCleanPath) {
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not [IO.Path]::IsPathFullyQualified($Path) -or ($RequireCleanPath -and [IO.Path]::GetFullPath($Path) -cne $Path)) {
+        throw $PathError
     }
     $item = Get-Item -LiteralPath $Path -ErrorAction Stop
     if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw 'AccessConfigPath must name a regular non-reparse file.'
+        throw $TypeError
     }
-    if ($item.Length -eq 0 -or $item.Length -gt (32 * 1024)) {
-        throw 'Access config must be nonempty and no larger than 32 KiB.'
-    }
+    if ($item.Length -eq 0 -or $item.Length -gt $MaxBytes) { throw $SizeError }
     $stream = [IO.File]::Open($item.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
     try {
-        if ($stream.Length -eq 0 -or $stream.Length -gt (32 * 1024)) { throw 'Access config must be nonempty and no larger than 32 KiB.' }
-        $buffer = New-Object byte[] (32 * 1024 + 1)
+        if ($stream.Length -eq 0 -or $stream.Length -gt $MaxBytes) { throw $SizeError }
+        $buffer = New-Object byte[] ($MaxBytes + 1)
         $read = $stream.Read($buffer, 0, $buffer.Length)
-        if ($read -eq 0 -or $read -gt (32 * 1024) -or $stream.ReadByte() -ne -1) {
-            throw 'Access config must be nonempty and no larger than 32 KiB.'
+        if ($read -eq 0 -or $read -gt $MaxBytes -or $stream.ReadByte() -ne -1) {
+            throw $SizeError
         }
         [byte[]]$bytes = $buffer[0..($read - 1)]
     } finally { $stream.Dispose() }
     $hasher = [Security.Cryptography.SHA256]::Create()
     try { $sha256 = ([BitConverter]::ToString($hasher.ComputeHash($bytes)) -replace '-', '').ToLowerInvariant() }
     finally { $hasher.Dispose() }
-    return [ordered]@{ Path = $item.FullName; Sha256 = $sha256; Bytes = $bytes.Length }
+    return [pscustomobject]@{ Path = $item.FullName; Sha256 = $sha256; Bytes = $bytes.Length; Content = $bytes }
+}
+
+function Get-AccessConfigBinding([string]$Path) {
+    $file = Read-BoundedConfigFile $Path (32 * 1024) 'AccessConfigPath must be an absolute file path.' 'AccessConfigPath must name a regular non-reparse file.' 'Access config must be nonempty and no larger than 32 KiB.' $false
+    return [ordered]@{ Path = $file.Path; Sha256 = $file.Sha256; Bytes = $file.Bytes }
+}
+
+function Get-ModelPolicyBinding([string]$Path) {
+    $file = Read-BoundedConfigFile $Path (128 * 1024) 'ModelPolicyPath must be an absolute clean path passed unchanged.' 'ModelPolicyPath must name a regular non-reparse file.' 'Model policy must be nonempty and no larger than 128 KiB.' $true
+    $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+    try { $json = $strictUtf8.GetString($file.Content) } catch { throw 'Model policy must be valid UTF-8 JSON.' }
+    try { $policy = ConvertFrom-Json -InputObject $json -AsHashtable -ErrorAction Stop } catch { throw 'Model policy must be valid JSON.' }
+    if ($null -eq $policy -or $policy -isnot [System.Collections.IDictionary]) { throw 'Model policy JSON must contain an object.' }
+    return [ordered]@{ Path = $file.Path; Sha256 = $file.Sha256; Bytes = $file.Bytes; Policy = $policy }
+}
+
+function Assert-CurrentModelPolicyBinding($Binding) {
+    if ($null -eq $Binding) { throw 'Model policy binding is missing.' }
+    $current = Get-ModelPolicyBinding $Binding.Path
+    if ($current.Path -cne $Binding.Path -or $current.Sha256 -cne $Binding.Sha256 -or $current.Bytes -ne $Binding.Bytes) {
+        throw 'Model policy path or file bytes changed after Prepare.'
+    }
 }
 
 function Assert-CurrentAccessConfigBinding($Binding) {
@@ -352,6 +388,68 @@ function Assert-FixerAccessPreparedBinding($Prior, [bool]$FixerModelExplicit, [s
             throw 'Fixer model/access config options must match the prepared run.'
         }
     }
+}
+
+function Assert-ModelPolicyPreparedBinding($Prior, [bool]$Explicit, $Binding) {
+    $expected = @{
+        model_policy_path_requested = if ($null -ne $Binding) { $Binding.Path } else { $null }
+        model_policy_sha256_requested = if ($null -ne $Binding) { $Binding.Sha256 } else { $null }
+        model_policy_bytes_requested = if ($null -ne $Binding) { [int]$Binding.Bytes } else { $null }
+    }
+    if ($Explicit -ne ($null -ne $Binding)) { throw 'Model policy options must match the prepared run.' }
+    foreach ($name in $expected.Keys) {
+        $property = $Prior.PSObject.Properties[$name]
+        $actual = if ($null -ne $property) { $property.Value } else { $null }
+        if ($null -eq $expected[$name]) {
+            if ($null -ne $actual -and $actual -ne '') { throw 'Model policy options must match the prepared run.' }
+        } elseif ([string]$actual -cne [string]$expected[$name]) {
+            throw 'Model policy options must match the prepared run.'
+        }
+    }
+}
+
+function ConvertTo-ComparableModelPolicyValue($Value) {
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $result = [ordered]@{}
+        foreach ($rawName in ($Value.Keys | Sort-Object -CaseSensitive)) {
+            $name = ([string]$rawName).ToLowerInvariant() -replace '[_-]', ''
+            $entry = $Value[$rawName]
+            if ($null -eq $entry) { continue }
+            # Go's typed JSON encoding omits these zero-valued optional fields.
+            if (($name -eq 'decisionevidenceversion' -or $name -eq 'cheapcontextbytes' -or $name -eq 'contextescalationbytes') -and [long]$entry -eq 0) { continue }
+            if ($name -eq 'cheapprofile' -and [string]$entry -eq '') { continue }
+            if ($name -eq 'observedfixerprofiles' -and @($entry).Count -eq 0) { continue }
+            $result[$name] = ConvertTo-ComparableModelPolicyValue $entry
+        }
+        return ,$result
+    }
+    if ($Value -is [pscustomobject]) {
+        $asMap = [ordered]@{}
+        foreach ($property in $Value.PSObject.Properties) { $asMap[$property.Name] = $property.Value }
+        return ,(ConvertTo-ComparableModelPolicyValue $asMap)
+    }
+    if ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [string]) {
+        $items = [System.Collections.Generic.List[object]]::new()
+        foreach ($entry in $Value) { $items.Add((ConvertTo-ComparableModelPolicyValue $entry)) }
+        return ,$items.ToArray()
+    }
+    return $Value
+}
+
+function Assert-ModelPolicyObserved($Snapshot, $Binding) {
+    if ($null -eq $Binding) { return $null }
+    $observed = $Snapshot.creation.config.model_policy
+    if ($null -eq $observed) { throw 'Inspected run config does not contain the requested model policy.' }
+    $expectedJson = ConvertTo-Json -InputObject (ConvertTo-ComparableModelPolicyValue $Binding.Policy) -Depth 100 -Compress
+    $observedJson = ConvertTo-Json -InputObject (ConvertTo-ComparableModelPolicyValue $observed) -Depth 100 -Compress
+    if ($expectedJson -cne $observedJson) { throw 'Inspected embedded model policy does not match the requested policy file.' }
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    try {
+        $utf8 = New-Object System.Text.UTF8Encoding($false)
+        $digest = ([BitConverter]::ToString($hasher.ComputeHash($utf8.GetBytes($observedJson))) -replace '-', '').ToLowerInvariant()
+    } finally { $hasher.Dispose() }
+    return [ordered]@{ Present = $true; NormalizedPolicySha256 = $digest }
 }
 
 function Assert-WriterContractPreparedBinding($Prior, [string]$ExpectedContract) {
@@ -1042,6 +1140,7 @@ function Get-RunGate([object]$Snap, [string]$FabricRunId, [string]$DiffCandidate
 $GoExe = (Resolve-Path -LiteralPath $GoExe -ErrorAction Stop).Path
 if (-not (Test-Path -LiteralPath $GoExe -PathType Leaf)) { throw 'Pinned Go executable is not a file.' }
 $fixerAccessBinding = if ($AccessConfigExplicit) { Get-AccessConfigBinding $AccessConfigPath } else { $null }
+$modelPolicyBinding = if ($ModelPolicyExplicit) { Get-ModelPolicyBinding $ModelPolicyPath } else { $null }
 $goVersion = (& $GoExe version).Trim()
 if ($LASTEXITCODE -ne 0 -or $goVersion -notmatch 'go1\.27\.1') { throw "Expected Go 1.27.1, got $goVersion" }
 $goEnvironmentBinding = Get-PinnedGoEnvironmentBinding $GoExe
@@ -1164,6 +1263,11 @@ if ($Action -eq 'Prepare') {
             $records[-1].access_config_sha256_requested = $fixerAccessBinding.Sha256
             $records[-1].access_config_bytes_requested = $fixerAccessBinding.Bytes
         }
+        if ($null -ne $modelPolicyBinding) {
+            $records[-1].model_policy_path_requested = $modelPolicyBinding.Path
+            $records[-1].model_policy_sha256_requested = $modelPolicyBinding.Sha256
+            $records[-1].model_policy_bytes_requested = $modelPolicyBinding.Bytes
+        }
         if ($writerContractRequested -ne '') { $records[-1].writer_contract_requested = $writerContractRequested }
         if ($IsolatedWriters) {
             $records[-1].isolated_writers_requested = $true
@@ -1209,6 +1313,11 @@ if ($Action -eq 'Prepare') {
         $record.access_config_path_requested = $fixerAccessBinding.Path
         $record.access_config_sha256_requested = $fixerAccessBinding.Sha256
         $record.access_config_bytes_requested = $fixerAccessBinding.Bytes
+    }
+    if ($null -ne $modelPolicyBinding) {
+        $record.model_policy_path_requested = $modelPolicyBinding.Path
+        $record.model_policy_sha256_requested = $modelPolicyBinding.Sha256
+        $record.model_policy_bytes_requested = $modelPolicyBinding.Bytes
     }
     if ($writerContractRequested -ne '') { $record.writer_contract_requested = $writerContractRequested }
     if ($IsolatedWriters) {
@@ -1271,6 +1380,7 @@ Assert-AutoCompactPreparedBinding $prior $AutoCompactTokenLimit
 Assert-ReviewImpactPreparedBinding $prior ([bool]$ReviewImpactContext)
 Assert-CandidateFactsCachePreparedBinding $prior ([bool]$CandidateFactsCache)
 Assert-FixerAccessPreparedBinding $prior $FixerModelExplicit $FixerModel $FixerEffortExplicit $FixerEffort $fixerAccessBinding
+Assert-ModelPolicyPreparedBinding $prior $ModelPolicyExplicit $modelPolicyBinding
 Assert-WriterContractPreparedBinding $prior $writerContractRequested
 $preparedPlannerContext = [string]$prior.planner_context_requested
 if ($preparedPlannerContext -ne $PlannerContext) {
@@ -1346,6 +1456,11 @@ foreach ($entry in $entries) {
         $result.access_config_sha256_requested = $fixerAccessBinding.Sha256
         $result.access_config_bytes_requested = $fixerAccessBinding.Bytes
     }
+    if ($null -ne $modelPolicyBinding) {
+        $result.model_policy_path_requested = $modelPolicyBinding.Path
+        $result.model_policy_sha256_requested = $modelPolicyBinding.Sha256
+        $result.model_policy_bytes_requested = $modelPolicyBinding.Bytes
+    }
     if ($writerContractRequested -ne '') { $result.writer_contract_requested = $writerContractRequested }
     if ($IsolatedWriters) {
         $result.isolated_writers_requested = $true
@@ -1370,11 +1485,13 @@ foreach ($entry in $entries) {
                 throw "Task checkout for $($entry.id) already initialized; Evaluate requires a fresh prepared clone"
             }
             if ($null -ne $fixerAccessBinding) { Assert-CurrentAccessConfigBinding $fixerAccessBinding }
-            $initArgs = @(Get-NativeInitArgs $taskPath $CodexExe $Model $Effort ([bool]$ValidateWriterEdits) $FixerModel $FixerEffort $(if ($null -ne $fixerAccessBinding) { $fixerAccessBinding.Path } else { '' }) ([bool]$StrictWriterEdits))
+            if ($null -ne $modelPolicyBinding) { Assert-CurrentModelPolicyBinding $modelPolicyBinding }
+            $initArgs = @(Get-NativeInitArgs $taskPath $CodexExe $Model $Effort ([bool]$ValidateWriterEdits) $FixerModel $FixerEffort $(if ($null -ne $fixerAccessBinding) { $fixerAccessBinding.Path } else { '' }) ([bool]$StrictWriterEdits) $(if ($null -ne $modelPolicyBinding) { $modelPolicyBinding.Path } else { '' }))
             Invoke-WithPinnedGo $GoExe {
                 & $FabricExe @initArgs 1> (Join-Path $taskOutDir 'fabric-init.stdout.log') 2> (Join-Path $taskOutDir 'fabric-init.stderr.log')
                 if ($LASTEXITCODE -ne 0) { throw "fabric init failed for $($entry.id); see fabric-init.*.log" }
             }
+            if ($null -ne $modelPolicyBinding) { Assert-CurrentModelPolicyBinding $modelPolicyBinding }
             $result.effort = $Effort
             $controllerStateRoot = if ($IsolatedWriters) { [IO.Path]::GetFullPath((Join-Path $taskOutDir 'controller-state')) } else { '' }
             $verPolicy = Set-TaskVerificationConfig $taskPath $entry $controllerStateRoot
@@ -1437,6 +1554,8 @@ foreach ($entry in $entries) {
             if ($null -ne $writerContractObserved) { $result.writer_contract_observed = $writerContractObserved }
             $fixerRouteObserved = Assert-FixerRouteObserved $snap ($FixerModelExplicit -or $FixerEffortExplicit) $(if ($FixerModelExplicit) { $FixerModel } else { $Model }) $(if ($FixerEffortExplicit) { $FixerEffort } else { $Effort })
             if ($null -ne $fixerRouteObserved) { $result.fixer_route_config_observed = $fixerRouteObserved }
+            $modelPolicyObserved = Assert-ModelPolicyObserved $snap $modelPolicyBinding
+            if ($null -ne $modelPolicyObserved) { $result.model_policy_config_observed = $modelPolicyObserved }
             if ($IsolatedWriters) {
                 $expectedStateRoot = [IO.Path]::GetFullPath((Join-Path $taskOutDir 'controller-state'))
                 if ([string]$snap.creation.config.controller_state_root -cne $expectedStateRoot) {
@@ -1806,6 +1925,11 @@ if ($null -ne $fixerAccessBinding) {
     $evalRecord.access_config_path_requested = $fixerAccessBinding.Path
     $evalRecord.access_config_sha256_requested = $fixerAccessBinding.Sha256
     $evalRecord.access_config_bytes_requested = $fixerAccessBinding.Bytes
+}
+if ($null -ne $modelPolicyBinding) {
+    $evalRecord.model_policy_path_requested = $modelPolicyBinding.Path
+    $evalRecord.model_policy_sha256_requested = $modelPolicyBinding.Sha256
+    $evalRecord.model_policy_bytes_requested = $modelPolicyBinding.Bytes
 }
 if ($writerContractRequested -ne '') { $evalRecord.writer_contract_requested = $writerContractRequested }
 if ($IsolatedWriters) {

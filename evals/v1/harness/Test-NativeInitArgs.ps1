@@ -9,7 +9,10 @@ $builder = $ast.Find({ param($node) $node -is [System.Management.Automation.Lang
 if ($null -eq $builder) { throw 'Native init argument builder missing.' }
 $fixerBinding = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-FixerAccessRunnerBinding' }, $true)
 if ($null -eq $fixerBinding) { throw 'Fixer/access init binding helper missing.' }
+$modelPolicyBinding = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-ModelPolicyRunnerBinding' }, $true)
+if ($null -eq $modelPolicyBinding) { throw 'Model policy init binding helper missing.' }
 . ([scriptblock]::Create($fixerBinding.Extent.Text))
+. ([scriptblock]::Create($modelPolicyBinding.Extent.Text))
 . ([scriptblock]::Create($builder.Extent.Text))
 $taskPath = 'D:\task path\repo'
 $runtimePath = 'D:\runtime path\codex.exe'
