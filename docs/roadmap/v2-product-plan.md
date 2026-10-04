@@ -851,3 +851,32 @@ remain unknown. Its SHA256 is
   qualification and final integrated release/happy-path review. No adaptive
   routing gain, physical provider-call count or monetary saving is inferred
   from UNKNOWN outcomes or observed runtime token counters.
+## Checkpoint — v1.0.26 integrated; semantic orientation candidate
+
+- Main/dev contain `b5c7502a8982badd7daf54147036548701769dc2`, integrated
+  through automation PR #33. Fresh clean full Go, fresh Rust workspace tests,
+  ten PowerShell harnesses, disposable source-build/help/reference smoke,
+  independent review and hosted Sonar/security passed. Source stayed clean.
+  Go log SHA256: ae832b31eda37c25794ce4450c263c4a997f001b2ebbd1bde3863234faf5892a.
+  Rust log SHA256: 35f4d1a02b05056f18e5d9c74d18bc0c708823e2be3441cb1b70a652e4c46109.
+  Sonar reported zero unresolved issues and zero new duplication.
+- The next independently reviewed capability exposes bounded source-bound
+  objective ranking with observed import-degree centrality and query-scoped
+  topology components, plus direct SCIP references and explicit IMPLEMENTS
+  paging. It reuses the existing RI and preserves PARTIAL/UNKNOWN coverage.
+  It changes neither planner defaults nor old graph/invocation identities.
+  Real pinned-Rust CLI/library fixtures and focused regressions passed;
+  clean full qualification and public integration are still required.
+- The blocked frozen-v1.0.24 numeric candidate received its first current
+  review through the normal v1.0.25 path: APPROVE, fresh native PASS and
+  unchanged held-out PASS. The original evaluation row remains BLOCKED.
+  Supplemental receipt SHA256:
+  `5dcff85c1fa498a354b0fe21cabd8a98b1f72444b5aa77ea90d40ad4c534862a`.
+  This demonstrates the repaired product review path, without pooling frozen
+  results or granting another numeric repair.
+- A separate fresh v1.0.25 eight-task evaluation declares Sol High for all
+  roles, with the same unchanged tasks, verification, held-out fixtures and
+  repair ceilings. It is a static model-quality treatment, not an adaptive
+  policy promotion. Preparation passed; the evaluation is running. Overall
+  model choice is bound by its external dispatch receipt because the existing
+  prepare manifest records only the fixer override.
