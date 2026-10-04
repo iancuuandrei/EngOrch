@@ -30,6 +30,7 @@ type Command struct {
 }
 
 var commands = []Command{
+	{"calibrate-models", "CALIBRATION_JSON", "Compare bounded matched task-policy outcomes; report conservative model selection without dispatch."},
 	{"version", "", "Report the build version, commit and build date."},
 	{"agent-interrupt", "RUN SCHEDULE_ID TURN_ID ACTOR NONCE", "Request interruption of one exact scheduled turn; delivery does not prove runtime teardown or resolve UNKNOWN effects."},
 	{"agent-spawn", "RUN SCHEDULE_ID REQUEST_JSON", "Queue a read-only explorer child using controller-derived invocation and authority."},
@@ -309,6 +310,8 @@ func Execute(ctx context.Context, args []string, cwd string, out io.Writer) (res
 		return writerFilesCommand(*root, args, out)
 	case "init":
 		return initCommand(ctx, *root, args, out)
+	case "calibrate-models":
+		return modelCalibrationCommand(args, out)
 	case "diff":
 		return diffCommand(ctx, *root, args, out)
 	case "observe-format":

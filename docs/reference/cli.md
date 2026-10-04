@@ -6,6 +6,7 @@ Use `harness [--root PATH] COMMAND`. Output is canonical JSON except help, aggre
 
 | Command | Arguments | Behavior |
 | --- | --- | --- |
+| `calibrate-models` | `CALIBRATION_JSON` | Compare bounded matched task-policy outcomes; report conservative model selection without dispatch. |
 | `version` | `` | Report the build version, commit and build date. |
 | `agent-interrupt` | `RUN SCHEDULE_ID TURN_ID ACTOR NONCE` | Request interruption of one exact scheduled turn; delivery does not prove runtime teardown or resolve UNKNOWN effects. |
 | `agent-spawn` | `RUN SCHEDULE_ID REQUEST_JSON` | Queue a read-only explorer child using controller-derived invocation and authority. |

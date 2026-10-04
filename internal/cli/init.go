@@ -15,6 +15,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/config"
+	"harness.local/engorch/internal/modelpolicy"
 	"harness.local/engorch/internal/repository"
 	"harness.local/engorch/internal/runtime"
 	"harness.local/engorch/internal/writercontract"
@@ -33,6 +34,7 @@ func initCommand(ctx context.Context, root string, args []string, out io.Writer)
 	fixerModel := flags.String("fixer-model", "", "independent fixer model; defaults to --model when either fixer override is supplied")
 	fixerEffort := flags.String("fixer-effort", "", "independent fixer reasoning effort; defaults to --effort when either fixer override is supplied")
 	accessConfigPath := flags.String("access-config", "", "strict JSON config.Access policy required when either fixer override is supplied")
+	modelPolicyPath := flags.String("model-policy", "", "bounded strict JSON model policy embedded in configuration; requires a fixer override and access config")
 	auth := flags.String("auth-source", "", "existing Codex auth.json")
 	state := flags.String("state-root", "", "private runtime state directory")
 	validateWriterEdits := flags.Bool("validate-writer-edits", false, "enable same-turn validation for anchored writer edits")
@@ -48,6 +50,7 @@ func initCommand(ctx context.Context, root string, args []string, out io.Writer)
 	}
 	fixerProfileRequested := false
 	fixerModelProvided, fixerEffortProvided, accessConfigProvided := false, false, false
+	modelPolicyProvided := false
 	flags.Visit(func(selected *flag.Flag) {
 		switch selected.Name {
 		case "fixer-model":
@@ -58,6 +61,8 @@ func initCommand(ctx context.Context, root string, args []string, out io.Writer)
 			fixerEffortProvided = true
 		case "access-config":
 			accessConfigProvided = true
+		case "model-policy":
+			modelPolicyProvided = true
 		}
 	})
 	if fixerProfileRequested != accessConfigProvided || (*accessConfigPath == "") != !accessConfigProvided {
@@ -68,6 +73,17 @@ func initCommand(ctx context.Context, root string, args []string, out io.Writer)
 	}
 	if fixerEffortProvided && strings.TrimSpace(*fixerEffort) == "" {
 		return errors.New("fixer-effort must not be empty")
+	}
+	if modelPolicyProvided && (!fixerProfileRequested || strings.TrimSpace(*modelPolicyPath) == "") {
+		return errors.New("model-policy requires a nonempty path, a fixer override and access config")
+	}
+	var explicitModelPolicy *modelpolicy.Policy
+	if modelPolicyProvided {
+		var err error
+		explicitModelPolicy, err = readInitModelPolicy(*modelPolicyPath)
+		if err != nil {
+			return err
+		}
 	}
 	var explicitAccess *config.Access
 	if accessConfigProvided {
@@ -177,6 +193,7 @@ func initCommand(ctx context.Context, root string, args []string, out io.Writer)
 			cfg.Fixer = profile("fixer")
 			cfg.Access = explicitAccess
 		}
+		cfg.ModelPolicy = explicitModelPolicy
 		if err := cfg.Validate(); err != nil {
 			if fixerProfileRequested {
 				return fmt.Errorf("fixer init requires an access config admitting every configured role and budget: %w", err)
@@ -219,22 +236,9 @@ const initAccessConfigMaxBytes = 32 << 10
 
 func readInitAccessConfig(path string) (config.Access, error) {
 	var policy config.Access
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Size() > initAccessConfigMaxBytes {
-		return policy, errors.New("access config must be an existing regular file no larger than 32 KiB")
-	}
-	file, err := os.Open(path)
+	raw, err := readRegularPolicyJSON(path, initAccessConfigMaxBytes, "access config", "32 KiB")
 	if err != nil {
-		return policy, errors.New("access config could not be opened")
-	}
-	openedInfo, statErr := file.Stat()
-	raw, readErr := io.ReadAll(io.LimitReader(file, initAccessConfigMaxBytes+1))
-	closeErr := file.Close()
-	if err := errors.Join(statErr, readErr, closeErr); err != nil {
-		return policy, errors.New("access config could not be read completely")
-	}
-	if !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) || int64(len(raw)) > initAccessConfigMaxBytes {
-		return policy, errors.New("access config must remain the same regular file no larger than 32 KiB")
+		return policy, err
 	}
 	if err := canonical.Decode(raw, &policy); err != nil {
 		return config.Access{}, fmt.Errorf("invalid access config JSON: %w", err)

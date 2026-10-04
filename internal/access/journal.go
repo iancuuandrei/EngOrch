@@ -77,18 +77,74 @@ type RoutingDecision struct {
 	Reason           string `json:"reason"`
 	ContextBytes     int64  `json:"context_bytes"`
 	AcceptedFailures int    `json:"accepted_failures"`
+	// ObjectiveHash is present only in evidence version 2 and binds the
+	// immutable task objective without retaining its text.
+	ObjectiveHash string `json:"objective_hash,omitempty"`
+	// Calibration is present only for an explicitly calibrated fixer decision.
+	Calibration *CalibrationDecision `json:"calibration,omitempty"`
+}
+
+// CalibrationOutcomeCounts is a compact projection of one arm's observed
+// whole-task outcomes. It contains counts only, not task identifiers or output.
+type CalibrationOutcomeCounts struct {
+	Assigned     int `json:"assigned"`
+	Accepted     int `json:"accepted"`
+	Failed       int `json:"failed"`
+	Unknown      int `json:"unknown"`
+	NotExercised int `json:"not_exercised"`
+	Drifted      int `json:"drifted"`
+}
+
+// CalibrationArmCounts distinguishes the predeclared baseline and candidate.
+type CalibrationArmCounts struct {
+	Baseline  CalibrationOutcomeCounts `json:"baseline"`
+	Candidate CalibrationOutcomeCounts `json:"candidate"`
+}
+
+// CalibrationDecision binds an opt-in fixer selection to the exact calibration
+// artifact and reports whether an empirically selected candidate was applied.
+type CalibrationDecision struct {
+	Digest            string               `json:"digest"`
+	FamilyID          string               `json:"family_id"`
+	BaselineProfile   string               `json:"baseline_profile"`
+	CandidateProfile  string               `json:"candidate_profile"`
+	SelectionReason   string               `json:"selection_reason"`
+	ScopeMatched      bool                 `json:"scope_matched"`
+	CandidateSelected bool                 `json:"candidate_selected"`
+	CandidateApplied  bool                 `json:"candidate_applied"`
+	Training          CalibrationArmCounts `json:"training"`
+	Holdout           CalibrationArmCounts `json:"holdout"`
 }
 
 // Validate binds a compact routing observation to the route already admitted
 // by this intent. It does not authorize or select a model by itself.
 func (d RoutingDecision) Validate(route Route, choice *ModelChoice) error {
-	if d.Version != 1 || safepath.RequireDigest(d.ConfigID) != nil || !identifier(d.ProfileName) || !validModelName(d.Model) || !identifier(d.Effort) || d.ContextBytes < 0 || d.ContextBytes > 256<<10 || d.AcceptedFailures < 0 || d.AcceptedFailures > 1_000_000 {
+	if (d.Version != 1 && d.Version != 2) || safepath.RequireDigest(d.ConfigID) != nil || !identifier(d.ProfileName) || !validModelName(d.Model) || !identifier(d.Effort) || d.ContextBytes < 0 || d.ContextBytes > 256<<10 || d.AcceptedFailures < 0 || d.AcceptedFailures > 1_000_000 {
 		return errors.New("invalid routing decision evidence")
 	}
 	switch d.Reason {
-	case "default-configured-profile", "architect-role", "high-risk", "high-complexity", "high-uncertainty", "large-context", "large-input-bytes", "prior-failures", "bounded-read-only-input":
+	case "default-configured-profile", "architect-role", "high-risk", "high-complexity", "high-uncertainty", "large-context", "large-input-bytes", "prior-failures", "bounded-read-only-input", "calibrated-candidate", "calibration-objective-out-of-scope":
 	default:
 		return errors.New("invalid routing decision reason")
+	}
+	if d.Version == 1 {
+		if d.ObjectiveHash != "" || d.Calibration != nil {
+			return errors.New("legacy routing evidence contains calibration fields")
+		}
+	} else {
+		if safepath.RequireDigest(d.ObjectiveHash) != nil {
+			return errors.New("version 2 routing evidence lacks an objective digest")
+		}
+		if route.Role == "fixer" {
+			if d.Calibration == nil || d.Calibration.Validate() != nil {
+				return errors.New("version 2 fixer evidence lacks valid calibration projection")
+			}
+			if (d.Reason == "calibrated-candidate") != d.Calibration.CandidateApplied {
+				return errors.New("calibrated route reason differs from applied candidate")
+			}
+		} else if d.Calibration != nil || d.Reason == "calibrated-candidate" || d.Reason == "calibration-objective-out-of-scope" {
+			return errors.New("non-fixer routing evidence contains calibration selection")
+		}
 	}
 	model, effort := route.Model, route.Effort
 	if choice != nil {
@@ -96,6 +152,47 @@ func (d RoutingDecision) Validate(route Route, choice *ModelChoice) error {
 	}
 	if d.Model != model || d.Effort != effort {
 		return errors.New("routing decision differs from admitted model choice")
+	}
+	return nil
+}
+
+// Validate checks that the compact selection projection is internally consistent.
+func (d CalibrationDecision) Validate() error {
+	if safepath.RequireDigest(d.Digest) != nil || !identifier(d.FamilyID) || !identifier(d.BaselineProfile) || !identifier(d.CandidateProfile) || d.BaselineProfile == d.CandidateProfile {
+		return errors.New("invalid calibration decision identity")
+	}
+	switch d.SelectionReason {
+	case "candidate_quality_improved_train_and_holdout", "fallback_insufficient_quality_evidence", "fallback_unmatched_task_policy", "fallback_unknown_outcome", "fallback_fixer_not_exercised", "fallback_fixer_route_drift", "fallback_no_quality_improvement", "fallback_objective_out_of_scope":
+	default:
+		return errors.New("invalid calibration selection reason")
+	}
+	selectedByReason := d.SelectionReason == "candidate_quality_improved_train_and_holdout"
+	objectiveOutOfScope := d.SelectionReason == "fallback_objective_out_of_scope"
+	if d.CandidateSelected != selectedByReason || d.CandidateApplied && (!d.CandidateSelected || !d.ScopeMatched) || objectiveOutOfScope == d.ScopeMatched {
+		return errors.New("inconsistent calibration selection flags")
+	}
+	if err := d.Training.Validate(); err != nil {
+		return err
+	}
+	return d.Holdout.Validate()
+}
+
+// Validate checks each calibration arm's bounded outcome totals.
+func (c CalibrationArmCounts) Validate() error {
+	if err := c.Baseline.Validate(); err != nil {
+		return err
+	}
+	return c.Candidate.Validate()
+}
+
+// Validate checks bounded count totals without interpreting them as provider
+// calls or independent outcomes.
+func (c CalibrationOutcomeCounts) Validate() error {
+	if c.Assigned < 0 || c.Assigned > 64 || c.Accepted < 0 || c.Failed < 0 || c.Unknown < 0 || c.NotExercised < 0 || c.Drifted < 0 || c.Drifted > c.Assigned {
+		return errors.New("invalid calibration outcome counts")
+	}
+	if c.Accepted+c.Failed+c.Unknown+c.NotExercised != c.Assigned {
+		return errors.New("calibration outcome counts do not sum to assigned tasks")
 	}
 	return nil
 }

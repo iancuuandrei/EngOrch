@@ -545,3 +545,30 @@ integrated increment, without resurrecting a G0 promotion ladder.
 - Fixed-six 6/6, generated-code acceptance, topology/model comparisons, accepted
   fresh rounds and completed native compaction still require live evidence.
   Code, fixture and preparation progress is not substituted for these gates.
+
+## Checkpoint — v1.0.18 integrated; first completed native compaction
+
+- Public main/dev and the clean frozen source contain
+  `605529818af04b9809f25239b80bdd3e3f2d9f9b`; bot-authored PR #25 merged.
+  The complete fresh Go suite passed on `76d13a9`; the sole final-source change
+  corrected a qualification sentence. Product source, scripts and fixtures are
+  identical. Final-source documentation, focused usage checks, all ten
+  PowerShell harnesses, hosted checks and independent review passed.
+- A fresh unchanged ParseBytes run completed its writer and native verification.
+  Retained usage plus read-only SQLite metadata independently bind one completed
+  native compaction and its typed counters. The task then failed before reviewer
+  dispatch because a required projection array encoded an empty deletion list
+  as null. The checkpoint is not accepted and has no active/uncertain intent.
+  The exact result is recorded in the v1.0.18 native-compaction evaluation note.
+- The next product increment fixes that field with a regression and adds
+  opt-in empirical fixer calibration, bounded CLI inspection/initialization,
+  frozen configuration and exact objective-bound routing evidence. Matched
+  train/holdout outcomes and shared non-fixer policy identity are required;
+  UNKNOWN, unexercised, drifted, unmatched and insufficient data retain the
+  configured baseline. Static escalation keeps priority. No default model or
+  measured quality/cost improvement is claimed from fixtures.
+- v1.0.18 fixed-eight preparation passed baseline checks with zero provider
+  effects. Final-source product qualification precedes further dispatch.
+  Fixed-six 6/6, generated-code acceptance, real topology/model comparisons,
+  accepted fresh rounds and pause/resume/release gates remain open. The previous
+  v1.0.17 uncertain invocation is preserved and never resent.

@@ -80,6 +80,43 @@ func TestGoCandidateReviewTopologyDeletionOnlyIsExplicitlyUnavailable(t *testing
 	}
 }
 
+func TestGoCandidateReviewTopologyEncodesEmptyDeletedPathsAsArray(t *testing.T) {
+	base, inventory, corpus := candidateReviewTopologyFixture(t, false)
+	binding, err := DeclaredGoPackageBinding(corpus.ModuleInventory, "api/a.go", "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedSource := "package api\n// candidate change\n"
+	replacement := graphInput("api/a.go", changedSource, binding, nil, nil, nil, nil, corpus.ProducerSHA256)
+	graph, err := ApplyGoEngineeringOverlay(base, GoGraphOverlayInput{
+		BaseDigest: base.Digest, CandidateID: corpus.CandidateID, ProducerSHA256: corpus.ProducerSHA256,
+		Replacements: []GoGraphFileInput{replacement}, Generators: base.Generators, ModuleInventory: &corpus.ModuleInventory,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	corpus.Graph = graph
+	corpus.DeletedPaths = nil
+	corpus.ChangedPaths = []string{"api/a.go"}
+	out, err := QueryGoCandidateReviewTopology(base, inventory, corpus, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.DeletedPaths == nil {
+		t.Fatal("empty deleted_paths must be a nonnil slice for the nonnullable projection field")
+	}
+	encoded, err := canonical.Bytes(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"deleted_paths":[]`) || strings.Contains(string(encoded), `"deleted_paths":null`) {
+		t.Fatalf("empty deleted_paths did not encode as an array: %s", encoded)
+	}
+	if err := ValidateGoCandidateReviewTopology(out, base, inventory, corpus, 8); err != nil {
+		t.Fatalf("empty deletion projection did not replay: %v", err)
+	}
+}
+
 func TestGoCandidateReviewTopologyRejectsStaleBindingsAndTampering(t *testing.T) {
 	base, inventory, corpus := candidateReviewTopologyFixture(t, true)
 	if _, err := QueryGoCandidateReviewTopology(base, inventory, corpus, 8); err != nil {

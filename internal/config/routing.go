@@ -76,7 +76,11 @@ func (c Config) AllowsProfile(profile runtime.Profile) bool {
 	if !ok {
 		return false
 	}
-	for _, name := range []string{rule.CheapProfile, rule.DefaultProfile, rule.EscalatedProfile} {
+	names := []string{rule.CheapProfile, rule.DefaultProfile, rule.EscalatedProfile}
+	if profile.Role == "fixer" && c.ModelPolicy.DecisionEvidenceVersion == 2 && c.ModelPolicy.Calibration != nil {
+		names = append(names, c.ModelPolicy.Calibration.Candidate.Name)
+	}
+	for _, name := range names {
 		if name == "" {
 			continue
 		}
@@ -109,7 +113,11 @@ func (c Config) ModelChoices(role string) []modelpolicy.Profile {
 	}
 	seen := map[string]bool{}
 	var choices []modelpolicy.Profile
-	for _, name := range []string{rule.CheapProfile, rule.EscalatedProfile} {
+	names := []string{rule.CheapProfile, rule.EscalatedProfile}
+	if role == "fixer" && c.ModelPolicy.DecisionEvidenceVersion == 2 && c.ModelPolicy.Calibration != nil {
+		names = append(names, c.ModelPolicy.Calibration.Candidate.Name)
+	}
+	for _, name := range names {
 		choice, ok := profiles[name]
 		if !ok || choice.Runtime != base.Runtime || choice.Provider != base.Provider {
 			continue
@@ -139,6 +147,15 @@ func (c Config) validateModelPolicy() error {
 		return errors.New("invalid adaptive model policy")
 	}
 	used := map[string]bool{}
+	if policy.Calibration != nil {
+		base, ok := c.configuredRoute("fixer")
+		calibration := policy.Calibration
+		if !ok || calibration.Role != "fixer" || calibration.Baseline.Name != policy.Rules["fixer"].DefaultProfile || calibration.Candidate.Model == calibration.Baseline.Model && calibration.Candidate.Effort == calibration.Baseline.Effort || calibration.Baseline.Runtime != base.Runtime || calibration.Candidate.Runtime != base.Runtime || calibration.Baseline.Provider != base.Provider || calibration.Candidate.Provider != base.Provider {
+			return errors.New("calibration must use exact same-runtime/provider fixer profiles and a distinct candidate")
+		}
+		used[calibration.Baseline.Name] = true
+		used[calibration.Candidate.Name] = true
+	}
 	for role, rule := range policy.Rules {
 		base, ok := c.configuredRoute(role)
 		if !ok {
@@ -157,7 +174,11 @@ func (c Config) validateModelPolicy() error {
 		if decision.Profile.Name != rule.DefaultProfile || decision.Profile.Runtime != base.Runtime || decision.Profile.Provider != base.Provider || decision.Profile.Model != base.Model || decision.Profile.Effort != base.Effort {
 			return fmt.Errorf("adaptive default for %q must match its configured route", role)
 		}
-		for _, name := range []string{rule.DefaultProfile, rule.CheapProfile, rule.EscalatedProfile} {
+		names := []string{rule.DefaultProfile, rule.CheapProfile, rule.EscalatedProfile}
+		if role == "fixer" && policy.Calibration != nil {
+			names = append(names, policy.Calibration.Candidate.Name)
+		}
+		for _, name := range names {
 			if name == "" {
 				continue
 			}

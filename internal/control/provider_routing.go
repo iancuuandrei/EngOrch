@@ -66,6 +66,35 @@ func resolveProviderRoutingForRecordedEvidence(c config.Config, runID string, in
 	return resolveProviderRouting(c, runID, invocation.Profile.Role, inputHash, attempt, int64(len(invocation.Input)), evidence, invocation.Profile)
 }
 
+// validateRoutingDecisionForSnapshot is used while replaying an accepted
+// provider receipt. Version 2 binds the exact immutable creation objective;
+// the accepted failure count remains the one persisted with that intent and
+// is not recomputed from later replay state.
+func validateRoutingDecisionForSnapshot(s Snapshot, invocation runtime.Invocation, evidence *access.RoutingDecision) error {
+	policy := s.Creation.Config.ModelPolicy
+	if policy == nil || policy.DecisionEvidenceVersion != 2 {
+		return nil
+	}
+	if _, configured := policy.Rules[invocation.Profile.Role]; !configured {
+		if evidence != nil {
+			return errors.New("routing evidence is not enabled for this role")
+		}
+		return nil
+	}
+	if evidence == nil {
+		return errors.New("version 2 routing evidence is missing during replay")
+	}
+	objectiveHash, err := modelpolicy.ObjectiveDigest(s.Creation.Objective)
+	if err != nil || objectiveHash != evidence.ObjectiveHash {
+		return errors.New("recorded calibration objective differs from immutable creation")
+	}
+	selected, expected, err := modelSelectionForObjectiveHash(s.Creation.Config, invocation.Profile.Role, int64(len(invocation.Input)), evidence.AcceptedFailures, objectiveHash)
+	if err != nil || selected != invocation.Profile || !sameCanonical(expected, evidence) {
+		return errors.New("recorded calibration routing decision differs from immutable policy")
+	}
+	return nil
+}
+
 func providerInputIdentity(c config.Config, invocation runtime.Invocation) (string, error) {
 	var inputHash string
 	var err error
@@ -195,6 +224,13 @@ func validateRoutingDecisionForProfile(c config.Config, profile runtime.Profile,
 	}
 	if inputBytes >= 0 && evidence.ContextBytes != inputBytes {
 		return errors.New("routing decision input size differs from exact invocation")
+	}
+	if policy.DecisionEvidenceVersion == 2 {
+		want, expected, err := modelSelectionForObjectiveHash(c, profile.Role, evidence.ContextBytes, evidence.AcceptedFailures, evidence.ObjectiveHash)
+		if err != nil || want != profile || !sameCanonical(expected, evidence) {
+			return errors.New("version 2 routing evidence differs from frozen calibration decision")
+		}
+		return nil
 	}
 	decision, err := modelpolicy.Select(*policy, modelpolicy.Request{
 		Role: profile.Role, ReadOnly: profile.Role == "explorer", Complexity: modelpolicy.LevelMedium, Risk: modelpolicy.LevelMedium,

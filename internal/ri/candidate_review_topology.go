@@ -360,7 +360,7 @@ func candidateReviewBoundedPaths(paths []string, maxPaths int) []string {
 	if len(paths) > maxPaths {
 		paths = paths[:maxPaths]
 	}
-	return append([]string(nil), paths...)
+	return append([]string{}, paths...)
 }
 
 func uniqueSortedCandidatePaths(paths []string) []string {

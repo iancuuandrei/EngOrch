@@ -134,6 +134,9 @@ func replayRoleProvider(s *Snapshot, event journal.Event) error {
 	if err != nil || invocation.Profile.Role != receipt.Role || invocation.Profile.Runtime != "opencode-http" || receipt.InvocationID != invocation.ID || receipt.Version != 1 || safepath.RequireDigest(receipt.AccessInvocationID) != nil || safepath.RequireDigest(receipt.RuntimeJournalHead) != nil || safepath.RequireDigest(receipt.GatewayJournalHead) != nil {
 		return errors.New("provider role receipt identity mismatch")
 	}
+	if err := validateRoutingDecisionForSnapshot(*s, invocation, receipt.RoutingDecision); err != nil {
+		return err
+	}
 	if err := runtime.ValidateResult(invocation, receipt.Result, true); err != nil {
 		return err
 	}
@@ -422,6 +425,9 @@ func replayPlannerProvider(s *Snapshot, event journal.Event) error {
 	resolved, _, err := ConfiguredProviderExpectation(s.Creation.Config, "planner", invocation.Profile)
 	if err != nil || receipt.ObservedProvider != resolved.Model.Provider || !providergateway.AcceptsObservedModel(resolved.Model, receipt.ObservedModel) {
 		return errors.New("direct planner provider observation substituted")
+	}
+	if err := validateRoutingDecisionForSnapshot(*s, invocation, receipt.RoutingDecision); err != nil {
+		return err
 	}
 	selected, err := resolveProviderRoutingForRecordedEvidence(s.Creation.Config, s.RunID, invocation, 1, receipt.RoutingDecision)
 	if err != nil || selected.Intent.Reservation.InvocationID != receipt.AccessInvocationID || !sameCanonical(selected.Intent.RoutingDecision, receipt.RoutingDecision) {

@@ -44,6 +44,54 @@ func TestRoutingDecisionEvidenceIsOptionalAndIdentityBound(t *testing.T) {
 	}
 }
 
+func TestCalibrationRoutingEvidenceV2IsIdentityBoundAndValidated(t *testing.T) {
+	_, _, intent := activeFixture(t)
+	intent.Route.Role = "fixer"
+	intent.RoutingDecision = &RoutingDecision{
+		Version: 2, ConfigID: strings.Repeat("c", 64), ProfileName: "sol",
+		Model: intent.Route.Model, Effort: intent.Route.Effort,
+		Reason: "calibrated-candidate", ContextBytes: 32, AcceptedFailures: 0,
+		ObjectiveHash: strings.Repeat("d", 64),
+		Calibration: &CalibrationDecision{
+			Digest: strings.Repeat("e", 64), FamilyID: "go-fixer", BaselineProfile: "luna", CandidateProfile: "sol",
+			SelectionReason: "candidate_quality_improved_train_and_holdout", ScopeMatched: true,
+			CandidateSelected: true, CandidateApplied: true,
+			Training: CalibrationArmCounts{
+				Baseline:  CalibrationOutcomeCounts{Assigned: 1, Failed: 1},
+				Candidate: CalibrationOutcomeCounts{Assigned: 1, Accepted: 1},
+			},
+			Holdout: CalibrationArmCounts{
+				Baseline:  CalibrationOutcomeCounts{Assigned: 1, Failed: 1},
+				Candidate: CalibrationOutcomeCounts{Assigned: 1, Accepted: 1},
+			},
+		},
+	}
+	id, err := intent.ID()
+	if err != nil {
+		t.Fatalf("valid v2 calibration evidence was rejected: %v", err)
+	}
+	changed := intent
+	copyEvidence := *intent.RoutingDecision
+	copyCalibration := *intent.RoutingDecision.Calibration
+	copyEvidence.Calibration = &copyCalibration
+	changed.RoutingDecision = &copyEvidence
+	copyCalibration.Digest = strings.Repeat("f", 64)
+	changedID, err := changed.ID()
+	if err != nil || changedID == id {
+		t.Fatalf("calibration artifact digest was not identity-bound: %q %q %v", id, changedID, err)
+	}
+	copyCalibration.Digest = intent.RoutingDecision.Calibration.Digest
+	copyEvidence.ObjectiveHash = strings.Repeat("a", 64)
+	changedID, err = changed.ID()
+	if err != nil || changedID == id {
+		t.Fatalf("objective digest was not identity-bound: %q %q %v", id, changedID, err)
+	}
+	copyEvidence.Reason = "calibration-objective-out-of-scope"
+	if _, err := changed.ID(); err == nil {
+		t.Fatal("out-of-scope evidence was allowed to claim the calibrated candidate")
+	}
+}
+
 func TestDurableAdmissionReplaysBudgetAndPolicy(t *testing.T) {
 	profile := fixture()
 	profile.Kind, profile.CredentialRef, profile.AuthMode = "subscription", "", "session"

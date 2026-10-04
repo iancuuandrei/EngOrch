@@ -113,9 +113,31 @@ func TestSelectRejectsOutOfBoundsSignalsAndThresholds(t *testing.T) {
 
 func TestPolicyRejectsUnknownDecisionEvidenceVersion(t *testing.T) {
 	policy := FixturePolicy()
-	policy.DecisionEvidenceVersion = 2
+	policy.DecisionEvidenceVersion = 3
 	if _, err := Select(policy, Request{Role: "writer", Complexity: LevelMedium, Risk: LevelMedium, Uncertainty: LevelMedium}); err == nil {
 		t.Fatal("unknown decision evidence version was accepted")
+	}
+}
+
+func TestDecisionEvidenceVersion2RequiresExactCalibrationProfiles(t *testing.T) {
+	calibration := fixtureCalibration()
+	policy := Policy{
+		Version: 1, DecisionEvidenceVersion: 2, Calibration: &calibration,
+		Profiles: []Profile{calibration.Baseline, calibration.Candidate, {Name: "strong", Runtime: "codex", Provider: "codex", Model: "gpt-6-astra", Effort: "high"}},
+		Rules:    map[string]Rule{"fixer": {DefaultProfile: calibration.Baseline.Name, EscalatedProfile: "strong", ContextEscalationTokens: MaxContextTokens, ContextEscalationBytes: MaxContextBytes, FailureEscalationCount: 1}},
+	}
+	decision, err := Select(policy, Request{Role: "fixer", Complexity: LevelMedium, Risk: LevelMedium, Uncertainty: LevelMedium, ContextTokens: 1})
+	if err != nil || decision.Profile.Name != calibration.Baseline.Name {
+		t.Fatalf("calibration artifact changed static baseline selection: %#v %v", decision, err)
+	}
+	policy.Calibration = nil
+	if _, err := Select(policy, Request{Role: "fixer", Complexity: LevelMedium, Risk: LevelMedium, Uncertainty: LevelMedium}); err == nil {
+		t.Fatal("evidence version 2 accepted without calibration")
+	}
+	policy.DecisionEvidenceVersion = 1
+	policy.Calibration = &calibration
+	if _, err := Select(policy, Request{Role: "fixer", Complexity: LevelMedium, Risk: LevelMedium, Uncertainty: LevelMedium}); err == nil {
+		t.Fatal("calibration was accepted without evidence version 2")
 	}
 }
 
