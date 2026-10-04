@@ -33,6 +33,8 @@ const autonomousPlannerContextGoSourceV2 = "go-source-context-v2"
 
 const autonomousPlannerContextGoContractV1 = "go-contract-context-v1"
 
+const autonomousPlannerContextGoContractV2 = "go-contract-context-v2"
+
 const isolatedWriterPolicyMaxBytes = 32 << 10
 
 type isolatedWriterPolicyFile struct {
@@ -94,11 +96,11 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	parallelWriters := fs.Bool("parallel-writers", false, "allow two independent initial implementation tasks when justified")
 	isolatedWriters := fs.Bool("isolated-writers", false, "run an explicitly resource-bounded initial implementation cohort in separate worktrees")
 	isolationPolicyPath := fs.String("isolation-policy", "", "strict versioned JSON resource capacity and per-writer estimate file (required with --isolated-writers)")
-	plannerContext := fs.String("planner-context", "", "planner evidence mode: source-bounded-v1 or pinned go-source-context-v1/go-source-context-v2/go-contract-context-v1")
-	plannerContextRIExecutable := fs.String("planner-context-ri-executable", "", "absolute path to the pinned Go-source RI parser (required for either go-source-context mode)")
+	plannerContext := fs.String("planner-context", "", "planner evidence mode: source-bounded-v1 or pinned go-source-context-v1/go-source-context-v2/go-contract-context-v1/go-contract-context-v2")
+	plannerContextRIExecutable := fs.String("planner-context-ri-executable", "", "absolute path to the pinned Go RI parser (required for Go source/contract contexts)")
 	plannerContextRIExecutableSHA256 := fs.String("planner-context-ri-executable-sha256", "", "lowercase SHA-256 of the pinned Go-source RI parser")
-	plannerContextParseCache := fs.Bool("planner-context-parse-cache", false, "reuse local Go parser facts for go-source-context-v2 or go-contract-context-v1")
-	reviewImpactContext := fs.Bool("review-impact-context", false, "attach bounded candidate Go topology to reviews (requires go-contract-context-v1 and pinned RI)")
+	plannerContextParseCache := fs.Bool("planner-context-parse-cache", false, "reuse local Go parser facts for go-source-context-v2 or go-contract-context-v1/v2")
+	reviewImpactContext := fs.Bool("review-impact-context", false, "attach bounded candidate Go topology to reviews (requires go-contract-context-v1/v2 and pinned RI)")
 	candidateFactsCache := fs.Bool("review-impact-candidate-facts-cache", false, "reuse local candidate Go syntax facts during review-impact collection")
 	promptRecipe := fs.String("prompt-recipe", "", "opt in to cache-prefix-v1 prompt ordering")
 	autoCompactTokenLimit := fs.Int64("auto-compact-token-limit", 0, "opt in to Codex automatic in-turn compaction at this positive token threshold")
@@ -141,8 +143,8 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	}
 	reviewImpactContextVersion := 0
 	if *reviewImpactContext {
-		if *plannerContext != autonomousPlannerContextGoContractV1 {
-			return errors.New("review-impact-context requires --planner-context go-contract-context-v1 and its pinned RI binding")
+		if *plannerContext != autonomousPlannerContextGoContractV1 && *plannerContext != autonomousPlannerContextGoContractV2 {
+			return errors.New("review-impact-context requires --planner-context go-contract-context-v1 or go-contract-context-v2 and its pinned RI binding")
 		}
 		reviewImpactContextVersion = 1
 	}
@@ -189,8 +191,8 @@ func validatePlannerParseCacheVersion(plannerContext string, version int) error 
 	if version == 0 {
 		return nil
 	}
-	if version != 1 || plannerContext != autonomousPlannerContextGoSourceV2 && plannerContext != autonomousPlannerContextGoContractV1 {
-		return errors.New("planner-context-parse-cache requires go-source-context-v2 or go-contract-context-v1")
+	if version != 1 || plannerContext != autonomousPlannerContextGoSourceV2 && plannerContext != autonomousPlannerContextGoContractV1 && plannerContext != autonomousPlannerContextGoContractV2 {
+		return errors.New("planner-context-parse-cache requires go-source-context-v2 or go-contract-context-v1/v2")
 	}
 	return nil
 }
@@ -250,7 +252,7 @@ func validateAutonomousPlannerContext(mode, executable, executableSHA256 string)
 		if executable != "" || executableSHA256 != "" {
 			return errors.New("planner-context RI executable binding requires a Go planner context")
 		}
-	case autonomousPlannerContextGoSourceV1, autonomousPlannerContextGoSourceV2, autonomousPlannerContextGoContractV1:
+	case autonomousPlannerContextGoSourceV1, autonomousPlannerContextGoSourceV2, autonomousPlannerContextGoContractV1, autonomousPlannerContextGoContractV2:
 		if executable == "" || executableSHA256 == "" {
 			return errors.New("Go planner contexts require planner-context-ri-executable and planner-context-ri-executable-sha256")
 		}
@@ -261,7 +263,7 @@ func validateAutonomousPlannerContext(mode, executable, executableSHA256 string)
 			return errors.New("planner-context-ri-executable-sha256 must be 64 lowercase hexadecimal characters")
 		}
 	default:
-		return errors.New("planner-context must be empty, source-bounded-v1, go-source-context-v1, go-source-context-v2, or go-contract-context-v1")
+		return errors.New("planner-context must be empty, source-bounded-v1, go-source-context-v1, go-source-context-v2, go-contract-context-v1, or go-contract-context-v2")
 	}
 	return nil
 }
@@ -307,8 +309,8 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 	if err := validatePlannerParseCacheVersion(plannerContext, plannerParseCacheVersion); err != nil {
 		return err
 	}
-	if reviewImpactContextVersion != 0 && (reviewImpactContextVersion != 1 || plannerContext != autonomousPlannerContextGoContractV1 || plannerContextRIExecutable == "" || plannerContextRIExecutableSHA256 == "") {
-		return errors.New("review impact context requires go-contract-context-v1 and a pinned RI parser")
+	if reviewImpactContextVersion != 0 && (reviewImpactContextVersion != 1 || plannerContext != autonomousPlannerContextGoContractV1 && plannerContext != autonomousPlannerContextGoContractV2 || plannerContextRIExecutable == "" || plannerContextRIExecutableSHA256 == "") {
+		return errors.New("review impact context requires go-contract-context-v1 or go-contract-context-v2 and a pinned RI parser")
 	}
 	if candidateFactsCacheVersion != 0 && (candidateFactsCacheVersion != 1 || reviewImpactContextVersion != 1) {
 		return errors.New("review-impact-candidate-facts-cache requires review impact context")

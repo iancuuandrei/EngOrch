@@ -478,3 +478,25 @@ integrated increment, without resurrecting a G0 promotion ladder.
 - Raw notifications from an exact completed Luna High writer thread report
   an effective context window of 258,400 tokens. Fresh-round and organic
   compaction experiments still need predeclared settings and live evidence.
+
+## Checkpoint — v1.0.15/16 final batch qualification pending
+
+- Public main remains qualified v1.0.14. The original v1.0.15 clean full Go
+  suite passed; subsequent PowerShell variable and test fixture duplication
+  fixes belong to that same increment. A final clean v1.0.16 suite will cover
+  both increments before integration. Old zero-effect v1.0.15 pilot preparations
+  are superseded and will not be evaluated.
+- Independent review approved strict writer output and the optional fixer
+  route, and the receiver-aware v2 contract context. Receiver ranking repairs
+  cover unrelated method counts and generic receiver syntax. Root declaration
+  admission passes offline; fresh live task acceptance remains pending.
+- The v1.0.14 serial topology run blocked after a workspace intent, before a
+  workspace outcome or candidate. No materialized workspace was observed; the
+  effect remains unresolved and its underlying error UNKNOWN. The old run is
+  preserved and will not be resent. Parallel has not been dispatched.
+- Nine identity-audited candidate-cache measurements confirm exact warm reuse
+  and bounded fixture storage. Overlapping timings and host contention provide
+  no speedup or memory improvement evidence. The cache remains opt-in.
+- Fixed-six 6/6, generated-code ownership, real topology comparison, calibrated
+  allocation, accepted fresh rounds/native compaction and release gates remain
+  open. Product fixes do not substitute for those outcomes.

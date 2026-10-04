@@ -161,25 +161,25 @@ if ($Action -eq 'Evaluate' -and $EvalMode -eq 'PR5Matched' -and ($ParallelWriter
 }
 Assert-IsolatedRunnerOptionShape ([bool]$IsolatedWriters) $IsolationPolicyPath ([bool]$ParallelWriters) $EvalMode $MaxParallel
 function Test-GoSourceContextMode([string]$Mode) {
-    return $Mode -ceq 'go-source-context-v1' -or $Mode -ceq 'go-source-context-v2' -or $Mode -ceq 'go-contract-context-v1'
+    return $Mode -ceq 'go-source-context-v1' -or $Mode -ceq 'go-source-context-v2' -or $Mode -ceq 'go-contract-context-v1' -or $Mode -ceq 'go-contract-context-v2'
 }
 function Assert-ReviewImpactRunnerBindingShape([bool]$Enabled, [string]$PlannerMode, [string]$Mode) {
     if (-not $Enabled) { return }
     if ($Mode -ne 'Native') { throw 'ReviewImpactContext requires Native mode.' }
-    if ($PlannerMode -cne 'go-contract-context-v1') {
-        throw 'ReviewImpactContext requires PlannerContext go-contract-context-v1 and its explicit pinned RI parser binding.'
+    if ($PlannerMode -cne 'go-contract-context-v1' -and $PlannerMode -cne 'go-contract-context-v2') {
+        throw 'ReviewImpactContext requires PlannerContext go-contract-context-v1 or go-contract-context-v2 and its explicit pinned RI parser binding.'
     }
 }
 function Assert-CandidateFactsCacheRunnerBindingShape([bool]$Enabled, [bool]$ReviewImpactEnabled, [string]$PlannerMode, [string]$Mode) {
     if (-not $Enabled) { return }
     if ($Mode -ne 'Native') { throw 'CandidateFactsCache requires Native mode.' }
-    if (-not $ReviewImpactEnabled -or $PlannerMode -cne 'go-contract-context-v1') {
-        throw 'CandidateFactsCache requires ReviewImpactContext, PlannerContext go-contract-context-v1, and its explicit pinned RI parser binding.'
+    if (-not $ReviewImpactEnabled -or ($PlannerMode -cne 'go-contract-context-v1' -and $PlannerMode -cne 'go-contract-context-v2')) {
+        throw 'CandidateFactsCache requires ReviewImpactContext, PlannerContext go-contract-context-v1 or go-contract-context-v2, and its explicit pinned RI parser binding.'
     }
 }
 function Assert-PlannerContextBindingShape([string]$Mode, [string]$Executable, [string]$ExecutableSHA256) {
-    if ($Mode -cnotin @('', 'source-bounded-v1', 'go-source-context-v1', 'go-source-context-v2', 'go-contract-context-v1')) {
-        throw 'PlannerContext must be empty, source-bounded-v1, go-source-context-v1, go-source-context-v2, or go-contract-context-v1.'
+    if ($Mode -cnotin @('', 'source-bounded-v1', 'go-source-context-v1', 'go-source-context-v2', 'go-contract-context-v1', 'go-contract-context-v2')) {
+        throw 'PlannerContext must be empty, source-bounded-v1, go-source-context-v1, go-source-context-v2, go-contract-context-v1, or go-contract-context-v2.'
     }
     if (Test-GoSourceContextMode $Mode) {
         if ([string]::IsNullOrWhiteSpace($Executable) -or [string]::IsNullOrWhiteSpace($ExecutableSHA256)) {

@@ -202,7 +202,8 @@ own clean clone and explicit human approval/review accounting; its historical
 single-task acceptance is not treated as a six-repository result.
 
 The opt-in `-CandidateFactsCache` runner switch is available only in Native
-mode with `-ReviewImpactContext`, `-PlannerContext go-contract-context-v1`, and
+mode with `-ReviewImpactContext`, `-PlannerContext go-contract-context-v1` or
+`go-contract-context-v2`, and
 the explicit pinned RI executable/hash. Pass it to both Prepare and Evaluate;
 the runner rejects mismatches before evaluation effects and checks the
 inspected execution policy version. Default runs omit the switch and preserve
@@ -318,6 +319,16 @@ requires the inspected run to retain the same binding. It never discovers the
 parser from PATH or environment variables. This treatment uses bounded,
 partial Go source graph evidence and should be evaluated as a distinct arm;
 the `source-bounded-v1` comparison below does not qualify it.
+
+The explicit `go-contract-context-v2` planner context uses the same pinned RI
+executable/hash binding and is a separate opt-in from contract v1. It adds
+bounded receiver-aware corpus selection; it does not alter v1/default creation
+records or replay. The existing `-ReviewImpactContext` and
+`-CandidateFactsCache` options are valid with either contract context when the
+same explicit pinned RI binding is supplied. The CLI's version-1
+`--planner-context-parse-cache` option is also allowed for contract v2. Receipts
+continue to bind the exact requested context string and inspected execution
+echo; coverage remains partial and does not imply compiler or call resolution.
 
 For a matched comparison, prepare fresh runs for both treatments from the same
 six manifest tasks: `go-humanize`, `afero`, `go-multierror`, `go-atomic`,

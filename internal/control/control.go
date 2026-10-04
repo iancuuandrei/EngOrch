@@ -121,10 +121,10 @@ func (p ExecutionPolicy) Validate() error {
 	if p.Context != "" && p.Context != taskContextBoundedV1 {
 		return errors.New("invalid execution task context")
 	}
-	if p.PlannerContext != "" && p.PlannerContext != plannerContextSourceBoundedV1 && p.PlannerContext != plannerContextGoSourceV1 && p.PlannerContext != plannerContextGoSourceV2 && p.PlannerContext != plannerContextGoContractV1 {
+	if p.PlannerContext != "" && p.PlannerContext != plannerContextSourceBoundedV1 && p.PlannerContext != plannerContextGoSourceV1 && p.PlannerContext != plannerContextGoSourceV2 && p.PlannerContext != plannerContextGoContractV1 && p.PlannerContext != plannerContextGoContractV2 {
 		return errors.New("invalid execution planner context")
 	}
-	if p.PlannerContext == plannerContextGoSourceV1 || p.PlannerContext == plannerContextGoSourceV2 || p.PlannerContext == plannerContextGoContractV1 {
+	if p.PlannerContext == plannerContextGoSourceV1 || p.PlannerContext == plannerContextGoSourceV2 || p.PlannerContext == plannerContextGoContractV1 || p.PlannerContext == plannerContextGoContractV2 {
 		if p.PlannerContextRIExecutable == "" || !filepath.IsAbs(p.PlannerContextRIExecutable) || filepath.Clean(p.PlannerContextRIExecutable) != p.PlannerContextRIExecutable || safepath.RequireDigest(p.PlannerContextRIExecutableSHA256) != nil {
 			return errors.New("Go planner context requires a pinned RI executable")
 		}
@@ -134,14 +134,14 @@ func (p ExecutionPolicy) Validate() error {
 	if p.PlannerParseCacheVersion != 0 && p.PlannerParseCacheVersion != 1 {
 		return errors.New("invalid planner parse-cache version")
 	}
-	if p.PlannerParseCacheVersion == 1 && p.PlannerContext != plannerContextGoSourceV2 && p.PlannerContext != plannerContextGoContractV1 {
-		return errors.New("planner parse cache requires go-source-context-v2 or go-contract-context-v1")
+	if p.PlannerParseCacheVersion == 1 && p.PlannerContext != plannerContextGoSourceV2 && p.PlannerContext != plannerContextGoContractV1 && p.PlannerContext != plannerContextGoContractV2 {
+		return errors.New("planner parse cache requires go-source-context-v2 or go-contract-context-v1/v2")
 	}
 	if p.ReviewImpactContextVersion != 0 && p.ReviewImpactContextVersion != 1 {
 		return errors.New("invalid review impact context version")
 	}
-	if p.ReviewImpactContextVersion == 1 && (p.PlannerContext != plannerContextGoContractV1 || p.PlannerContextRIExecutable == "" || safepath.RequireDigest(p.PlannerContextRIExecutableSHA256) != nil) {
-		return errors.New("review impact context requires go-contract-context-v1 and a pinned RI parser")
+	if p.ReviewImpactContextVersion == 1 && ((p.PlannerContext != plannerContextGoContractV1 && p.PlannerContext != plannerContextGoContractV2) || p.PlannerContextRIExecutable == "" || safepath.RequireDigest(p.PlannerContextRIExecutableSHA256) != nil) {
+		return errors.New("review impact context requires go-contract-context-v1/v2 and a pinned RI parser")
 	}
 	if p.CandidateFactsCacheVersion != 0 && p.CandidateFactsCacheVersion != 1 {
 		return errors.New("invalid candidate facts cache version")

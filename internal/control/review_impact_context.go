@@ -164,8 +164,8 @@ func reviewImpactBase(s Snapshot) (ri.Source, ri.GoEngineeringGraph, ri.GoModule
 	var source ri.Source
 	var graph ri.GoEngineeringGraph
 	var inventory ri.GoModuleInventory
-	if !reviewImpactContextEnabled(s) || s.Creation.Execution.PlannerContext != plannerContextGoContractV1 || s.PlannerGoContext == nil || s.PlannerGoContext.Version != 4 || s.PlannerGoContext.Unavailable != "" || s.PlannerGoContext.Graph == nil || s.PlannerGoContext.ContractContext == nil || s.PlannerGoContext.Graph.ModuleInventory == nil {
-		return source, graph, inventory, errors.New("review impact context requires admitted go-contract-context-v1 evidence")
+	if !reviewImpactContextEnabled(s) || (s.Creation.Execution.PlannerContext != plannerContextGoContractV1 && s.Creation.Execution.PlannerContext != plannerContextGoContractV2) || s.PlannerGoContext == nil || (s.PlannerGoContext.Version != 4 && s.PlannerGoContext.Version != 5) || s.PlannerGoContext.Unavailable != "" || s.PlannerGoContext.Graph == nil || s.PlannerGoContext.ContractContext == nil || s.PlannerGoContext.Graph.ModuleInventory == nil {
+		return source, graph, inventory, errors.New("review impact context requires admitted go-contract-context evidence")
 	}
 	identity := s.Creation.Repository
 	if err := identity.Validate(); err != nil {
@@ -373,7 +373,7 @@ func (s Snapshot) reviewImpactContextForCandidate(candidateID string) *ReviewImp
 }
 
 func validateReviewImpactContextRecord(s Snapshot, record ReviewImpactContextRecord) error {
-	if !reviewImpactContextEnabled(s) || s.Creation.Execution.PlannerContext != plannerContextGoContractV1 || s.State != "REVIEWING" || s.ReviewHost != nil || s.Review != nil || s.Candidate == nil || s.Workspace == nil || s.PlannerGoContext == nil || s.PlannerGoContext.Graph == nil || s.PlannerGoContext.Graph.ModuleInventory == nil {
+	if !reviewImpactContextEnabled(s) || (s.Creation.Execution.PlannerContext != plannerContextGoContractV1 && s.Creation.Execution.PlannerContext != plannerContextGoContractV2) || s.State != "REVIEWING" || s.ReviewHost != nil || s.Review != nil || s.Candidate == nil || s.Workspace == nil || s.PlannerGoContext == nil || s.PlannerGoContext.Graph == nil || s.PlannerGoContext.Graph.ModuleInventory == nil {
 		return errors.New("review impact context transition rejected")
 	}
 	source, baseGraph, baseInventory, err := reviewImpactBase(s)

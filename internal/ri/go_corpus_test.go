@@ -57,6 +57,118 @@ func TestGoCorpusTermsAndScoringAreDeterministic(t *testing.T) {
 	}
 }
 
+func TestReceiverAwareCorpusSelectionPrefersExactReceiverDeclaration(t *testing.T) {
+	targets := goCorpusReceiverTargets("Preserve Logger.WithValues behavior")
+	if len(targets) != 1 || targets[0] != (goCorpusReceiverTarget{receiver: "Logger", method: "WithValues"}) {
+		t.Fatalf("unexpected receiver target extraction: %#v", targets)
+	}
+	root := []byte("package logr\ntype Logger struct{}\nfunc (Logger) WithValues(values ...any) Logger { return Logger{} }\n")
+	decoy := []byte("package examples\ntype tabLogger struct{}\nfunc (tabLogger) WithValues(values ...any) {}\nfunc ExampleLogger() { tabLogger{}.WithValues() }\n")
+	if got, want := goCorpusReceiverAwareRank(root, targets), goCorpusReceiverAwareRank(decoy, targets); !got.betterThan(want) {
+		t.Fatalf("exact receiver declaration did not beat example/other receiver: root=%+v decoy=%+v", got, want)
+	}
+	var repeated strings.Builder
+	repeated.WriteString("package examples\n")
+	for index := 0; index < 32; index++ {
+		repeated.WriteString(fmt.Sprintf("type Other%d struct{}\nfunc (Other%d) WithValues(values ...any) {}\n", index, index))
+	}
+	if got, want := goCorpusReceiverAwareRank(root, targets), goCorpusReceiverAwareRank([]byte(repeated.String()), targets); !got.betterThan(want) {
+		t.Fatalf("repeated unrelated receiver methods outranked exact declaration: root=%+v unrelated=%+v", got, want)
+	}
+	generic := []byte("package logr\ntype Logger[T any] struct{}\nfunc (l *Logger[T]) WithValues(values ...any) Logger[T] { return *l }\n")
+	if got, want := goCorpusReceiverAwareRank(generic, targets), goCorpusReceiverAwareRank(decoy, targets); !got.betterThan(want) || !got.exact {
+		t.Fatalf("generic pointer receiver was not ranked as exact: generic=%+v decoy=%+v", got, want)
+	}
+}
+
+func TestReceiverAwareCorpusAdmitsRootDeclarationBeyondPathBudget(t *testing.T) {
+	client := actualGoCorpusClient(t)
+	root := t.TempDir()
+	files := make(map[string][]byte, goCorpusMaxFiles+2)
+	for index := 0; index < goCorpusMaxFiles+1; index++ {
+		files[fmt.Sprintf("examples/logger_%02d.go", index)] = []byte(fmt.Sprintf("package examples\ntype Logger%d struct{}\nfunc (Logger%d) WithValues(values ...any) {}\n", index, index))
+	}
+	files["logr.go"] = []byte("package logr\ntype Logger struct{}\nfunc (Logger) WithValues(values ...any) Logger { return Logger{} }\n")
+	initGoCorpusGit(t, root, files)
+	identity, err := repository.Discover(context.Background(), root, "receiver-aware-corpus")
+	if err != nil {
+		t.Fatal(err)
+	}
+	objective := "Preserve Logger.WithValues behavior"
+	legacy, err := CollectCommittedGoCorpus(context.Background(), identity, client, "", objective)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if corpusHasPath(legacy, "logr.go") {
+		t.Fatal("legacy path-only corpus unexpectedly admitted root declaration")
+	}
+	updated, err := CollectCommittedGoCorpusWithOptions(context.Background(), identity, client, "", objective, GoCorpusOptions{SelectionVersion: GoCorpusSelectionReceiverAwareV2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.AttemptedFiles != goCorpusMaxFiles+2 || updated.ReadFiles != goCorpusMaxFiles || !corpusHasPath(updated, "logr.go") {
+		t.Fatalf("receiver-aware corpus did not retain bounded root declaration: attempted=%d read=%d root=%t", updated.AttemptedFiles, updated.ReadFiles, corpusHasPath(updated, "logr.go"))
+	}
+	if !corpusHasOmission(updated, "examples/logger_", "declaration_file_budget") {
+		t.Fatal("receiver-aware final corpus omission was not explicit")
+	}
+}
+
+// TestReceiverAwareCorpusSelectsConfiguredCommittedRootAPI is an offline
+// qualification hook for a public pinned repository. It does not read a
+// working-tree overlay or call a provider.
+func TestReceiverAwareCorpusSelectsConfiguredCommittedRootAPI(t *testing.T) {
+	root := os.Getenv("ENGORCH_RECEIVER_AWARE_REPOSITORY")
+	if root == "" {
+		t.Skip("ENGORCH_RECEIVER_AWARE_REPOSITORY is not configured")
+	}
+	client := actualGoCorpusClient(t)
+	identity, err := repository.Discover(context.Background(), root, "receiver-aware-qualified")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expected := os.Getenv("ENGORCH_RECEIVER_AWARE_COMMIT"); expected != "" && identity.Commit != expected {
+		t.Fatalf("configured repository commit mismatch: got=%s", identity.Commit)
+	}
+	corpus, err := CollectCommittedGoCorpusWithOptions(context.Background(), identity, client, "", "Preserve Logger.WithValues behavior", GoCorpusOptions{SelectionVersion: GoCorpusSelectionReceiverAwareV2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if corpus.Unavailable != "" || !corpusHasPath(corpus, "logr.go") {
+		t.Fatalf("receiver-aware corpus did not retain the configured root API: unavailable=%q read=%d", corpus.Unavailable, corpus.ReadFiles)
+	}
+	found := false
+	for _, input := range corpus.GraphInputs {
+		if input.Facts.Path != "logr.go" {
+			continue
+		}
+		for _, declaration := range input.Facts.Declarations {
+			found = found || declaration.Name == "WithValues" && declaration.Kind == "method_declaration"
+		}
+	}
+	if !found {
+		t.Fatal("configured root API declaration was absent from receiver-aware graph input")
+	}
+}
+
+func corpusHasPath(corpus GoCommittedCorpus, path string) bool {
+	for _, source := range corpus.Sources {
+		if source.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+func corpusHasOmission(corpus GoCommittedCorpus, prefix, reason string) bool {
+	for _, omission := range corpus.Omissions {
+		if strings.HasPrefix(omission.Path, prefix) && omission.Reason == reason {
+			return true
+		}
+	}
+	return false
+}
+
 func TestGoCorpusGraphBudgetAdmitsSmallCandidateAndRejectsOversizedExtension(t *testing.T) {
 	producer := strings.Repeat("a", 64)
 	sourceID := strings.Repeat("b", 64)

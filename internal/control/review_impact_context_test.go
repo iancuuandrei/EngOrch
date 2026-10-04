@@ -27,6 +27,11 @@ func TestReviewImpactContextPolicyAndHistoryAreBounded(t *testing.T) {
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid review-impact policy rejected: %v", err)
 	}
+	receiverAware := valid
+	receiverAware.PlannerContext = plannerContextGoContractV2
+	if err := receiverAware.Validate(); err != nil {
+		t.Fatalf("receiver-aware review-impact policy rejected: %v", err)
+	}
 	cache := valid
 	cache.CandidateFactsCacheVersion = 1
 	if err := cache.Validate(); err != nil {
@@ -188,6 +193,19 @@ func TestReviewImpactContextAdmitsAndReplaysExactCandidateProjection(t *testing.
 	}
 	if err := validateReviewImpactContextRecord(snapshot, record); err != nil {
 		t.Fatalf("fresh candidate record did not validate: %v", err)
+	}
+	receiverAwareSnapshot := snapshot
+	receiverAwareExecution := *snapshot.Creation.Execution
+	receiverAwareExecution.PlannerContext = plannerContextGoContractV2
+	receiverAwareSnapshot.Creation.Execution = &receiverAwareExecution
+	receiverAwarePlanner := *snapshot.PlannerGoContext
+	receiverAwarePlanner.Version = 5
+	receiverAwarePlanner.CorpusSelectionVersion = ri.GoCorpusSelectionReceiverAwareV2
+	receiverAwarePlanner.RecordID = strings.Repeat("3", 64)
+	receiverAwareSnapshot.PlannerGoContext = &receiverAwarePlanner
+	receiverAwareRecord, err := makeReviewImpactContextRecord(receiverAwareSnapshot, source, baseGraph, baseInventory, corpus)
+	if err != nil || validateReviewImpactContextRecord(receiverAwareSnapshot, receiverAwareRecord) != nil {
+		t.Fatalf("receiver-aware contract evidence did not admit review-impact context: make=%v validate=%v", err, validateReviewImpactContextRecord(receiverAwareSnapshot, receiverAwareRecord))
 	}
 	encoded, err := json.Marshal(record)
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/repository"
+	"harness.local/engorch/internal/ri"
 )
 
 func TestPlannerParseCachePolicyIsOptInAndContextBound(t *testing.T) {
@@ -44,6 +45,11 @@ func TestPlannerParseCachePolicyIsOptInAndContextBound(t *testing.T) {
 	contract.PlannerContext = plannerContextGoContractV1
 	if err := contract.Validate(); err != nil {
 		t.Fatalf("contract cache opt-in rejected: %v", err)
+	}
+	receiverAware := opted
+	receiverAware.PlannerContext = plannerContextGoContractV2
+	if err := receiverAware.Validate(); err != nil {
+		t.Fatalf("receiver-aware contract cache opt-in rejected: %v", err)
 	}
 	for name, candidate := range map[string]ExecutionPolicy{
 		"unknown version": func() ExecutionPolicy { p := opted; p.PlannerParseCacheVersion = 2; return p }(),
@@ -138,7 +144,7 @@ func TestPlannerParseCacheCreatesMissingUserCacheDirectorySafely(t *testing.T) {
 }
 
 func TestPlannerParseCacheOptInPreservesPlannerIdentityAndReplayDoesNotRequery(t *testing.T) {
-	for _, mode := range []string{plannerContextGoSourceV2, plannerContextGoContractV1} {
+	for _, mode := range []string{plannerContextGoSourceV2, plannerContextGoContractV1, plannerContextGoContractV2} {
 		t.Run(mode, func(t *testing.T) { testPlannerParseCacheIdentity(t, mode) })
 	}
 }
@@ -200,8 +206,11 @@ func testPlannerParseCacheIdentity(t *testing.T, mode string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cold.Graph == nil || cold.Unavailable != "" || mode == plannerContextGoSourceV2 && cold.Context == nil || mode == plannerContextGoContractV1 && cold.ContractContext == nil {
+	if cold.Graph == nil || cold.Unavailable != "" || mode == plannerContextGoSourceV2 && cold.Context == nil || (mode == plannerContextGoContractV1 || mode == plannerContextGoContractV2) && cold.ContractContext == nil {
 		t.Fatal("cache-enabled admission did not produce the selected evidence")
+	}
+	if mode == plannerContextGoContractV2 && (cold.Version != 5 || cold.CorpusSelectionVersion != ri.GoCorpusSelectionReceiverAwareV2) {
+		t.Fatalf("receiver-aware cache admission lost selection binding: version=%d selection=%d", cold.Version, cold.CorpusSelectionVersion)
 	}
 	cacheDir, err := ensurePlannerParseCacheDir(c.Repository, producer)
 	if err != nil {

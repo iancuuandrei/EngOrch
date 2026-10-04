@@ -161,6 +161,9 @@ func TestAutonomousGoSourcePlannerContextRequiresAndBindsPinnedParser(t *testing
 	if err := validateAutonomousPlannerContext(autonomousPlannerContextGoContractV1, parser, parserHash); err != nil {
 		t.Fatalf("valid contract-context pinned parser binding rejected: %v", err)
 	}
+	if err := validateAutonomousPlannerContext(autonomousPlannerContextGoContractV2, parser, parserHash); err != nil {
+		t.Fatalf("valid contract-context v2 pinned parser binding rejected: %v", err)
+	}
 
 	for _, test := range []struct {
 		name, mode, path, hash string
@@ -168,10 +171,12 @@ func TestAutonomousGoSourcePlannerContextRequiresAndBindsPinnedParser(t *testing
 		{name: "go context missing binding", mode: autonomousPlannerContextGoSourceV1},
 		{name: "go context v2 missing binding", mode: autonomousPlannerContextGoSourceV2},
 		{name: "contract context missing binding", mode: autonomousPlannerContextGoContractV1},
+		{name: "contract context v2 missing binding", mode: autonomousPlannerContextGoContractV2},
 		{name: "go context missing hash", mode: autonomousPlannerContextGoSourceV1, path: parser},
 		{name: "relative parser path", mode: autonomousPlannerContextGoSourceV1, path: "ri.exe", hash: parserHash},
 		{name: "v2 relative parser path", mode: autonomousPlannerContextGoSourceV2, path: "ri.exe", hash: parserHash},
 		{name: "contract relative parser path", mode: autonomousPlannerContextGoContractV1, path: "ri.exe", hash: parserHash},
+		{name: "contract v2 relative parser path", mode: autonomousPlannerContextGoContractV2, path: "ri.exe", hash: parserHash},
 		{name: "unclean parser path", mode: autonomousPlannerContextGoSourceV1, path: filepath.Dir(parser) + string(os.PathSeparator) + "." + string(os.PathSeparator) + filepath.Base(parser), hash: parserHash},
 		{name: "uppercase hash", mode: autonomousPlannerContextGoSourceV1, path: parser, hash: strings.ToUpper(parserHash)},
 		{name: "binding with legacy mode", mode: autonomousPlannerContextSourceBoundedV1, path: parser, hash: parserHash},
@@ -284,12 +289,58 @@ func TestAutonomousContractPlannerContextBindsSeparateOptIn(t *testing.T) {
 	}
 }
 
+func TestAutonomousContractPlannerContextV2AllowsReviewAndParseCacheOptIns(t *testing.T) {
+	parser, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary, err := os.ReadFile(parser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(binary)
+	parserHash := hex.EncodeToString(sum[:])
+	root := autonomousCLIFixture(t)
+	var out bytes.Buffer
+	err = Execute(context.Background(), []string{
+		"run", "--autonomous", "--prepare-only", "--max-parallel", "1",
+		"--planner-context", autonomousPlannerContextGoContractV2,
+		"--planner-context-parse-cache",
+		"--planner-context-ri-executable", parser,
+		"--planner-context-ri-executable-sha256", parserHash,
+		"--review-impact-context", "--review-impact-candidate-facts-cache",
+		"A bounded contract v2 review fixture objective",
+	}, root, &out)
+	if err == nil {
+		t.Fatal("test executable unexpectedly satisfied the RI protocol")
+	}
+	var failure autonomousFailure
+	if decodeErr := json.Unmarshal(out.Bytes(), &failure); decodeErr != nil || failure.RunID == "" {
+		t.Fatalf("contract v2 admission failure did not identify the prepared run: %s (%v)", out.String(), decodeErr)
+	}
+	path, err := runPath(root, failure.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := control.Inspect(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := snapshot.Creation.Execution
+	if policy == nil || policy.PlannerContext != autonomousPlannerContextGoContractV2 || policy.PlannerParseCacheVersion != 1 ||
+		policy.ReviewImpactContextVersion != 1 || policy.CandidateFactsCacheVersion != 1 ||
+		policy.PlannerContextRIExecutable != parser || policy.PlannerContextRIExecutableSHA256 != parserHash {
+		t.Fatalf("contract v2/review/cache/parser policy was not immutably bound: %#v", policy)
+	}
+}
+
 func TestAutonomousReviewImpactContextRequiresAndBindsPinnedContractMode(t *testing.T) {
 	for _, args := range [][]string{
 		{"run", "--autonomous", "--review-impact-candidate-facts-cache", "objective"},
 		{"run", "--autonomous", "--review-impact-context", "objective"},
 		{"run", "--autonomous", "--review-impact-context", "--planner-context", autonomousPlannerContextGoSourceV1, "objective"},
 		{"run", "--autonomous", "--review-impact-context", "--planner-context", autonomousPlannerContextGoContractV1, "objective"},
+		{"run", "--autonomous", "--review-impact-context", "--planner-context", autonomousPlannerContextGoContractV2, "objective"},
 	} {
 		root := autonomousCLIFixture(t)
 		var out bytes.Buffer
@@ -353,6 +404,7 @@ func TestPlannerParseCacheFlagIsContextVersioned(t *testing.T) {
 		{mode: autonomousPlannerContextGoSourceV2, version: 0},
 		{mode: autonomousPlannerContextGoSourceV2, version: 1},
 		{mode: autonomousPlannerContextGoContractV1, version: 1},
+		{mode: autonomousPlannerContextGoContractV2, version: 1},
 		{mode: autonomousPlannerContextGoSourceV1, version: 1, wantErr: true},
 		{mode: autonomousPlannerContextSourceBoundedV1, version: 1, wantErr: true},
 		{mode: autonomousPlannerContextGoSourceV2, version: 2, wantErr: true},
@@ -395,6 +447,7 @@ func TestAutonomousCLIRejectsInvalidOptionsAndNonAutonomousResume(t *testing.T) 
 		{"run", "--autonomous", "--max-parallel", "not-a-number", "objective"},
 		{"run", "--autonomous", "--planner-context", "unsupported", "objective"},
 		{"run", "--autonomous", "--planner-context", autonomousPlannerContextGoSourceV1, "objective"},
+		{"run", "--autonomous", "--planner-context", autonomousPlannerContextGoContractV2, "objective"},
 		{"run", "--autonomous", "--planner-context-parse-cache", "objective"},
 		{"run", "--autonomous", "--planner-context", autonomousPlannerContextGoSourceV1, "--planner-context-parse-cache", "objective"},
 		{"run", "--autonomous", "--planner-context-ri-executable", "C:\\tools\\ri.exe", "--planner-context-ri-executable-sha256", strings.Repeat("a", 64), "objective"},

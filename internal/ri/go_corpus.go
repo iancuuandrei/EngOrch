@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"harness.local/engorch/internal/canonical"
@@ -23,6 +25,7 @@ import (
 
 const (
 	goCorpusMaxFiles       = 24
+	goCorpusDiscoveryFiles = 48
 	goCorpusMaxFileBytes   = 1 << 20
 	goCorpusMaxTotalBytes  = 8 << 20
 	goCorpusMaxGraphBytes  = 512 << 10
@@ -30,6 +33,11 @@ const (
 	goCorpusSourceLocalV1  = "source_local_v1"
 	goCorpusNoEligibleCode = "no_eligible_complete_go_source"
 )
+
+// GoCorpusSelectionReceiverAwareV2 opts into a bounded discovery pass before
+// selecting the final graph corpus. Zero preserves the original path-only
+// selection recipe exactly.
+const GoCorpusSelectionReceiverAwareV2 = 2
 
 // GoCommittedCorpus is an immutable, bounded source-local Go corpus. Counts
 // and omissions preserve incomplete coverage; successful parsing does not
@@ -58,6 +66,10 @@ type GoCorpusOptions struct {
 	ModuleInventory *GoModuleInventory
 	// EnableParseCache permits reuse of validated GoFileFacts entries under cacheDir.
 	EnableParseCache bool
+	// SelectionVersion selects a bounded corpus-ranking recipe. Zero retains
+	// the original path-only recipe; v2 uses exact declaration evidence from
+	// the already admitted discovery bytes.
+	SelectionVersion int
 }
 
 type goCorpusCandidate struct {
@@ -70,6 +82,8 @@ type goCorpusCommittedFile struct {
 	digest      repository.SourceDigest
 	content     []byte
 	packageInfo GoPackageBinding
+	facts       GoFileFacts
+	declRank    goCorpusDeclarationRank
 }
 
 type goCorpusBuffer struct {
@@ -117,6 +131,9 @@ func CollectCommittedGoCorpusWithOptions(ctx context.Context, identity repositor
 			return corpus, err
 		}
 		corpus.ModuleInventory = options.ModuleInventory
+	}
+	if options.SelectionVersion != 0 && options.SelectionVersion != GoCorpusSelectionReceiverAwareV2 {
+		return corpus, errors.New("invalid Go corpus selection version")
 	}
 	if options.EnableParseCache {
 		if cacheDir == "" {
@@ -184,6 +201,9 @@ func CollectCommittedGoCorpusWithOptions(ctx context.Context, identity repositor
 		return GoCommittedCorpus{}, err
 	}
 	selected := selectGoCorpusCandidates(candidates)
+	if options.SelectionVersion == GoCorpusSelectionReceiverAwareV2 {
+		selected = selectGoCorpusCandidatesLimit(candidates, goCorpusDiscoveryFiles)
+	}
 	corpus.AttemptedFiles = len(selected)
 	selectedSet := make(map[string]bool, len(selected))
 	for _, candidate := range selected {
@@ -274,7 +294,13 @@ func CollectCommittedGoCorpusWithOptions(ctx context.Context, identity repositor
 	sort.Slice(committed, func(i, j int) bool {
 		return selectedRank[committed[i].entry.Path] < selectedRank[committed[j].entry.Path]
 	})
-	for _, sourceFile := range committed {
+	parsed := make([]goCorpusCommittedFile, 0, len(committed))
+	receiverTargets := []goCorpusReceiverTarget(nil)
+	if options.SelectionVersion == GoCorpusSelectionReceiverAwareV2 {
+		receiverTargets = goCorpusReceiverTargets(objective)
+	}
+	for index := range committed {
+		sourceFile := &committed[index]
 		if err := ctx.Err(); err != nil {
 			return GoCommittedCorpus{}, err
 		}
@@ -290,7 +316,26 @@ func CollectCommittedGoCorpusWithOptions(ctx context.Context, identity repositor
 		if factsErr != nil {
 			return GoCommittedCorpus{}, fmt.Errorf("committed Go facts failed for %q: %w", sourceFile.entry.Path, factsErr)
 		}
-		input := GoGraphFileInput{Facts: facts, Source: sourceFile.content, Package: sourceFile.packageInfo}
+		sourceFile.facts = facts
+		if options.SelectionVersion == GoCorpusSelectionReceiverAwareV2 {
+			sourceFile.declRank = goCorpusReceiverAwareRank(sourceFile.content, receiverTargets)
+		}
+		parsed = append(parsed, *sourceFile)
+	}
+	if options.SelectionVersion == GoCorpusSelectionReceiverAwareV2 {
+		sort.SliceStable(parsed, func(i, j int) bool {
+			if parsed[i].declRank != parsed[j].declRank {
+				return parsed[i].declRank.betterThan(parsed[j].declRank)
+			}
+			return selectedRank[parsed[i].entry.Path] < selectedRank[parsed[j].entry.Path]
+		})
+	}
+	for _, sourceFile := range parsed {
+		if corpus.ReadFiles >= goCorpusMaxFiles {
+			appendOmission(sourceFile.entry.Path, "declaration_file_budget")
+			continue
+		}
+		input := GoGraphFileInput{Facts: sourceFile.facts, Source: sourceFile.content, Package: sourceFile.packageInfo}
 		trial := make([]GoGraphFileInput, 0, len(graphInputs)+1)
 		trial = append(trial, graphInputs...)
 		trial = append(trial, input)
@@ -425,6 +470,13 @@ func goCorpusPathScore(filePath string, terms []string) int {
 }
 
 func selectGoCorpusCandidates(candidates []goCorpusCandidate) []goCorpusCandidate {
+	return selectGoCorpusCandidatesLimit(candidates, goCorpusMaxFiles)
+}
+
+func selectGoCorpusCandidatesLimit(candidates []goCorpusCandidate, limit int) []goCorpusCandidate {
+	if limit < 1 {
+		return nil
+	}
 	ordered := append([]goCorpusCandidate(nil), candidates...)
 	better := func(left, right goCorpusCandidate) bool {
 		if left.score != right.score {
@@ -433,7 +485,7 @@ func selectGoCorpusCandidates(candidates []goCorpusCandidate) []goCorpusCandidat
 		return left.entry.Path < right.entry.Path
 	}
 	sort.Slice(ordered, func(i, j int) bool { return better(ordered[i], ordered[j]) })
-	if len(ordered) <= goCorpusMaxFiles {
+	if len(ordered) <= limit {
 		return ordered
 	}
 	seedCount := 16
@@ -442,7 +494,7 @@ func selectGoCorpusCandidates(candidates []goCorpusCandidate) []goCorpusCandidat
 	}
 	seeds := append([]goCorpusCandidate(nil), ordered[:seedCount]...)
 	selected := append([]goCorpusCandidate(nil), seeds...)
-	seen := make(map[string]bool, goCorpusMaxFiles)
+	seen := make(map[string]bool, limit)
 	for _, seed := range seeds {
 		seen[seed.entry.Path] = true
 	}
@@ -466,7 +518,7 @@ func selectGoCorpusCandidates(candidates []goCorpusCandidate) []goCorpusCandidat
 		return better(related[i], related[j])
 	})
 	for _, candidate := range related {
-		if len(selected) == goCorpusMaxFiles {
+		if len(selected) == limit {
 			break
 		}
 		if seen[candidate.entry.Path] {
@@ -476,7 +528,7 @@ func selectGoCorpusCandidates(candidates []goCorpusCandidate) []goCorpusCandidat
 		selected = append(selected, candidate)
 	}
 	for _, candidate := range ordered[seedCount:] {
-		if len(selected) == goCorpusMaxFiles {
+		if len(selected) == limit {
 			break
 		}
 		if seen[candidate.entry.Path] {
@@ -486,4 +538,132 @@ func selectGoCorpusCandidates(candidates []goCorpusCandidate) []goCorpusCandidat
 		selected = append(selected, candidate)
 	}
 	return selected
+}
+
+type goCorpusReceiverTarget struct {
+	receiver string
+	method   string
+}
+
+// goCorpusReceiverTargets retains only dotted Go identifier pairs from the
+// objective. They are ranking hints, not symbol resolution or a claim that a
+// matching declaration implements the requested behavior.
+func goCorpusReceiverTargets(objective string) []goCorpusReceiverTarget {
+	parts := strings.FieldsFunc(objective, func(r rune) bool {
+		return !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '.')
+	})
+	seen := make(map[goCorpusReceiverTarget]bool)
+	targets := []goCorpusReceiverTarget{}
+	for _, part := range parts {
+		segments := strings.Split(part, ".")
+		if len(segments) != 2 || !token.IsIdentifier(segments[0]) || !token.IsIdentifier(segments[1]) {
+			continue
+		}
+		target := goCorpusReceiverTarget{receiver: segments[0], method: segments[1]}
+		if !seen[target] {
+			seen[target] = true
+			targets = append(targets, target)
+		}
+	}
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].receiver != targets[j].receiver {
+			return targets[i].receiver < targets[j].receiver
+		}
+		return targets[i].method < targets[j].method
+	})
+	return targets
+}
+
+type goCorpusDeclarationRank struct {
+	exact         bool
+	otherMethods  int
+	receiverTypes int
+	freeFunctions int
+}
+
+// betterThan orders exact receiver/method matches before every nonexact
+// declaration count, then uses bounded syntactic counts as deterministic
+// within-category detail. It never resolves calls.
+func (left goCorpusDeclarationRank) betterThan(right goCorpusDeclarationRank) bool {
+	if left.exact != right.exact {
+		return left.exact
+	}
+	if left.otherMethods != right.otherMethods {
+		return left.otherMethods > right.otherMethods
+	}
+	if left.receiverTypes != right.receiverTypes {
+		return left.receiverTypes > right.receiverTypes
+	}
+	return left.freeFunctions > right.freeFunctions
+}
+
+// goCorpusReceiverAwareRank uses only exact Go declarations from already
+// source-bound discovery bytes. It deliberately gives a matching receiver and
+// method priority over examples or calls that merely spell the method name.
+func goCorpusReceiverAwareRank(source []byte, targets []goCorpusReceiverTarget) goCorpusDeclarationRank {
+	if len(targets) == 0 {
+		return goCorpusDeclarationRank{}
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), "objective.go", source, parser.AllErrors)
+	if err != nil || parsed == nil {
+		return goCorpusDeclarationRank{}
+	}
+	rank := goCorpusDeclarationRank{}
+	for _, decl := range parsed.Decls {
+		switch value := decl.(type) {
+		case *ast.FuncDecl:
+			if value.Name == nil {
+				continue
+			}
+			receiver := goCorpusReceiverName(value.Recv)
+			for _, target := range targets {
+				switch {
+				case value.Name.Name == target.method && receiver == target.receiver:
+					rank.exact = true
+				case value.Name.Name == target.method && receiver != "":
+					rank.otherMethods = min(rank.otherMethods+1, 64)
+				case value.Name.Name == target.method:
+					rank.freeFunctions = min(rank.freeFunctions+1, 64)
+				}
+			}
+		case *ast.GenDecl:
+			for _, spec := range value.Specs {
+				typeSpec, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				for _, target := range targets {
+					if typeSpec.Name.Name == target.receiver {
+						rank.receiverTypes = min(rank.receiverTypes+1, 64)
+					}
+				}
+			}
+		}
+	}
+	return rank
+}
+
+func goCorpusReceiverName(receivers *ast.FieldList) string {
+	if receivers == nil || len(receivers.List) != 1 {
+		return ""
+	}
+	typeExpr := receivers.List[0].Type
+	for {
+		switch value := typeExpr.(type) {
+		case *ast.StarExpr:
+			typeExpr = value.X
+		case *ast.IndexExpr:
+			typeExpr = value.X
+		case *ast.IndexListExpr:
+			typeExpr = value.X
+		case *ast.ParenExpr:
+			typeExpr = value.X
+		default:
+			name, _ := typeExpr.(*ast.Ident)
+			if name == nil {
+				return ""
+			}
+			return name.Name
+		}
+	}
 }
