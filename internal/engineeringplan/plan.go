@@ -21,6 +21,7 @@ import (
 const Version = 1
 
 var idPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+var skillPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 // Mode selects the planner representation. Direct holds exactly one task;
 // Graph holds an ordered dependency graph.
@@ -91,15 +92,21 @@ type Task struct {
 	EstimatedSeconds int        `json:"estimated_seconds"`
 	Completed        bool       `json:"completed,omitempty"`
 	Attempts         []Attempt  `json:"attempts,omitempty"`
+	// Skills names advisory workflows, never permissions or effect authority.
+	Skills []string `json:"skills,omitempty"`
 }
 
 // Graph is a planner response. Direct plans retain the same representation but
 // contain exactly one executable task, avoiding planner overhead for tiny work.
+// Couplings is an optional planner-declared typed advisory (C1-C4) between
+// implementation tasks. Absent preserves legacy serialization and digest
+// bytes; present never grants readiness, ownership or write authority.
 type Graph struct {
-	Version int    `json:"version"`
-	Mode    Mode   `json:"mode"`
-	Summary string `json:"summary"`
-	Tasks   []Task `json:"tasks"`
+	Version   int            `json:"version"`
+	Mode      Mode           `json:"mode"`
+	Summary   string         `json:"summary"`
+	Tasks     []Task         `json:"tasks"`
+	Couplings []TaskCoupling `json:"couplings,omitempty"`
 }
 
 // Task returns the task with the given ID, reporting whether it is present.
@@ -120,6 +127,16 @@ func (g Graph) Validate() error {
 	}
 	byID := make(map[string]Task, len(g.Tasks))
 	for _, t := range g.Tasks {
+		if len(t.Skills) > 4 {
+			return errors.New("task exceeds four selected skills")
+		}
+		seenSkills := map[string]bool{}
+		for _, name := range t.Skills {
+			if len(name) > 64 || !skillPattern.MatchString(name) || seenSkills[name] {
+				return errors.New("invalid or duplicate task skill")
+			}
+			seenSkills[name] = true
+		}
 		if !idPattern.MatchString(t.ID) || strings.TrimSpace(t.Title) == "" || !validKind(t.Kind) || len(t.Dependencies) > 64 || len(t.ScopePaths) == 0 || len(t.ScopePaths) > 32 || len(t.WritePaths) > 32 || len(t.ExpectedEvidence) == 0 || len(t.ExpectedEvidence) > 16 || len(t.Attempts) > 64 || t.EstimatedSeconds < 1 || t.EstimatedSeconds > 86400 {
 			return fmt.Errorf("invalid task %q", t.ID)
 		}
@@ -183,6 +200,9 @@ func (g Graph) Validate() error {
 				return fmt.Errorf("write ownership conflict between %q and %q", a.ID, b.ID)
 			}
 		}
+	}
+	if err := validateGraphCouplings(g); err != nil {
+		return err
 	}
 	return nil
 }
@@ -344,7 +364,7 @@ func ValidateRevision(previous, next Graph) error {
 func sameCompletedTask(a, b Task) bool {
 	return a.ID == b.ID && a.ParentID == b.ParentID && a.Kind == b.Kind && a.Title == b.Title &&
 		stringListEqual(a.Dependencies, b.Dependencies) && stringListEqual(a.ScopePaths, b.ScopePaths) &&
-		stringListEqual(a.WritePaths, b.WritePaths) && evidenceEqual(a.ExpectedEvidence, b.ExpectedEvidence) &&
+		stringListEqual(a.WritePaths, b.WritePaths) && stringListEqual(a.Skills, b.Skills) && evidenceEqual(a.ExpectedEvidence, b.ExpectedEvidence) &&
 		a.EstimatedSeconds == b.EstimatedSeconds && a.Completed == b.Completed
 }
 func stringListEqual(a, b []string) bool { return strings.Join(a, "\x00") == strings.Join(b, "\x00") }
@@ -409,6 +429,26 @@ func PlannerJSONSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","additionalProperties":false,"required":["version","mode","summary","tasks"],"properties":{"version":{"type":"integer","enum":[1]},"mode":{"type":"string","enum":["direct","graph"]},"summary":{"type":"string","minLength":1},"tasks":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["id","parent_id","kind","title","dependencies","scope_paths","write_paths","expected_evidence","estimated_seconds"],"properties":{"id":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"},"parent_id":{"type":"string","pattern":"^([a-z][a-z0-9_-]{0,63})?$"},"kind":{"type":"string","enum":["research","design","implementation","verification","review"]},"title":{"type":"string","minLength":1},"dependencies":{"type":"array","maxItems":64,"items":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"}},"scope_paths":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"string","minLength":1}},"write_paths":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1}},"expected_evidence":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"object","additionalProperties":false,"required":["kind","description"],"properties":{"kind":{"type":"string","minLength":1},"description":{"type":"string","minLength":1}}}},"estimated_seconds":{"type":"integer","minimum":1,"maximum":86400}}}}}}`)
 }
 
+// PlannerJSONSchemaWithCouplings is the strict wire schema for the staged
+// coupling-aware planner contract (plan-graph-v9). It derives the frozen
+// task schema from PlannerJSONSchema rather than copying it, then adds an
+// optional bounded couplings array carrying typed C1-C4 planner-declared
+// advisory relationships with explicit provenance and evidence. Only
+// planner_declared_advisory provenance is admitted; observed labels without
+// an admitted source-bound record are rejected as forged. At most
+// 28 relationships are admitted for at most eight implementations. Couplings
+// never grant readiness, ownership or write authority, and absent coupling
+// (C0) never proves independence.
+func PlannerJSONSchemaWithCouplings() json.RawMessage {
+	base := string(PlannerJSONSchema())
+	trimmed := strings.TrimSuffix(base, `}}`)
+	if trimmed == base {
+		return PlannerJSONSchema()
+	}
+	couplings := `"couplings":{"type":"array","maxItems":28,"items":{"type":"object","additionalProperties":false,"required":["from","to","level","reason","provenance","evidence"],"properties":{"from":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"},"to":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"},"level":{"type":"string","enum":["C1","C2","C3","C4"]},"reason":{"type":"string","minLength":1,"maxLength":128},"provenance":{"type":"string","enum":["planner_declared_advisory"]},"evidence":{"type":"string","minLength":1,"maxLength":256}}}}`
+	return json.RawMessage(trimmed + `,` + couplings + `}}`)
+}
+
 // Digest binds the exact graph bytes for durable progress and revision keys.
 func Digest(g Graph) (string, error) {
 	raw, err := json.Marshal(g)
@@ -439,6 +479,173 @@ func ValidateAutonomousGraphWithImplementations(g Graph, maxInitial int) error {
 	if maxInitial < 1 || maxInitial > 2 {
 		return errors.New("initial implementation limit must be 1 or 2")
 	}
+	return validateAutonomousGraphWithImplementationLimit(g, maxInitial)
+}
+
+// ValidateAutonomousGraphWithIsolatedImplementations validates the bounded
+// initial implementation cohort admitted by the isolated-worktree policy.
+// The legacy parallel validator remains capped at two and unchanged.
+func ValidateAutonomousGraphWithIsolatedImplementations(g Graph, maxInitial int) error {
+	if maxInitial < 1 || maxInitial > 8 {
+		return errors.New("isolated initial implementation limit must be 1..8")
+	}
+	return validateAutonomousGraphWithImplementationLimit(g, maxInitial)
+}
+
+// requireAutonomousTransitiveGates enforces the shared verification/review
+// closure: research/design tasks stay read-only and exactly one native
+// verification and one review gate depend transitively on every
+// implementation. Version-specific implementation ownership (staged hub order
+// vs isolated independence) stays with callers.
+func requireAutonomousTransitiveGates(g Graph, impls []Task, byID map[string]Task) error {
+	hasVerification, hasReview := false, false
+	verificationCount, reviewCount := 0, 0
+	for _, t := range g.Tasks {
+		switch t.Kind {
+		case Research, Design:
+			if len(t.WritePaths) != 0 {
+				return fmt.Errorf("research/design task %q must not declare writes", t.ID)
+			}
+		case Verification:
+			verificationCount++
+			hasVerification = true
+			if len(t.WritePaths) != 0 {
+				return fmt.Errorf("verification task %q must not declare writes", t.ID)
+			}
+			for _, impl := range impls {
+				if !dependsOn(t.ID, impl.ID, byID) {
+					return fmt.Errorf("verification task %q must depend on implementation %q", t.ID, impl.ID)
+				}
+			}
+		case Review:
+			reviewCount++
+			hasReview = true
+			if len(t.WritePaths) != 0 {
+				return fmt.Errorf("review task %q must not declare writes", t.ID)
+			}
+			for _, impl := range impls {
+				if !dependsOn(t.ID, impl.ID, byID) {
+					return fmt.Errorf("review task %q must depend on implementation %q", t.ID, impl.ID)
+				}
+			}
+		}
+	}
+	if !hasVerification {
+		return errors.New("graph requires a native verification gate")
+	}
+	if !hasReview {
+		return errors.New("graph requires a native review gate")
+	}
+	if verificationCount != 1 || reviewCount != 1 {
+		return errors.New("initial autonomous graph requires exactly one verification and one review gate")
+	}
+	return nil
+}
+
+// ValidateAutonomousGraphWithStagedImplementations validates a dependent
+// hub-to-leaves graph for staged isolated execution. It permits up to eight
+// implementations where leaves may depend on hub implementations, while
+// preserving every other autonomous invariant: concrete disjoint write
+// ownership (conservative global disjointness; serial reuse without explicit
+// ownership versioning remains rejected), research/design read-only tasks,
+// exactly one native verification and one review gate depending transitively
+// on every implementation, and acyclic dependencies. Dependencies grant
+// readiness only when observed completed; coupling hints never grant ownership.
+func ValidateAutonomousGraphWithStagedImplementations(g Graph, maxInitial int) error {
+	if maxInitial < 1 || maxInitial > 8 {
+		return errors.New("staged implementation limit must be 1..8")
+	}
+	if err := g.Validate(); err != nil {
+		return err
+	}
+	byID := map[string]Task{}
+	for _, t := range g.Tasks {
+		byID[t.ID] = t
+	}
+	if g.Mode == ModeDirect {
+		if len(g.Tasks) != 1 {
+			return errors.New("direct plan must contain exactly one task")
+		}
+		only := g.Tasks[0]
+		if only.Kind != Implementation {
+			return errors.New("direct plan must be a single implementation")
+		}
+		if len(only.WritePaths) == 0 {
+			return errors.New("direct implementation requires concrete write paths")
+		}
+		if len(only.Dependencies) != 0 {
+			return errors.New("direct implementation must not carry dependencies")
+		}
+		return nil
+	}
+	impls := []Task{}
+	for _, t := range g.Tasks {
+		if t.Kind == Implementation {
+			impls = append(impls, t)
+		}
+	}
+	if len(impls) == 0 || len(impls) > maxInitial {
+		return fmt.Errorf("graph must contain one to %d staged implementations, found %d", maxInitial, len(impls))
+	}
+	for _, impl := range impls {
+		if len(impl.WritePaths) == 0 {
+			return fmt.Errorf("implementation %q requires concrete declared write paths", impl.ID)
+		}
+		for _, dep := range impl.Dependencies {
+			d := byID[dep]
+			if d.Kind != Research && d.Kind != Design && d.Kind != Implementation {
+				return fmt.Errorf("staged implementation dependency %q must be research, design or implementation", dep)
+			}
+		}
+	}
+	// At least one hub (no implementation dependencies) anchors the stage order.
+	hubs := 0
+	for _, impl := range impls {
+		hasImplDep := false
+		for _, dep := range impl.Dependencies {
+			if byID[dep].Kind == Implementation {
+				hasImplDep = true
+				break
+			}
+		}
+		if !hasImplDep {
+			hubs++
+		}
+	}
+	if hubs == 0 {
+		return errors.New("staged implementations require at least one hub without implementation dependencies")
+	}
+	// Conservative global write disjointness across every implementation pair,
+	// including serial hub-to-leaf edges. No implicit serial reuse is admitted.
+	for i := range impls {
+		for _, other := range impls[i+1:] {
+			for _, a := range impls[i].WritePaths {
+				for _, b := range other.WritePaths {
+					if pathsOverlapFold(a, b) {
+						return fmt.Errorf("staged implementation write paths overlap: %q and %q", a, b)
+					}
+				}
+			}
+		}
+	}
+	// C4 hard-coupling gate: same-generated-family/shared-mutation work
+	// requires one owner or an explicit implementation dependency. Two
+	// same-ready tasks cannot become safe by serial waves forked from the
+	// same parent base; dependency-staged completion with parent advancement
+	// is required. C1-C3 remain advisory ordering only and never grant
+	// ownership or readiness.
+	for _, c := range g.Couplings {
+		if c.Level != CouplingC4 {
+			continue
+		}
+		if !dependsOn(c.From, c.To, byID) && !dependsOn(c.To, c.From, byID) {
+			return fmt.Errorf("unsafe C4 generator split between %q and %q requires one owner or an explicit dependency", c.From, c.To)
+		}
+	}
+	return requireAutonomousTransitiveGates(g, impls, byID)
+}
+
+func validateAutonomousGraphWithImplementationLimit(g Graph, maxInitial int) error {
 	if err := g.Validate(); err != nil {
 		return err
 	}
@@ -501,48 +708,7 @@ func ValidateAutonomousGraphWithImplementations(g Graph, maxInitial int) error {
 			}
 		}
 	}
-	hasVerification, hasReview := false, false
-	verificationCount, reviewCount := 0, 0
-	for _, t := range g.Tasks {
-		switch t.Kind {
-		case Research, Design:
-			if len(t.WritePaths) != 0 {
-				return fmt.Errorf("research/design task %q must not declare writes", t.ID)
-			}
-		case Verification:
-			verificationCount++
-			hasVerification = true
-			if len(t.WritePaths) != 0 {
-				return fmt.Errorf("verification task %q must not declare writes", t.ID)
-			}
-			for _, impl := range impls {
-				if !dependsOn(t.ID, impl.ID, byID) {
-					return fmt.Errorf("verification task %q must depend on implementation %q", t.ID, impl.ID)
-				}
-			}
-		case Review:
-			reviewCount++
-			hasReview = true
-			if len(t.WritePaths) != 0 {
-				return fmt.Errorf("review task %q must not declare writes", t.ID)
-			}
-			for _, impl := range impls {
-				if !dependsOn(t.ID, impl.ID, byID) {
-					return fmt.Errorf("review task %q must depend on implementation %q", t.ID, impl.ID)
-				}
-			}
-		}
-	}
-	if !hasVerification {
-		return errors.New("graph requires a native verification gate")
-	}
-	if !hasReview {
-		return errors.New("graph requires a native review gate")
-	}
-	if verificationCount != 1 || reviewCount != 1 {
-		return errors.New("initial autonomous graph requires exactly one verification and one review gate")
-	}
-	return nil
+	return requireAutonomousTransitiveGates(g, impls, byID)
 }
 
 func pathsOverlapFold(a, b string) bool {
@@ -593,6 +759,7 @@ func ValidateAutonomousRevision(previous, next Graph) error {
 			!stringListEqual(fresh.Dependencies, old.Dependencies) ||
 			!stringListEqual(fresh.ScopePaths, old.ScopePaths) ||
 			!stringListEqual(fresh.WritePaths, old.WritePaths) ||
+			!stringListEqual(fresh.Skills, old.Skills) ||
 			!evidenceEqual(fresh.ExpectedEvidence, old.ExpectedEvidence) ||
 			fresh.EstimatedSeconds != old.EstimatedSeconds {
 			return fmt.Errorf("started task %q is immutable", old.ID)

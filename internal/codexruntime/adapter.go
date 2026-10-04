@@ -15,19 +15,21 @@ import (
 // A fresh connection may observe the same journal via Resume after interruption.
 // Provisioning and tool-isolation qualification are mandatory caller concerns.
 type Adapter struct {
-	UnlimitedTokens  bool
-	UsageBudget      int64
-	RequireLiveUsage bool
-	UsageQualified   bool
-	Candidate        *CandidateBinding
-	Client           *codexrpc.Client
-	JournalPath      string
-	Directory        string
-	Source           *repository.Identity
-	RI               *RIBinding
-	Lexical          *LexicalBinding
-	mu               sync.Mutex
-	usage            runtime.Usage
+	UnlimitedTokens          bool
+	UsageBudget              int64
+	RequireLiveUsage         bool
+	UsageQualified           bool
+	Candidate                *CandidateBinding
+	Client                   *codexrpc.Client
+	JournalPath              string
+	Directory                string
+	Source                   *repository.Identity
+	RI                       *RIBinding
+	Lexical                  *LexicalBinding
+	mu                       sync.Mutex
+	usage                    runtime.Usage
+	usageMetadataUnavailable bool
+	compactionUnavailable    bool
 }
 
 var _ runtime.AgentRuntime = (*Adapter)(nil)
@@ -59,10 +61,13 @@ func (a *Adapter) Execute(ctx context.Context, i runtime.Invocation) (executionR
 	if err := ctx.Err(); err != nil {
 		return runtime.Result{}, err
 	}
+	if err := i.Validate(); err != nil {
+		return runtime.Result{}, err
+	}
 	if a.UnlimitedTokens && a.UsageBudget != 0 {
 		return runtime.Result{}, errors.New("unlimited token policy requires zero numeric reservation")
 	}
-	if a.RequireLiveUsage && (!a.UsageQualified || a.UsageBudget < 1 && !a.UnlimitedTokens) {
+	if a.requiresUsageAdmission() && (!a.UsageQualified || a.UsageBudget < 1 && !a.UnlimitedTokens) {
 		return runtime.Result{}, errors.New("LIVE_USAGE_NOT_QUALIFIED")
 	}
 	if err := a.validateLexicalAdmission(); err != nil {
@@ -81,7 +86,7 @@ func (a *Adapter) Execute(ctx context.Context, i runtime.Invocation) (executionR
 			}
 		}
 	}()
-	if err := appendEvent(a.JournalPath, "runtime.intent", Intent{i, a.Directory}); err != nil {
+	if err := appendEvent(a.JournalPath, "runtime.intent", Intent{Invocation: i, Directory: a.Directory, ToolOutputVersion: ToolOutputVersionUTF8First}); err != nil {
 		return runtime.Result{}, err
 	}
 	if a.Source != nil {
@@ -116,7 +121,7 @@ func (a *Adapter) Execute(ctx context.Context, i runtime.Invocation) (executionR
 		}
 	}
 	a.Client.SetObserver(a.observeUsage)
-	thread, err := a.Client.StartThreadWithTools(ctx, i.Profile, a.Directory, a.SourceToolsForInvocation(i))
+	thread, err := a.Client.StartThreadForInvocation(ctx, i, a.Directory, a.SourceToolsForInvocation(i))
 	if err != nil {
 		return runtime.Result{}, err
 	}
@@ -181,12 +186,17 @@ func (a *Adapter) Execute(ctx context.Context, i runtime.Invocation) (executionR
 	if err := appendEvent(a.JournalPath, "runtime.stream-terminal", TurnStatus{turn.ID, turn.Status}); err != nil {
 		return runtime.Result{}, err
 	}
-	if turn.Status == "completed" && turn.ItemsView != "" && turn.ItemsView != "full" {
-		if err := appendEvent(a.JournalPath, "runtime.turn-status", TurnStatus{turn.ID, turn.Status}); err != nil {
-			return runtime.Result{}, err
+	if turn.Status == "completed" {
+		if turn.ItemsView != "" && turn.ItemsView != "full" {
+			if err := appendEvent(a.JournalPath, "runtime.turn-status", TurnStatus{turn.ID, turn.Status}); err != nil {
+				return runtime.Result{}, err
+			}
+			turn, err = a.Client.ReadTurn(ctx, thread, turn.ID)
+			if err != nil {
+				return runtime.Result{}, err
+			}
 		}
-		turn, err = a.Client.ReadTurn(ctx, thread, turn.ID)
-		if err != nil {
+		if err := a.recordReadbackCompaction(turn, thread.ThreadID); err != nil {
 			return runtime.Result{}, err
 		}
 	}
@@ -201,10 +211,41 @@ func (a *Adapter) finish(i runtime.Invocation, thread codexrpc.ThreadSettings, t
 	if err != nil {
 		return result, err
 	}
-	if err := a.attachUsage(&result); err != nil {
-		return runtime.Result{}, err
+	state, err := Inspect(a.JournalPath)
+	if err != nil {
+		return result, err
 	}
-	if err := appendEvent(a.JournalPath, "runtime.result", TurnResult{turn.ID, result}); err != nil {
+	if state.SemanticResult == nil {
+		semantic := SemanticTurnResult{TurnID: turn.ID, Result: result, CompactionUnavailable: a.compactionUnavailable}
+		if err := appendEvent(a.JournalPath, "runtime.semantic-result", semantic); err != nil {
+			return result, err
+		}
+	}
+	if err := a.attachUsage(&result); err != nil || a.usageMetadataUnavailable {
+		state, inspectErr := Inspect(a.JournalPath)
+		if inspectErr != nil {
+			return result, errors.Join(err, inspectErr)
+		}
+		if state.UsagePolicy == nil || state.UsagePolicy.Required || state.UsageFailure == "BUDGET_EXHAUSTED" {
+			if err == nil {
+				err = ErrUsageReconciliation
+			}
+			return result, err
+		}
+		result.Usage = runtime.Usage{}
+		reason := "USAGE_UNAVAILABLE"
+		if err == nil && state.UsageFailure == "" && state.UsagePending == nil {
+			// The observer could not persist a non-authoritative notification.
+			reason = "USAGE_OBSERVATION_UNAVAILABLE"
+		}
+		degraded := DegradedTurnResult{Version: degradedResultVersion, TurnID: turn.ID, Result: result, UsageReason: reason, CompactionUnavailable: a.compactionUnavailable}
+		if appendErr := appendEvent(a.JournalPath, "runtime.result-degraded", degraded); appendErr != nil {
+			return result, errors.Join(err, appendErr)
+		}
+		a.usage = result.Usage
+		return result, nil
+	}
+	if err := appendEvent(a.JournalPath, "runtime.result", TurnResult{TurnID: turn.ID, Result: result, CompactionUnavailable: a.compactionUnavailable}); err != nil {
 		return result, err
 	}
 	a.usage = result.Usage
@@ -241,13 +282,28 @@ func (a *Adapter) Resume(ctx context.Context, invocationID string) (runtime.Resu
 	if err := lexicalContinuation(s, a.Lexical); err != nil {
 		return runtime.Result{}, err
 	}
+	if s.SemanticResult != nil && usageRequired(s.UsagePolicy) &&
+		(s.UsageReceipt == nil || s.UsageReceipt.Coverage != "OBSERVED") {
+		return *s.SemanticResult, ErrUsageReconciliation
+	}
 	if s.UsagePending != nil || s.UsageFailure != "" {
-		return runtime.Result{}, errors.New("usage reconciliation blocked; no replay permitted")
+		if s.SemanticResult != nil {
+			if !usageRequired(s.UsagePolicy) && s.UsageFailure != "BUDGET_EXHAUSTED" {
+				a.usage = s.SemanticResult.Usage
+				return *s.SemanticResult, nil
+			}
+			return *s.SemanticResult, ErrUsageReconciliation
+		}
+		return runtime.Result{}, ErrUsageReconciliation
 	}
 
 	if s.Result != nil {
 		a.usage = s.Result.Usage
 		return *s.Result, nil
+	}
+	if s.SemanticResult != nil && !usageRequired(s.UsagePolicy) {
+		a.usage = s.SemanticResult.Usage
+		return *s.SemanticResult, nil
 	}
 	if s.RouteFailure == "CONTINUATION_ROUTE_MISMATCH" {
 		return runtime.Result{}, codexrpc.ErrContinuationRouteMismatch
@@ -277,6 +333,9 @@ func (a *Adapter) Resume(ctx context.Context, invocationID string) (runtime.Resu
 		if errors.Is(err, codexrpc.ErrRouteIdentityContradiction) {
 			err = errors.Join(err, appendEvent(a.JournalPath, "runtime.route-contradiction", routeFailureEvidence(err, nil)))
 		}
+		return runtime.Result{}, err
+	}
+	if err := a.recordReadbackCompaction(turn, s.Thread.ThreadID); err != nil {
 		return runtime.Result{}, err
 	}
 	return a.finish(s.Intent.Invocation, *s.Thread, turn)

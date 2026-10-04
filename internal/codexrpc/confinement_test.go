@@ -1,8 +1,10 @@
 package codexrpc
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"strings"
 	"testing"
@@ -88,5 +90,56 @@ func TestConstrainedClientBindsProfileToolsWorkspaceAndExpiry(t *testing.T) {
 	c.constraint.expires = time.Now().Add(-time.Second)
 	if err := c.validateThreadConstraint(profile, `C:\workspace`, []any{map[string]any{"name": "source_list"}}); err == nil {
 		t.Fatal("expired constraint accepted")
+	}
+}
+
+func TestConstrainedThreadStartsOnlyInExactChildDirectory(t *testing.T) {
+	clientStream, server := net.Pipe()
+	defer server.Close()
+	c := New(clientStream)
+	defer c.Close()
+	profile := constrainedProfile()
+	tools := []any{map[string]any{"name": "source_list"}}
+	child := `C:\private\tasks\task-1\workspace`
+	parent := `C:\private\workspace`
+	if err := c.ConstrainThread(profile, child, tools, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.StartThreadWithTools(context.Background(), profile, parent, tools); err == nil {
+		t.Fatal("parent workspace passed child-bound capability constraint")
+	}
+	_ = server.SetReadDeadline(time.Now().Add(20 * time.Millisecond))
+	if _, err := bufio.NewReader(server).ReadByte(); err == nil {
+		t.Fatal("rejected parent workspace wrote a thread/start request")
+	}
+	_ = server.SetReadDeadline(time.Time{})
+	serverDone := make(chan error, 1)
+	go func() {
+		line, err := bufio.NewReader(server).ReadBytes('\n')
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		var request Message
+		if request, err = Decode(line); err != nil {
+			serverDone <- err
+			return
+		}
+		var params struct {
+			CWD string `json:"cwd"`
+		}
+		if err := json.Unmarshal(request.Params, &params); err != nil || params.CWD != child {
+			serverDone <- fmt.Errorf("thread/start cwd=%q err=%v", params.CWD, err)
+			return
+		}
+		_, err = fmt.Fprintf(server, `{"jsonrpc":"2.0","id":%s,"result":{"thread":{"id":"child-thread"},"model":"gpt-5.6-sol","modelProvider":"openai","reasoningEffort":"medium","cwd":%q,"approvalPolicy":"never","sandbox":{"type":"readOnly","networkAccess":false}}}`+"\n", request.ID, child)
+		serverDone <- err
+	}()
+	settings, err := c.StartThreadWithTools(context.Background(), profile, child, tools)
+	if err != nil || settings.ThreadID != "child-thread" || settings.Directory != child {
+		t.Fatal("exact child workspace failed to start", settings, err)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatal(err)
 	}
 }

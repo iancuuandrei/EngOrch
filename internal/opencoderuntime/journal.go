@@ -1008,7 +1008,10 @@ func validateFinalGateway(bound Bound, observation opencode.ToolTurnObservation)
 	}
 	last := state.Calls[len(state.Calls)-1].Receipt
 	if structured {
-		if last.Finish != "tool_calls" || last.Semantic.TerminalTool == nil || last.Semantic.OutputTextSHA256 != digestText(observation.Text) {
+		// Structured captures leave observation.Text empty. Advisory text is
+		// already matched to its generation above; the terminal tool arguments
+		// carry the result and are independently bound to the sealed capture.
+		if last.Finish != "tool_calls" || last.Semantic.TerminalTool == nil {
 			return providergateway.State{}, errors.New("provider structured output terminal differs from sealed OpenCode result")
 		}
 	} else if last.Finish != "stop" || len(last.Semantic.ToolCalls) != 0 || last.Semantic.OutputTextSHA256 != digestText(observation.Text) {

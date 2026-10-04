@@ -1,6 +1,6 @@
 # Fabric v1 real-repository evaluation: pinned custom tasks
 
-This suite defines ten custom real-repository tasks, each pinned to an
+This suite defines eleven custom real-repository tasks, each pinned to an
 audited upstream commit. It is not a SWE-bench score and it is not a general
 full-v1 proof; it reports per-task behavioral acceptance on the selected
 repositories only. `manifest.json` is the authoritative source, commit,
@@ -9,12 +9,34 @@ each pinned repository's LICENSE file: go-humanize MIT, afero Apache-2.0,
 go-multierror MPL-2.0, go-atomic MIT, go-difflib BSD-3-Clause, logr
 Apache-2.0, godotenv MIT (`LICENCE`). The original six-task comparison remains
 a six-task result; adding a manifest entry does not add a successful run.
+## Current accepted evidence
+
+A separate frozen v1.0.25 Sol High eight-task cohort reached **7/8 PASS**:
+go-humanize, afero, go-multierror, go-atomic, go-difflib and logr (fixed-six
+**6/6**), plus go-atomic-numeric-text. Each PASS binds native verification,
+approved review, copied candidate identity and unchanged held-out acceptance.
+Godotenv exhausted its two repairs and remains BLOCKED; no candidate-copy
+acceptance was performed for that row. Earlier frozen results retain their
+original outcomes. This is not a SWE-bench score or final v2 qualification.
+
+Across all eight tasks, 33 matched runtime observations report 9,885,990 input
+tokens (8,561,152 cached; 1,324,838 uncached), 101,281 output and 27,989 reasoning.
+Cached input is a subset of input and reasoning a subset of output. Costs,
+physical provider-call counts and exact READY transition times remain unknown.
+See the [product ledger](../../docs/roadmap/v2-product-plan.md) for identities
+and the paused checkpoint, and the [capability guide](../../docs/guides/features.md)
+for product boundaries.
+
+## Task contracts
+
 The seventh task exercises multiline dotenv parsing, compatibility and
 documentation in a previously unfamiliar parser repository. Its pinned
 upstream tests pass before the change; its held-out multiline assertions fail
 before the feature. A [fresh public-main attempt](results/godotenv-main10-20261003.json)
 was blocked before file application because a proposed source anchor did not
-match the current file. Actual Fabric completion is still pending.
+match the current file. That was an earlier, separate attempt. The later
+v1.0.25 cohort above exhausted two repairs and remained BLOCKED; godotenv
+acceptance is still incomplete.
 
 `go-atomic-numeric-text` uses the same pinned MIT go-atomic source for two
 text-encoding API extensions: Int64 and Uint64. Both wrappers share a generator
@@ -27,7 +49,8 @@ records zero provider calls. The earlier parallel attempt used an incorrect
 independence assumption and exhausted two repairs with native PASS but review
 changes requested for generated-source drift. See
 [the retained failure](results/numeric-generated-code-de2f587-20261003.json).
-The task now explicitly requires generator consistency; it is not the selected
+The task now explicitly requires generator consistency, and the separate
+v1.0.25 cohort above accepted that requirement; it is not the selected
 serial/parallel qualification case.
 Its Windows native check has the same narrow NocmpIntegration exclusion as
 go-atomic; its held-out check never excludes a test.
@@ -52,10 +75,14 @@ the original evaluation's copy-decoder BLOCKED outcome remains preserved.
 with the Commaf allocation task on the same pinned repository. The source/test
 ownership groups are `bytes.go`/`bytes_test.go` and `comma.go`/`comma_test.go`.
 Both behavioral and performance oracles are mandatory. The planner must still
-verify independence; the task does not force unsafe parallel execution. Use
-fresh serial and parallel arms with the identical objective, pins, binary,
-model, runtime and held-out checks. Adding this task is not accepted parallel
-execution or a speedup claim.
+verify independence; the task does not force unsafe parallel execution. The
+[runner-supported topology recipe](topology/humanize-feature-performance/README.md)
+uses fresh isolated arms with `MaxParallel` 1 and 2, the same resource policy,
+and candidate-bound reviewer impact enabled in both. It preserves the manifest
+objective, source, binary, model, runtime, full native check, and both held-out
+assertions. A later bounded v1.0.19 pair accepted the isolated parallel arm
+while the serial arm blocked. Different plans and outcomes prevent a causal
+speedup or token-saving claim; this qualifies the observed scenario only.
 The [composed preflight](results/humanize-composed-preflight-20261003.json)
 records full native baseline PASS and compiled, targeted baseline failures for
 both required improvements, with zero provider calls.
@@ -198,6 +225,74 @@ The PR #5 sequential journey remains the comparison baseline. It requires its
 own clean clone and explicit human approval/review accounting; its historical
 single-task acceptance is not treated as a six-repository result.
 
+The opt-in `-CandidateFactsCache` runner switch is available only in Native
+mode with `-ReviewImpactContext`, `-PlannerContext go-contract-context-v1` or
+`go-contract-context-v2`, and
+the explicit pinned RI executable/hash. Pass it to both Prepare and Evaluate;
+the runner rejects mismatches before evaluation effects and checks the
+inspected execution policy version. Default runs omit the switch and preserve
+their previous command and receipt shape. A recorded cache-policy version is
+not a cache-hit measurement: corpus diagnostic statistics are not included in
+the evaluation receipt, and no hit-rate or performance claim follows from the
+flag.
+
+## Explicit fixer-route allocation pilot
+
+Native Prepare/Evaluate accept optional `-FixerModel` and `-FixerEffort` with
+`-AccessConfigPath`. Either fixer override requires the access file; the access
+file alone is rejected. Both fixer fields may be set independently, and any
+unspecified value follows the base `-Model` or `-Effort` used at Evaluate. The
+runner requires an absolute regular non-reparse file no larger than 32 KiB,
+records its resolved path, byte count and SHA-256, and requires the same
+explicit fixer overrides and exact file binding at Prepare and Evaluate. It
+rechecks the file immediately before `fabric init`; the CLI then validates the
+strict `config.Access` schema before writing the task configuration. The
+runner records the configured fixer profile from the inspected creation
+snapshot. That is not evidence the fixer was invoked: report actual exposure
+only when runtime evidence shows a fixer invocation, and leave unobserved
+usage unknown. No repair allowance or escalation policy is changed.
+
+`-StrictWriterEdits` opts into `anchored-edits-v3`; it is exclusive with the
+existing `-ValidateWriterEdits` v2 option. Its requested version must match
+Prepare/Evaluate and the inspected creation config must report the same writer
+contract. Omitting both writer flags leaves the existing default init argv and
+configuration path unchanged. These options enable a fixed-route comparison;
+they do not establish adaptive model selection or a general model-quality
+claim.
+
+For the predeclared fixer-route pilot, use the same public v1 access file,
+planner/writer/reviewer model and effort, strict writer contract, source pins,
+checks and repair limit in each arm. The only intended arm difference is the
+explicit fixer model. Prepare and Evaluate each receive the same fixer fields
+and access-config path; compare the retained request and observed-configuration
+bindings before considering acceptance or route exposure. Subscription costs
+and provider-call counts remain unknown unless independently measured.
+
+```powershell
+$runner = 'scripts/evaluate-v1.ps1'
+$common = @{
+    RunRoot = 'D:\eval\model-allocation'
+    TaskIds = @('go-atomic-numeric-text')
+    FixerEffort = 'high'
+    AccessConfigPath = 'D:\eval\public-access-v1.json'
+    StrictWriterEdits = $true
+}
+$control = $common.Clone()
+$control.FixerModel = 'gpt-6-luna'
+& $runner -Action Prepare -RunId fixer-control @control
+$treatment = $common.Clone()
+$treatment.FixerModel = 'gpt-6.1-sol'
+& $runner -Action Prepare -RunId fixer-treatment @treatment
+
+# Evaluate each prepared arm separately, copying the same bound options and
+# adding that arm's explicit runtime, binary, helper and prepared RunId.
+```
+
+Both Evaluate calls must repeat their arm's exact `FixerModel`,
+`FixerEffort`, `AccessConfigPath`, and `StrictWriterEdits` values. The access
+file must remain unchanged after Prepare. Use fresh run IDs and do not treat a
+configured fixer profile as an invocation when no fixer call occurred.
+
 ## Controlled parallel-writer comparison
 
 Native evaluations accept `-ParallelWriters` and `-MaxParallel 1..8`.
@@ -228,6 +323,97 @@ times, and one merged file effect. A single-writer plan can be a valid product
 result but cannot establish parallel implementation benefit. Compare elapsed
 time and token usage only within the accepted, equivalently scoped pair;
 unknown provider request counts or monetary costs remain unknown.
+
+## Agent-context treatment comparison
+
+Native evaluations accept `-AgentContext Disabled` or `-AgentContext Enabled`.
+Pass the same value to Prepare and Evaluate. Both explicitly select the Fabric
+run flag; a mismatched prepared treatment is rejected before provider dispatch.
+`Default` (omitted) preserves the old runner argv and follows the selected
+binary's default; it is not a stable control arm across binary versions.
+PR5Matched rejects explicit treatments.
+
+Each receipt records `agent_context_requested`. After successful inspect/replay,
+the runner records bundle presence, version, source identity/commit and retained
+document/skill counts. Enabled requires a source-bound bundle; Disabled requires
+its absence. Counts do not establish skill selection or instruction compliance;
+inspect invocation inputs and actual candidate behavior for those claims.
+
+Freeze guidance-relevant tasks, exact binary/source/model, context ceilings,
+repair budget and unchanged native/review/held-out oracles before dispatch.
+Use fresh separate run IDs for the two arms. Report raw acceptance, instruction
+violations, calls, repairs, wall time and input/cached/uncached/output tokens.
+An empty guidance bundle cannot establish guidance usefulness. Never rewrite
+canonical task pins to insert guidance; use separately identified canaries.
+Live matched agent-context quality remains NOT RUN until those records exist.
+
+## Planner-context treatment comparison
+
+Native evaluation can opt into the immutable `source-bounded-v1` planner
+context with `-PlannerContext source-bounded-v1`. Omitting the parameter keeps
+the legacy empty planner-context setting and emits no planner-context run
+argument. The evaluator records the requested treatment in each prepared and
+evaluation receipt, requires Evaluate to match its prepared run, and records
+the value observed in the inspected run creation. `PR5Matched` rejects this
+Native-only option.
+
+The separate `go-source-context-v1` treatment also requires an explicitly
+selected RI parser: pass `-PlannerContextRIExecutable` with its absolute clean
+path and `-PlannerContextRIExecutableSHA256` with the lowercase SHA-256 of the
+executable bytes to both Prepare and Evaluate. The runner verifies those bytes
+before preparation/evaluation, records the path and digest in receipts, and
+requires the inspected run to retain the same binding. It never discovers the
+parser from PATH or environment variables. This treatment uses bounded,
+partial Go source graph evidence and should be evaluated as a distinct arm;
+the `source-bounded-v1` comparison below does not qualify it.
+
+The explicit `go-contract-context-v2` planner context uses the same pinned RI
+executable/hash binding and is a separate opt-in from contract v1. It adds
+bounded receiver-aware corpus selection; it does not alter v1/default creation
+records or replay. The existing `-ReviewImpactContext` and
+`-CandidateFactsCache` options are valid with either contract context when the
+same explicit pinned RI binding is supplied. The CLI's version-1
+`--planner-context-parse-cache` option is also allowed for contract v2. Receipts
+continue to bind the exact requested context string and inspected execution
+echo; coverage remains partial and does not imply compiler or call resolution.
+
+For a matched comparison, prepare fresh runs for both treatments from the same
+six manifest tasks: `go-humanize`, `afero`, `go-multierror`, `go-atomic`,
+`go-difflib`, and `logr`. Evaluate both with the same clean Fabric binary and
+build receipt, candidate-copy helper, runner checkout, Codex executable,
+`gpt-6-luna` at `high`, pinned Go 1.27.1 executable, verification policy, and
+scheduler/writer flags. Use separate new run IDs; do not resume or reuse an
+uncertain run. The only treatment difference is omitting `-PlannerContext` in
+the control arm and setting it to `source-bounded-v1` in the treatment arm.
+
+```powershell
+$runner = 'scripts/evaluate-v1.ps1'
+$tasks = @('go-humanize', 'afero', 'go-multierror', 'go-atomic', 'go-difflib', 'logr')
+$runRoot = 'D:\dev\Fabric-v1-eval-runs'
+$goExe = 'D:\dev\EngOrch-toolchains\go\1.27.1\go\bin\go.exe'
+$prepare = @{ RunRoot = $runRoot; GoExe = $goExe; TaskIds = $tasks }
+& $runner -Action Prepare -RunId planner-context-control @prepare
+& $runner -Action Prepare -RunId planner-context-source-bounded -PlannerContext source-bounded-v1 @prepare
+
+$evaluate = @{
+    RunRoot = $runRoot; GoExe = $goExe; TaskIds = $tasks
+    FabricExe = $fabricExe; NativeBuildReceiptPath = $buildReceipt
+    CandidateCopyExe = $candidateCopyExe; CodexExe = $codexExe
+    Model = 'gpt-6-luna'; Effort = 'high'
+}
+& $runner -Action Evaluate -RunId planner-context-control @evaluate
+& $runner -Action Evaluate -RunId planner-context-source-bounded -PlannerContext source-bounded-v1 @evaluate
+```
+
+Set `$fabricExe`, `$buildReceipt`, `$candidateCopyExe`, and `$codexExe` to the
+same explicitly approved artifacts for both arms. Keep `-ParallelWriters`,
+`-MaxParallel`, and `-ValidateWriterEdits` omitted in both, or supply the same
+values to both; do not interpret this comparison as a scheduler treatment.
+The treatment is an input change, not proof that selected source context was
+useful. Report context coverage and omission evidence alongside graph
+structure, exact candidate-bound native/review/held-out outcomes, repairs,
+elapsed time, runtime invocations and observed token usage. Unknown
+provider-call counts and costs stay unknown.
 
 When present, `graph_writer_results[TASK].dispatch.started_at` and `.ended_at`
 record the completed writer's controller wrapper interval, including runtime

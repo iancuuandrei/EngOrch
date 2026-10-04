@@ -21,9 +21,20 @@ func TestCatalogPreservesCandidateSchemas(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `[{"Description":"List the exact admitted candidate's current regular files with hashes and modes. Use after empty initially, follow next_after until null. Unlike source_list this includes admitted modifications. Drift fails the request.","InputSchema":{"additionalProperties":false,"properties":{"after":{"type":"string"},"limit":{"maximum":128,"minimum":1,"type":"integer"}},"required":["after","limit"],"type":"object"},"Name":"candidate_list"},{"Description":"Read a byte page from the admitted candidate, including modifications. Returns exact full-file hash and binary/UTF-8 views. Follow next_offset until null. Any candidate drift fails the request.","InputSchema":{"additionalProperties":false,"properties":{"limit":{"maximum":32768,"minimum":1,"type":"integer"},"offset":{"minimum":0,"type":"integer"},"path":{"type":"string"}},"required":["path","offset","limit"],"type":"object"},"Name":"candidate_read"}]`
+	want := `[{"Description":"List the exact admitted candidate's current regular files with hashes and modes. Use after empty initially, follow next_after until null. Unlike source_list this includes admitted modifications. Drift fails the request.","InputSchema":{"additionalProperties":false,"properties":{"after":{"type":"string"},"limit":{"maximum":128,"minimum":1,"type":"integer"}},"required":["after","limit"],"type":"object"},"Name":"candidate_list"},{"Description":"Read a byte page from the admitted candidate, including modifications. For valid UTF-8 pages, content_utf8 contains the bytes and content_base64 is omitted; binary pages include content_base64 and null content_utf8. sha256 binds the full candidate file. Follow next_offset until null. Any candidate drift fails the request.","InputSchema":{"additionalProperties":false,"properties":{"limit":{"maximum":32768,"minimum":1,"type":"integer"},"offset":{"minimum":0,"type":"integer"},"path":{"type":"string"}},"required":["path","offset","limit"],"type":"object"},"Name":"candidate_read"}]`
 	if string(got) != want {
 		t.Fatalf("catalog changed\n got: %s\nwant: %s", got, want)
+	}
+}
+
+func TestLegacyCatalogPreservesV1Description(t *testing.T) {
+	got, err := canonical.Bytes(LegacyCatalog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `[{"Description":"List the exact admitted candidate's current regular files with hashes and modes. Use after empty initially, follow next_after until null. Unlike source_list this includes admitted modifications. Drift fails the request.","InputSchema":{"additionalProperties":false,"properties":{"after":{"type":"string"},"limit":{"maximum":128,"minimum":1,"type":"integer"}},"required":["after","limit"],"type":"object"},"Name":"candidate_list"},{"Description":"Read a byte page from the admitted candidate, including modifications. Returns exact full-file hash and binary/UTF-8 views. Follow next_offset until null. Any candidate drift fails the request.","InputSchema":{"additionalProperties":false,"properties":{"limit":{"maximum":32768,"minimum":1,"type":"integer"},"offset":{"minimum":0,"type":"integer"},"path":{"type":"string"}},"required":["path","offset","limit"],"type":"object"},"Name":"candidate_read"}]`
+	if string(got) != want {
+		t.Fatalf("legacy candidate catalog changed\n got: %s\nwant: %s", got, want)
 	}
 }
 
@@ -64,10 +75,9 @@ func TestExecuteReadsChangedBytesOmitsDeletionAndRejectsDrift(t *testing.T) {
 	if err != nil || !handled {
 		t.Fatal(handled, err)
 	}
-	chunk := content.(worktree.SourceChunk)
-	bytes, err := base64.StdEncoding.DecodeString(chunk.ContentBase64)
-	if err != nil || string(bytes) != "candidate bytes" || chunk.CandidateID != first.CandidateID || chunk.SHA256 != first.Files[0].Hash {
-		t.Fatal("candidate read did not bind changed bytes", chunk, err)
+	chunk := content.(ReadResult)
+	if chunk.ContentBase64 != "" || chunk.ContentUTF8 == nil || *chunk.ContentUTF8 != "candidate bytes" || chunk.CandidateID != first.CandidateID || chunk.SHA256 != first.Files[0].Hash {
+		t.Fatal("candidate read did not bind changed bytes", chunk)
 	}
 	if _, handled, err = Execute(context.Background(), binding, ReadName, json.RawMessage(`{"path":"deleted.txt","offset":0,"limit":1}`)); err == nil || !handled {
 		t.Fatal("deleted candidate path was readable", handled)
@@ -86,6 +96,48 @@ func TestExecuteReadsChangedBytesOmitsDeletionAndRejectsDrift(t *testing.T) {
 		if _, handled, err := Execute(context.Background(), binding, request.name, request.args); err == nil || !handled {
 			t.Fatal("candidate drift admitted", request.name, handled)
 		}
+	}
+}
+
+func TestReadResultUTF8PageByteProjectionAndBinaryFallback(t *testing.T) {
+	text := strings.Repeat("a", 32768)
+	next := int64(len(text))
+	chunk := worktree.SourceChunk{CandidateID: strings.Repeat("1", 64), Path: "src/file.go", SHA256: strings.Repeat("2", 64), Size: int64(len(text)) * 2, Offset: 0, ContentBase64: base64.StdEncoding.EncodeToString([]byte(text)), ContentUTF8: &text, NextOffset: &next}
+	full, err := canonical.Bytes(chunk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected, err := readResult(chunk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compact, err := canonical.Bytes(projected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projected.ContentBase64 != "" || projected.ContentUTF8 == nil || *projected.ContentUTF8 != text || projected.CandidateID != chunk.CandidateID || projected.Path != chunk.Path || projected.SHA256 != chunk.SHA256 || projected.Offset != chunk.Offset || projected.Size != chunk.Size || projected.NextOffset == nil || *projected.NextOffset != next {
+		t.Fatal("UTF-8 candidate projection lost text or binding metadata", projected)
+	}
+	if len(full) != 76722 || len(compact) != 33010 || len(full)-len(compact) != 43712 {
+		t.Fatalf("unexpected candidate page payload sizes: full=%d compact=%d saved=%d", len(full), len(compact), len(full)-len(compact))
+	}
+	t.Logf("utf8_candidate_page_bytes=%d full_json_bytes=%d model_json_bytes=%d saved_bytes=%d", len(text), len(full), len(compact), len(full)-len(compact))
+
+	binary := []byte{0x00, 0xff, 0x61}
+	chunk.Size = int64(len(binary))
+	chunk.ContentBase64 = base64.StdEncoding.EncodeToString(binary)
+	chunk.ContentUTF8 = nil
+	binaryResult, err := readResult(chunk)
+	if err != nil || binaryResult.ContentBase64 != chunk.ContentBase64 || binaryResult.ContentUTF8 != nil {
+		t.Fatal("binary candidate page did not retain Base64", binaryResult, err)
+	}
+}
+
+func TestReadResultRejectsMismatchedTextAndBytes(t *testing.T) {
+	text := "different bytes"
+	chunk := worktree.SourceChunk{ContentBase64: base64.StdEncoding.EncodeToString([]byte("actual bytes")), ContentUTF8: &text}
+	if _, err := readResult(chunk); err == nil {
+		t.Fatal("mismatched text and Base64 accepted")
 	}
 }
 

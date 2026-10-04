@@ -63,9 +63,13 @@ type Rule struct {
 // Rules are keyed by a role such as planner, explorer, writer, reviewer, or
 // architect. Unknown roles reject rather than borrowing another role's route.
 type Policy struct {
-	Version  int             `json:"version"`
-	Profiles []Profile       `json:"profiles"`
-	Rules    map[string]Rule `json:"rules"`
+	Version                 int             `json:"version"`
+	DecisionEvidenceVersion int             `json:"decision_evidence_version,omitempty" toml:"DecisionEvidenceVersion"`
+	Profiles                []Profile       `json:"profiles"`
+	Rules                   map[string]Rule `json:"rules"`
+	// Calibration is optional, immutable task-level evidence for one explicitly
+	// opted-in fixer route. Nil preserves historical policy serialization.
+	Calibration *Calibration `json:"calibration,omitempty" toml:"Calibration"`
 }
 
 // Request contains only task facts already known to the caller. Failures is
@@ -133,8 +137,11 @@ func Select(policy Policy, request Request) (Decision, error) {
 }
 
 func (p Policy) validate() (map[string]Profile, error) {
-	if p.Version != 1 || len(p.Profiles) == 0 || len(p.Profiles) > maxProfiles || len(p.Rules) == 0 || len(p.Rules) > maxRules {
+	if p.Version != 1 || (p.DecisionEvidenceVersion != 0 && p.DecisionEvidenceVersion != 1 && p.DecisionEvidenceVersion != 2) || len(p.Profiles) == 0 || len(p.Profiles) > maxProfiles || len(p.Rules) == 0 || len(p.Rules) > maxRules {
 		return nil, errors.New("invalid model policy")
+	}
+	if (p.DecisionEvidenceVersion == 2) != (p.Calibration != nil) {
+		return nil, errors.New("calibration requires decision evidence version 2")
 	}
 	profiles := make(map[string]Profile, len(p.Profiles))
 	for _, profile := range p.Profiles {
@@ -149,6 +156,17 @@ func (p Policy) validate() (map[string]Profile, error) {
 	for role, rule := range p.Rules {
 		if !validIdentifier(role) || rule.validate(profiles) != nil {
 			return nil, errors.New("invalid model policy rule")
+		}
+	}
+	if p.Calibration != nil {
+		if err := p.Calibration.Validate(); err != nil {
+			return nil, errors.New("invalid model policy calibration")
+		}
+		rule, ok := p.Rules["fixer"]
+		baseline, baselineOK := profiles[p.Calibration.Baseline.Name]
+		candidate, candidateOK := profiles[p.Calibration.Candidate.Name]
+		if !ok || rule.DefaultProfile != p.Calibration.Baseline.Name || rule.EscalatedProfile == p.Calibration.Candidate.Name || !baselineOK || !candidateOK || !sameProfile(baseline, p.Calibration.Baseline) || !sameProfile(candidate, p.Calibration.Candidate) {
+			return nil, errors.New("calibration profiles must be exact configured fixer profiles")
 		}
 	}
 	return profiles, nil

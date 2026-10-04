@@ -41,7 +41,7 @@ func TestExplorationAdmissionAndWriterContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	observation := Exploration{id, strings.Repeat("Observație. ", 60), []string{"file.txt"}}
+	observation := Exploration{CandidateID: id, Summary: strings.Repeat("Observație. ", 60), Paths: []string{"file.txt"}}
 	makeRecord := func(o Exploration) ExplorerRecord {
 		body, err := canonical.Bytes(o)
 		if err != nil {
@@ -51,11 +51,11 @@ func TestExplorationAdmissionAndWriterContext(t *testing.T) {
 		return ExplorerRecord{question, i, runtime.Result{Version: 1, InvocationID: i.ID, Requested: i.Profile, ObservedModel: &model, Output: string(body)}}
 	}
 	for _, bad := range []Exploration{
-		{strings.Repeat("0", 64), "wrong candidate", []string{}},
-		{id, "", []string{}},
-		{id, "bad path", []string{"../escape"}},
-		{id, "duplicate", []string{"file.txt", "file.txt"}},
-		{id, "unsorted", []string{"z", "a"}},
+		{CandidateID: strings.Repeat("0", 64), Summary: "wrong candidate", Paths: []string{}},
+		{CandidateID: id, Summary: "", Paths: []string{}},
+		{CandidateID: id, Summary: "bad path", Paths: []string{"../escape"}},
+		{CandidateID: id, Summary: "duplicate", Paths: []string{"file.txt", "file.txt"}},
+		{CandidateID: id, Summary: "unsorted", Paths: []string{"z", "a"}},
 	} {
 		if _, err := RecordExploration(path, makeRecord(bad)); err == nil {
 			t.Fatal("invalid exploration admitted")

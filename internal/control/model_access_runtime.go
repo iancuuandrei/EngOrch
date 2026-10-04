@@ -18,9 +18,10 @@ import (
 // ModelAccessState mirrors the access-only journal inside controller replay.
 // Reservations are admission ceilings, not proof of provider-side enforcement.
 type ModelAccessState struct {
-	RuntimeInvocationID string               `json:"runtime_invocation_id"`
-	Intent              access.Intent        `json:"intent"`
-	Terminal            *ModelAccessTerminal `json:"terminal,omitempty"`
+	RuntimeInvocationID string                      `json:"runtime_invocation_id"`
+	Intent              access.Intent               `json:"intent"`
+	Terminal            *ModelAccessTerminal        `json:"terminal,omitempty"`
+	SemanticPending     *ModelAccessSemanticPending `json:"semantic_pending,omitempty"`
 }
 
 // ModelAccessTerminal binds an access receipt to exact runtime journal evidence.
@@ -41,6 +42,9 @@ func replayModelAccess(s *Snapshot, event journal.Event) error {
 	}
 	switch event.Kind {
 	case "model.access-intent":
+		if hasSemanticUsagePending(*s) {
+			return ErrSemanticUsagePending
+		}
 		var proposed modelAccessIntentEvent
 		if err := canonical.Decode(event.Payload, &proposed); err != nil {
 			return err
@@ -82,6 +86,8 @@ func replayModelAccess(s *Snapshot, event journal.Event) error {
 		}
 		copy := terminal
 		s.ModelAccess[index].Terminal = &copy
+	case "model.access-semantic-pending":
+		return replaySemanticUsagePending(s, event)
 	default:
 		return errors.New("unknown model access event")
 	}
@@ -123,7 +129,7 @@ func validateModelAccessLedger(s Snapshot) error {
 func currentModelInvocation(s Snapshot, id string) (runtime.Invocation, error) {
 	candidates := []runtime.Invocation{}
 	if s.State == "PLANNING" && s.Creation.Config.Planner.Runtime == "codex-app-server" {
-		invocation, err := plannerInvocation(s.Creation.Config, s.Creation.Objective)
+		invocation, err := plannerInvocationForSnapshot(s)
 		if err != nil {
 			return runtime.Invocation{}, err
 		}
@@ -144,10 +150,15 @@ func currentModelInvocation(s Snapshot, id string) (runtime.Invocation, error) {
 	if s.ReviewHost != nil {
 		candidates = append(candidates, s.ReviewHost.Intent.Invocation)
 	}
+	for _, host := range s.ScheduledReviewHosts {
+		candidates = append(candidates, host.Intent.Invocation)
+	}
+	for _, correction := range s.RoleCorrections {
+		candidates = append(candidates, correction.Invocation)
+	}
 	for _, invocation := range candidates {
 		if invocation.ID == id {
-			exact, err := runtime.NewInvocation(invocation.Profile, invocation.Input)
-			if err != nil || exact != invocation {
+			if err := invocation.Validate(); err != nil {
 				return runtime.Invocation{}, errors.New("recorded runtime invocation identity mismatch")
 			}
 			return invocation, nil
@@ -180,6 +191,9 @@ func validateCodexSubscriptionAccess(s Snapshot, intent access.Intent) error {
 }
 
 func ensureModelAccessIntent(path string, s Snapshot, invocation runtime.Invocation) (Snapshot, ModelAccessState, error) {
+	if hasSemanticUsagePending(s) {
+		return s, ModelAccessState{}, ErrSemanticUsagePending
+	}
 	expected, err := deriveModelAccessIntent(s, invocation, 1)
 	if err != nil {
 		return s, ModelAccessState{}, err
@@ -266,6 +280,9 @@ func ensureLegacyPlannerAccessMirror(path string, s Snapshot) error {
 func requireModelAccessActive(path string, s Snapshot, state ModelAccessState) error {
 	if state.Terminal != nil {
 		return errors.New("model invocation access is terminal")
+	}
+	if state.SemanticPending != nil {
+		return ErrSemanticUsagePending
 	}
 	policy, err := s.Creation.Config.AccessPolicy(s.RunID)
 	if err != nil {

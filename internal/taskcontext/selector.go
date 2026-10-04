@@ -56,27 +56,42 @@ func (l Limits) validate() error {
 
 // Input contains task text plus an already admitted corpus. ChangedPaths and
 // PathHints are path-only evidence; neither causes a filesystem read.
+// Selector opts into the experimental rrf-coverage-v1 mode. Empty preserves
+// exact historical/default behavior and hashes; only "rrf-coverage-v1" is
+// admitted beyond empty. PPR carries an explicit advisory file ordering (best
+// first) from one bounded rank treatment over the already admitted corpus; it
+// is a deterministic tie-break only, never a score, and is hashed into the
+// input identity when present. Nil/empty preserves exact historical behavior.
 type Input struct {
-	Version      int      `json:"version"`
-	Scope        Scope    `json:"scope"`
-	Objective    string   `json:"objective"`
-	Files        []File   `json:"-"`
-	ChangedPaths []string `json:"changed_paths,omitempty"`
-	PathHints    []string `json:"path_hints,omitempty"`
-	Limits       Limits   `json:"limits"`
+	Version      int            `json:"version"`
+	Scope        Scope          `json:"scope"`
+	Objective    string         `json:"objective"`
+	Files        []File         `json:"-"`
+	ChangedPaths []string       `json:"changed_paths,omitempty"`
+	PathHints    []string       `json:"path_hints,omitempty"`
+	Anchors      map[string]int `json:"anchors,omitempty"`
+	Selector     string         `json:"selector,omitempty"`
+	PPR          []string       `json:"ppr,omitempty"`
+	Limits       Limits         `json:"limits"`
 }
 
 // SelectedFile is an exact half-open byte excerpt. Hash binds all admitted
 // file bytes; ExcerptHash binds only Content. Both ranges and content are
 // retained so a later role can identify precisely what it was shown.
+// Ranks retains independent RRF ranker ordinals (1-based) for the
+// experimental selector; Covered lists binary concepts newly covered by this
+// visible excerpt. Both are absent for legacy selections, preserving exact
+// historical JSON and hashes.
 type SelectedFile struct {
-	Path        string `json:"path"`
-	Hash        string `json:"hash"`
-	Start       int64  `json:"start"`
-	End         int64  `json:"end"`
-	ExcerptHash string `json:"excerpt_hash"`
-	Reason      string `json:"reason"`
-	Content     string `json:"content"`
+	Path        string         `json:"path"`
+	Hash        string         `json:"hash"`
+	Start       int64          `json:"start"`
+	End         int64          `json:"end"`
+	ExcerptHash string         `json:"excerpt_hash"`
+	Reason      string         `json:"reason"`
+	Content     string         `json:"content"`
+	Ranks       map[string]int `json:"ranks,omitempty"`
+	Covered     []string       `json:"covered,omitempty"`
 }
 
 // Omission records why a supplied path was unavailable to this prompt. It is
@@ -88,6 +103,9 @@ type Omission struct {
 
 // Manifest is a deterministic, observable selection result. It does not claim
 // that omitted files are irrelevant or absent from the bound source.
+// Selector records the experimental mode that produced this selection. Empty
+// preserves exact historical JSON and hashes; "rrf-coverage-v1" binds the new
+// RRF plus bounded coverage treatment.
 type Manifest struct {
 	Version          int            `json:"version"`
 	Scope            Scope          `json:"scope"`
@@ -98,26 +116,48 @@ type Manifest struct {
 	Omissions        []Omission     `json:"omissions"`
 	OmittedCount     int            `json:"omitted_count"`
 	OmissionsTrimmed bool           `json:"omissions_trimmed"`
+	Selector         string         `json:"selector,omitempty"`
 }
 
 // ID hashes the complete observed result. It is evidence of this selection,
-// not a capability to read or mutate the source.
+// not a capability to read or mutate the source. The hash domain is unchanged;
+// empty-selector manifests hash exactly as before because new optional fields
+// are omitted when empty.
 func (m Manifest) ID() (string, error) {
 	if m.Version != version || m.InputBytes < 0 || m.SelectedBytes < 0 || m.SelectedBytes > m.InputBytes || safepath.RequireDigest(m.InputHash) != nil {
 		return "", errors.New("invalid task context manifest")
+	}
+	if err := ValidateSelector(m.Selector); err != nil {
+		return "", err
+	}
+	for _, sel := range m.Selected {
+		if err := validateProvenance(sel.Ranks, sel.Covered); err != nil {
+			return "", err
+		}
+		if m.Selector == "" && (len(sel.Ranks) != 0 || len(sel.Covered) != 0) {
+			return "", errors.New("legacy manifest carries selector provenance")
+		}
 	}
 	return canonical.Hash("harness.task-context-manifest.v1", m)
 }
 
 // Select ranks path and lexical evidence, returns UTF-8 snippets within Limits,
 // and makes every omission explicit. It is deterministic for equivalent input:
-// callers may provide files and hints in any order.
+// callers may provide files and hints in any order. Empty Selector preserves
+// exact legacy behavior; Selector "rrf-coverage-v1" fuses independent ordinal
+// rankers with unweighted RRF and bounded coverage. An explicit PPR ordering
+// (legacy selection only) breaks score ties by advisory rank before the
+// historical path tie-break; it never promotes zero-signal files and an empty
+// ordering preserves exact legacy order and hashes.
 func Select(in Input) (Manifest, error) {
 	if err := validateInput(in); err != nil {
 		return Manifest{}, err
 	}
 	files := append([]File(nil), in.Files...)
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	if in.Selector == SelectorRRFCoverageV1 {
+		return selectRRFCoverage(in, files)
+	}
 	inputHash, err := inputID(in, files)
 	if err != nil {
 		return Manifest{}, err
@@ -141,11 +181,37 @@ func Select(in Input) (Manifest, error) {
 			continue
 		}
 		score, first, reason := rank(file, terms, changed, hints)
+		if pivot, anchored := in.Anchors[file.Path]; anchored {
+			first = pivot
+			score += 700
+			if reason == "" {
+				reason = "graph_anchor"
+			}
+		}
 		candidates = append(candidates, scoredFile{file: file, score: score, first: first, reason: reason})
+	}
+	// An explicit advisory PPR ordering breaks score ties deterministically
+	// before the historical path tie-break. Files absent from the ordering
+	// sort after every ordered file; equal scores with no ordering resolve
+	// exactly as before. Zero-signal (score 0) files stay omitted below: the
+	// ordering never promotes them to positive evidence.
+	pprRank := make(map[string]int, len(in.PPR))
+	for i, p := range in.PPR {
+		pprRank[p] = i + 1
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].score != candidates[j].score {
 			return candidates[i].score > candidates[j].score
+		}
+		ri, rj := pprRank[candidates[i].file.Path], pprRank[candidates[j].file.Path]
+		if ri == 0 {
+			ri = len(in.PPR) + 1
+		}
+		if rj == 0 {
+			rj = len(in.PPR) + 1
+		}
+		if ri != rj {
+			return ri < rj
 		}
 		return candidates[i].file.Path < candidates[j].file.Path
 	})
@@ -209,10 +275,14 @@ func validateInput(in Input) error {
 	if in.Version != version || safepath.RequireDigest(in.Scope.SourceID) != nil || (in.Scope.CandidateID != "" && safepath.RequireDigest(in.Scope.CandidateID) != nil) || len(in.Objective) == 0 || len(in.Objective) > 16<<10 || !utf8.ValidString(in.Objective) || len(in.Files) == 0 || len(in.Files) > 4096 {
 		return errors.New("invalid task context input")
 	}
+	if err := ValidateSelector(in.Selector); err != nil {
+		return err
+	}
 	if err := in.Limits.validate(); err != nil {
 		return err
 	}
 	seen := map[string]bool{}
+	filesByPath := make(map[string]File, len(in.Files))
 	total := 0
 	for _, f := range in.Files {
 		if safepath.Relative(f.Path) != nil || safepath.RequireDigest(f.Hash) != nil || !sameHash(f.Hash, f.Content) {
@@ -223,9 +293,19 @@ func validateInput(in Input) error {
 			return errors.New("task context path alias")
 		}
 		seen[key] = true
+		filesByPath[f.Path] = f
 		total += len(f.Content)
 		if total > in.Limits.MaxInputBytes {
 			return errors.New("task context input byte limit")
+		}
+	}
+	if len(in.Anchors) > len(in.Files) {
+		return errors.New("too many task context anchors")
+	}
+	for path, offset := range in.Anchors {
+		file, exists := filesByPath[path]
+		if safepath.Relative(path) != nil || !exists || offset < 0 || offset >= len(file.Content) || !utf8.Valid(file.Content) || !utf8.RuneStart(file.Content[offset]) {
+			return errors.New("invalid task context anchor")
 		}
 	}
 	for _, paths := range [][]string{in.ChangedPaths, in.PathHints} {
@@ -241,6 +321,29 @@ func validateInput(in Input) error {
 	if len(in.ChangedPaths) > 0 && in.Scope.CandidateID == "" {
 		return errors.New("task context candidate missing for changed paths")
 	}
+	// An explicit advisory ordering binds only already admitted corpus paths:
+	// every entry must name one admitted file exactly once, with no scope
+	// escape and no mixing with the experimental RRF selector. Ordering
+	// length is capped to the bounded rank-treatment size.
+	if len(in.PPR) > 64 {
+		return errors.New("too many task context PPR paths")
+	}
+	if len(in.PPR) > 0 {
+		if in.Selector != "" {
+			return errors.New("task context PPR requires legacy selection")
+		}
+		admitted := make(map[string]bool, len(in.Files))
+		for _, f := range in.Files {
+			admitted[f.Path] = true
+		}
+		seenPPR := make(map[string]bool, len(in.PPR))
+		for _, p := range in.PPR {
+			if safepath.Relative(p) != nil || !admitted[p] || seenPPR[p] {
+				return errors.New("invalid task context PPR path")
+			}
+			seenPPR[p] = true
+		}
+	}
 	return nil
 }
 
@@ -253,15 +356,22 @@ func inputID(in Input, files []File) (string, error) {
 	changed, hints := append([]string(nil), in.ChangedPaths...), append([]string(nil), in.PathHints...)
 	sort.Strings(changed)
 	sort.Strings(hints)
+	// The advisory ordering is rank order, not a set: it hashes as given so
+	// a reordered treatment is a different input. Empty stays omitted, which
+	// preserves the exact historical input hash.
+	ppr := append([]string(nil), in.PPR...)
 	return canonical.Hash("harness.task-context-input.v1", struct {
-		Version   int         `json:"version"`
-		Scope     Scope       `json:"scope"`
-		Objective string      `json:"objective"`
-		Files     []inputFile `json:"files"`
-		Changed   []string    `json:"changed"`
-		Hints     []string    `json:"hints"`
-		Limits    Limits      `json:"limits"`
-	}{in.Version, in.Scope, in.Objective, bound, changed, hints, in.Limits})
+		Version   int            `json:"version"`
+		Scope     Scope          `json:"scope"`
+		Objective string         `json:"objective"`
+		Files     []inputFile    `json:"files"`
+		Changed   []string       `json:"changed"`
+		Hints     []string       `json:"hints"`
+		Anchors   map[string]int `json:"anchors,omitempty"`
+		Selector  string         `json:"selector,omitempty"`
+		PPR       []string       `json:"ppr,omitempty"`
+		Limits    Limits         `json:"limits"`
+	}{in.Version, in.Scope, in.Objective, bound, changed, hints, in.Anchors, in.Selector, ppr, in.Limits})
 }
 
 func sameHash(want string, content []byte) bool {

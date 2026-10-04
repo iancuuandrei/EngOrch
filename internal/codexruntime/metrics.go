@@ -32,10 +32,13 @@ type ContextUsage struct {
 	PendingCalls     int             `json:"pending_calls"`
 	Tools            []ToolUsage     `json:"tools"`
 	ProviderUsage    runtime.Usage   `json:"provider_usage"`
+	CompactionCount  *int            `json:"compaction_count,omitempty"`
+	CompactionCover  string          `json:"compaction_coverage,omitempty"`
 }
 
 // MeasureContext computes reproducible accounting from one validated journal read.
-// Content bytes include structured tool result wrappers and base64 representations.
+// Content bytes count exact journaled tool-result JSON, including UTF-8-first
+// text pages for current intents and Base64 for binary or legacy text pages.
 // They exclude provider-added prompts, hidden context, tokenizer effects and cost.
 func MeasureContext(path string) (ContextUsage, error) {
 	events, err := journal.Read(path)
@@ -87,6 +90,13 @@ func MeasureContext(path string) (ContextUsage, error) {
 	if s.Result != nil {
 		report.OutputBytes = len(s.Result.Output)
 		report.ProviderUsage = s.Result.Usage
+	}
+	if s.Compaction != nil {
+		report.CompactionCover = s.Compaction.Coverage
+		if s.Compaction.Coverage == "OBSERVED" && s.Compaction.Count > 0 {
+			count := s.Compaction.Count
+			report.CompactionCount = &count
+		}
 	}
 	for _, counter := range byTool {
 		report.Tools = append(report.Tools, *counter)

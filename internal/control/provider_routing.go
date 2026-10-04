@@ -5,7 +5,9 @@ import (
 
 	"harness.local/engorch/internal/access"
 	"harness.local/engorch/internal/config"
+	"harness.local/engorch/internal/modelpolicy"
 	"harness.local/engorch/internal/providergateway"
+	"harness.local/engorch/internal/providerruntime"
 	"harness.local/engorch/internal/runtime"
 )
 
@@ -27,6 +29,92 @@ type ProviderRouting struct {
 // exact access reservation, provider contracts and finite adapter. It never
 // searches for or substitutes another role, provider, model or protocol.
 func ResolveProviderRouting(c config.Config, runID, role, inputHash string, attempt int, selectedProfiles ...runtime.Profile) (ProviderRouting, error) {
+	return resolveProviderRouting(c, runID, role, inputHash, attempt, -1, nil, selectedProfiles...)
+}
+
+// resolveProviderRoutingForSnapshot binds an already-built runtime invocation
+// to a routing observation rederived from the exact current controller state.
+// It is the only production path that emits versioned routing evidence.
+func resolveProviderRoutingForSnapshot(s Snapshot, invocation runtime.Invocation, attempt int) (ProviderRouting, error) {
+	if err := invocation.Validate(); err != nil {
+		return ProviderRouting{}, err
+	}
+	c := s.Creation.Config
+	inputHash, err := providerInputIdentity(c, invocation)
+	if err != nil {
+		return ProviderRouting{}, err
+	}
+	evidence, err := modelRoutingDecisionForInvocation(s, invocation)
+	if err != nil {
+		return ProviderRouting{}, err
+	}
+	return resolveProviderRouting(c, s.RunID, invocation.Profile.Role, inputHash, attempt, int64(len(invocation.Input)), evidence, invocation.Profile)
+}
+
+// resolveProviderRoutingForRecordedEvidence validates the exact decision
+// persisted with an already-dispatched provider receipt. It intentionally does
+// not recount later controller failures, which may have changed after this
+// invocation was admitted.
+func resolveProviderRoutingForRecordedEvidence(c config.Config, runID string, invocation runtime.Invocation, attempt int, evidence *access.RoutingDecision) (ProviderRouting, error) {
+	if err := invocation.Validate(); err != nil {
+		return ProviderRouting{}, err
+	}
+	inputHash, err := providerInputIdentity(c, invocation)
+	if err != nil {
+		return ProviderRouting{}, err
+	}
+	return resolveProviderRouting(c, runID, invocation.Profile.Role, inputHash, attempt, int64(len(invocation.Input)), evidence, invocation.Profile)
+}
+
+// validateRoutingDecisionForSnapshot is used while replaying an accepted
+// provider receipt. Version 2 binds the exact immutable creation objective;
+// the accepted failure count remains the one persisted with that intent and
+// is not recomputed from later replay state.
+func validateRoutingDecisionForSnapshot(s Snapshot, invocation runtime.Invocation, evidence *access.RoutingDecision) error {
+	policy := s.Creation.Config.ModelPolicy
+	if policy == nil || policy.DecisionEvidenceVersion != 2 {
+		return nil
+	}
+	if _, configured := policy.Rules[invocation.Profile.Role]; !configured {
+		if evidence != nil {
+			return errors.New("routing evidence is not enabled for this role")
+		}
+		return nil
+	}
+	if evidence == nil {
+		return errors.New("version 2 routing evidence is missing during replay")
+	}
+	objectiveHash, err := modelpolicy.ObjectiveDigest(s.Creation.Objective)
+	if err != nil || objectiveHash != evidence.ObjectiveHash {
+		return errors.New("recorded calibration objective differs from immutable creation")
+	}
+	selected, expected, err := modelSelectionForObjectiveHash(s.Creation.Config, invocation.Profile.Role, int64(len(invocation.Input)), evidence.AcceptedFailures, objectiveHash)
+	if err != nil || selected != invocation.Profile || !sameCanonical(expected, evidence) {
+		return errors.New("recorded calibration routing decision differs from immutable policy")
+	}
+	return nil
+}
+
+func providerInputIdentity(c config.Config, invocation runtime.Invocation) (string, error) {
+	var inputHash string
+	var err error
+	if invocation.Profile.Runtime == "provider-api" {
+		_, expectation, resolveErr := ConfiguredProviderExpectation(c, invocation.Profile.Role, invocation.Profile)
+		if resolveErr != nil {
+			return "", resolveErr
+		}
+		direct := providerruntime.Invocation{Version: 1, System: "Return exactly one JSON value for the controller role request. Do not claim tools or repository access.", Prompt: invocation.Input, Output: providerruntime.OutputContract{Kind: "json"}}
+		inputHash, err = direct.InputHash(expectation)
+	} else {
+		inputHash, err = access.InputID(invocation.Input)
+	}
+	if err != nil {
+		return "", err
+	}
+	return inputHash, nil
+}
+
+func resolveProviderRouting(c config.Config, runID, role, inputHash string, attempt int, inputBytes int64, routingDecision *access.RoutingDecision, selectedProfiles ...runtime.Profile) (ProviderRouting, error) {
 	profile, err := c.Route(role)
 	if err != nil {
 		return ProviderRouting{}, err
@@ -88,7 +176,10 @@ func ResolveProviderRouting(c config.Config, runID, role, inputHash string, atte
 	if !route.AllowsModelChoice(modelChoice) {
 		return ProviderRouting{}, errors.New("selected model choice is not in the access route")
 	}
-	intent := access.Intent{Attempt: attempt, PolicyID: policyID, InputHash: inputHash, Route: route, ModelChoice: modelChoice, Reservation: reservation}
+	if err := validateRoutingDecisionForProfile(c, profile, route, modelChoice, routingDecision, inputBytes); err != nil {
+		return ProviderRouting{}, err
+	}
+	intent := access.Intent{Attempt: attempt, PolicyID: policyID, InputHash: inputHash, Route: route, ModelChoice: modelChoice, RoutingDecision: routingDecision, Reservation: reservation}
 	invocationID, err := intent.ID()
 	if err != nil {
 		return ProviderRouting{}, err
@@ -111,6 +202,48 @@ func ResolveProviderRouting(c config.Config, runID, role, inputHash string, atte
 		selected.OpenCode = &host
 	}
 	return selected, nil
+}
+
+func validateRoutingDecisionForProfile(c config.Config, profile runtime.Profile, route access.Route, choice *access.ModelChoice, evidence *access.RoutingDecision, inputBytes int64) error {
+	policy := c.ModelPolicy
+	if policy == nil || policy.Rules[profile.Role].DefaultProfile == "" || policy.DecisionEvidenceVersion == 0 {
+		if evidence != nil {
+			return errors.New("routing decision evidence is not enabled by configuration")
+		}
+		return nil
+	}
+	if evidence == nil {
+		return errors.New("opted-in routing decision evidence is missing")
+	}
+	configID, err := c.ID()
+	if err != nil || configID != evidence.ConfigID {
+		return errors.New("routing decision configuration identity mismatch")
+	}
+	if err := evidence.Validate(route, choice); err != nil {
+		return err
+	}
+	if inputBytes >= 0 && evidence.ContextBytes != inputBytes {
+		return errors.New("routing decision input size differs from exact invocation")
+	}
+	if policy.DecisionEvidenceVersion == 2 {
+		want, expected, err := modelSelectionForObjectiveHash(c, profile.Role, evidence.ContextBytes, evidence.AcceptedFailures, evidence.ObjectiveHash)
+		if err != nil || want != profile || !sameCanonical(expected, evidence) {
+			return errors.New("version 2 routing evidence differs from frozen calibration decision")
+		}
+		return nil
+	}
+	decision, err := modelpolicy.Select(*policy, modelpolicy.Request{
+		Role: profile.Role, ReadOnly: profile.Role == "explorer", Complexity: modelpolicy.LevelMedium, Risk: modelpolicy.LevelMedium,
+		Uncertainty: modelpolicy.LevelMedium, ContextBytes: evidence.ContextBytes, Failures: evidence.AcceptedFailures,
+	})
+	if err != nil {
+		return err
+	}
+	want := runtime.Profile{Runtime: decision.Profile.Runtime, Provider: decision.Profile.Provider, Model: decision.Profile.Model, Effort: decision.Profile.Effort, Role: profile.Role}
+	if decision.Profile.Name != evidence.ProfileName || decision.Reason != evidence.Reason || want != profile || decision.Profile.Model != evidence.Model || decision.Profile.Effort != evidence.Effort {
+		return errors.New("routing decision evidence differs from deterministic policy selection")
+	}
+	return nil
 }
 
 // ConfiguredProviderExpectation returns the exact role controls and capability

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -226,4 +227,126 @@ func compositeToolPart(rows []map[string]any, index int) map[string]any {
 }
 func compositeToolState(rows []map[string]any, index int) map[string]any {
 	return compositeToolPart(rows, index)["state"].(map[string]any)
+}
+
+func compositeReasoningCarrier(id, messageID, item, cipher string, start, end int64) map[string]any {
+	return reasoningFixturePart(id, messageID, "carrier text", start, end, map[string]any{
+		"openai": map[string]any{"itemId": item, "reasoningEncryptedContent": cipher},
+	})
+}
+
+func compositeReasoningFragment(id, messageID, item string, start, end int64) map[string]any {
+	return reasoningFixturePart(id, messageID, "summary text", start, end, map[string]any{
+		"openai": map[string]any{"itemId": item},
+	})
+}
+
+func spliceCompositeFinal(fixture *compositeTurnFixture, middle []map[string]any) {
+	finalParts := parts(fixture.transcript[2])
+	fixture.transcript[2]["parts"] = append(finalParts[:1], append(middle, finalParts[1:]...)...)
+}
+
+func decodeCompositeFixture(t *testing.T, fixture *compositeTurnFixture) (CompositeToolTurnObservation, error) {
+	t.Helper()
+	return DecodeCompositeToolTurn(marshalToolTranscript(t, fixture.transcript), fixture.binding, "use both tools", fixture.receiptPath, fixture.receipt, func(toolreceipts.Owner, toolbridge.Call, toolbridge.Result) error {
+		return nil
+	})
+}
+
+func TestDecodeCompositeToolTurnPairsMultiSummaryWithSameGenerationCarrier(t *testing.T) {
+	fixture := newCompositeTurnFixture(t, false, true)
+	item, cipher := "rs_synthetic_summary_item", "synthetic-encrypted-carrier"
+	spliceCompositeFinal(&fixture, []map[string]any{
+		reasoningFixturePart("part_composite_summary_1", "msg_composite_final", "first summary ", 31, 32, map[string]any{"openai": map[string]any{"itemId": item}}),
+		reasoningFixturePart("part_composite_summary_2", "msg_composite_final", "second summary ", 32, 33, map[string]any{"openai": map[string]any{"itemId": item}}),
+		compositeReasoningCarrier("part_composite_carrier", "msg_composite_final", item, cipher, 33, 34),
+	})
+	observation, err := decodeCompositeFixture(t, &fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := observation.Generations[1].Reasoning
+	if len(got) != 1 || got[0].ProviderItemID != ProviderItemID(item) || got[0].EncryptedContent != cipher || got[0].PartID != "part_composite_carrier" {
+		t.Fatal("composite multi-summary was not paired with its same-generation carrier", got)
+	}
+	if want := toolTurnDigest([]byte("first summary second summary carrier text")); got[0].TextSHA256 != want {
+		t.Fatal("composite aggregated reasoning text digest mismatch", got[0].TextSHA256)
+	}
+	if observation.Text != "complete" || observation.Generations[1].TextSHA256 != toolTurnDigest([]byte("complete")) {
+		t.Fatal("composite final text projection changed while pairing reasoning", observation.Text)
+	}
+	if len(observation.Calls) != 2 || observation.Calls[0].ProviderCallID == observation.Calls[0].RequestID || observation.Calls[0].RequestID == observation.Calls[1].RequestID {
+		t.Fatal("composite tool bindings did not survive reasoning pairing", observation.Calls)
+	}
+	if len(observation.TranscriptSHA256) != 64 || observation.ReceiptBindingID != fixture.receipt.BindingID || len(observation.ReceiptJournalHead) != 64 || len(observation.ReceiptStateSHA256) != 64 {
+		t.Fatal("composite transcript or receipt bindings missing after reasoning pairing", observation)
+	}
+	encoded, err := canonical.Bytes(observation)
+	if err != nil || !strings.Contains(string(encoded), `"encrypted_content":"`+cipher+`"`) || !strings.Contains(string(encoded), `"provider_item_id":"`+item+`"`) {
+		t.Fatal("composite encrypted carrier identity absent from canonical observation", string(encoded), err)
+	}
+	var roundTrip CompositeToolTurnObservation
+	if err := canonical.Decode(encoded, &roundTrip); err != nil || !reflect.DeepEqual(roundTrip, observation) {
+		t.Fatal("composite paired reasoning observation did not survive canonical round trip", roundTrip, err)
+	}
+}
+
+func TestDecodeCompositeToolTurnSingleCarrierShapeUnchanged(t *testing.T) {
+	fixture := newCompositeTurnFixture(t, false, true)
+	spliceCompositeFinal(&fixture, []map[string]any{
+		compositeReasoningCarrier("part_composite_reasoning", "msg_composite_final", "rs_provider_item", "synthetic-encrypted-replay", 31, 32),
+	})
+	observation, err := decodeCompositeFixture(t, &fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := observation.Generations[1].Reasoning
+	if len(got) != 1 || got[0].PartID != "part_composite_reasoning" || got[0].ProviderItemID != "rs_provider_item" || got[0].EncryptedContent != "synthetic-encrypted-replay" || got[0].TextSHA256 != toolTurnDigest([]byte("carrier text")) {
+		t.Fatal("composite single-carrier reasoning projection changed", got)
+	}
+}
+
+func TestDecodeCompositeToolTurnRejectsUnpairedOrAmbiguousReasoning(t *testing.T) {
+	tests := map[string]func(*compositeTurnFixture){
+		"orphan summary": func(f *compositeTurnFixture) {
+			spliceCompositeFinal(f, []map[string]any{
+				compositeReasoningFragment("part_composite_frag", "msg_composite_final", "rs_item", 31, 32),
+			})
+		},
+		"mismatched provider item": func(f *compositeTurnFixture) {
+			spliceCompositeFinal(f, []map[string]any{
+				compositeReasoningFragment("part_composite_frag", "msg_composite_final", "rs_item_a", 31, 32),
+				compositeReasoningCarrier("part_composite_carrier", "msg_composite_final", "rs_item_b", "synthetic-encrypted-a", 32, 33),
+			})
+		},
+		"duplicate carriers": func(f *compositeTurnFixture) {
+			spliceCompositeFinal(f, []map[string]any{
+				compositeReasoningCarrier("part_composite_carrier_1", "msg_composite_final", "rs_item", "synthetic-encrypted-a", 31, 32),
+				compositeReasoningCarrier("part_composite_carrier_2", "msg_composite_final", "rs_item", "synthetic-encrypted-a", 32, 33),
+			})
+		},
+		"contradictory carriers": func(f *compositeTurnFixture) {
+			spliceCompositeFinal(f, []map[string]any{
+				compositeReasoningCarrier("part_composite_carrier_1", "msg_composite_final", "rs_item", "synthetic-encrypted-a", 31, 32),
+				compositeReasoningCarrier("part_composite_carrier_2", "msg_composite_final", "rs_item", "synthetic-encrypted-b", 32, 33),
+			})
+		},
+		"cross-generation pair": func(f *compositeTurnFixture) {
+			intermediateParts := parts(f.transcript[1])
+			fragment := compositeReasoningFragment("part_composite_frag", "msg_composite_tools", "rs_shared_item", 13, 14)
+			f.transcript[1]["parts"] = append(intermediateParts[:2], append([]map[string]any{fragment}, intermediateParts[2:]...)...)
+			spliceCompositeFinal(f, []map[string]any{
+				compositeReasoningCarrier("part_composite_carrier", "msg_composite_final", "rs_shared_item", "synthetic-encrypted-a", 31, 32),
+			})
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			fixture := newCompositeTurnFixture(t, false, true)
+			mutate(&fixture)
+			if _, err := decodeCompositeFixture(t, &fixture); err == nil {
+				t.Fatal("composite unpaired or ambiguous reasoning admitted")
+			}
+		})
+	}
 }

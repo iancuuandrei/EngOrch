@@ -30,8 +30,8 @@ func TestAutonomousPrepareOnlyFlagUsesBoundedRunCreation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Creation.Execution == nil || !s.Creation.Execution.GraphEnabled() || s.State != "IMPLEMENTING" || s.MachineApproval == nil || s.MachineApproval.PlanID != s.PlanID {
-		t.Fatalf("prepare-only did not retain the qualified autonomous inputs: %#v", s)
+	if s.Creation.Execution == nil || !s.Creation.Execution.GraphEnabled() || s.State != "AWAITING_APPROVAL" || s.MachineApproval != nil || len(s.PlannerCorrections) != 2 || s.RepairAttempts != 0 {
+		t.Fatalf("prepare-only did not retain the bounded rejected planner inputs: %#v", s)
 	}
 	if s.Workspace != nil || s.Graph != nil || s.ExplorerHost != nil || len(s.Explorations) != 0 || s.WriterHost != nil || s.WriterProposal != nil {
 		t.Fatal("invalid planner graph crossed the preparation boundary")

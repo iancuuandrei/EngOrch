@@ -6,6 +6,16 @@ path, deterministic branch and actual per-worktree Git directory. The destinatio
 MUST be `.harness/worktrees/RUN` beneath the source checkout. Branch is
 `harness/RUN`. Existing unrelated destinations/branches MUST NOT be reused.
 
+Windows creation MUST check the proposed Git working directory before recording
+intent or performing registration. The current Git for Windows `-C` route cannot
+observe workspace paths of 260 or more UTF-16 code units, even when
+`core.longpaths=true` is configured. Unsupported destinations MUST produce
+`workspace_path_unsupported` with the shorter-checkout next action before the
+first new planner dispatch where possible. This check MUST remain separate from
+request validation: historical pending requests remain valid for replay and
+explicit observation. An unsupported path MUST NOT settle UNKNOWN, delete a
+registered worktree, relocate it or authorize recreation.
+
 Creation MUST be preceded by durable controller intent. Registration uses Git
 `worktree add --no-checkout`; regular blobs are materialized directly without
 checkout hooks or filters. Symlinks, submodules and unsupported modes are rejected.

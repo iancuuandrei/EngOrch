@@ -21,7 +21,13 @@ func executionProviderTools(cfg ExecuteConfig, plan SessionPlan) ([]toolbridge.T
 	if err := cfg.Paths.validate(); err != nil {
 		return nil, err
 	}
-	prepared, err := contextmcp.PrepareRecorderBindingWithQueue(cfg.Broker, cfg.Composite.InvocationID, cfg.Composite.CallerBindingSHA256, cfg.Composite.AgentProjection, cfg.Composite.MaxQueuedCalls)
+	var prepared toolreceipts.Binding
+	var err error
+	if cfg.Composite.QueueWaitTimeout > 0 || cfg.Composite.CallbackTimeout > 0 {
+		prepared, err = contextmcp.PrepareRecorderBindingWithTimeouts(cfg.Broker, cfg.Composite.InvocationID, cfg.Composite.CallerBindingSHA256, cfg.Composite.AgentProjection, cfg.Composite.MaxQueuedCalls, cfg.Composite.QueueWaitTimeout, cfg.Composite.CallbackTimeout)
+	} else {
+		prepared, err = contextmcp.PrepareRecorderBindingWithQueue(cfg.Broker, cfg.Composite.InvocationID, cfg.Composite.CallerBindingSHA256, cfg.Composite.AgentProjection, cfg.Composite.MaxQueuedCalls)
+	}
 	if err != nil || !equalCanonical(prepared, *cfg.Intent.ToolReceipts) || prepared.CatalogSHA256 != cfg.Composite.CatalogSHA256 || prepared.CatalogSHA256 != plan.CatalogSHA256 {
 		return nil, errors.New("composite runtime catalog or caller differs")
 	}
@@ -63,8 +69,15 @@ func newExecutionMCP(cfg ExecuteConfig, bearer string) (*contextmcp.OwnedServer,
 		}
 		return server, nil
 	}
-	if cfg.MCPQueueDepth < 0 || cfg.MCPQueueDepth > 32 {
+	if cfg.MCPQueueDepth < 0 || cfg.MCPQueueDepth > contextmcp.InvocationToolCallBudget-1 || cfg.MCPQueueWait < 0 {
 		return nil, errors.New("invalid context MCP queue depth")
+	}
+	if cfg.MCPQueueWait > 0 {
+		queued, wait, err := contextmcp.QueuePolicyForCallBudget(cfg.MCPQueueDepth+1, contextmcp.ContextCallTimeout)
+		if err != nil || queued != cfg.MCPQueueDepth || wait != cfg.MCPQueueWait {
+			return nil, errors.New("invalid context MCP queue deadline")
+		}
+		return contextmcp.NewOwnedWithQueueDeadlines(cfg.Broker, bearer, nil, cfg.MCPQueueDepth, cfg.MCPQueueWait, contextmcp.ContextCallTimeout)
 	}
 	if cfg.MCPQueueDepth == 0 {
 		return contextmcp.NewOwned(cfg.Broker, bearer, nil)

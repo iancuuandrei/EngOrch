@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"harness.local/engorch/internal/access"
 	"harness.local/engorch/internal/canonical"
@@ -25,12 +26,23 @@ type RuntimeUsageEntry struct {
 
 // RunUsage reports every journaled Codex host in controller order, not only the
 // latest writer/reviewer. Fake runtime work has no provider accounting entry.
+// OpenCode invocations are reported separately through replay-validated
+// normalized gateway aggregates; the field is omitted for Codex-only runs to
+// preserve legacy serialization.
 type RunUsage struct {
-	Admissions     []AdmissionUsage    `json:"admissions,omitempty"`
-	RunID          string              `json:"run_id"`
-	ControllerHead string              `json:"controller_head"`
-	Scope          string              `json:"scope"`
-	Invocations    []RuntimeUsageEntry `json:"invocations"`
+	WorkingContext      *WorkingContextUsage `json:"working_context,omitempty"`
+	Admissions          []AdmissionUsage     `json:"admissions,omitempty"`
+	RunID               string               `json:"run_id"`
+	ControllerHead      string               `json:"controller_head"`
+	Scope               string               `json:"scope"`
+	Invocations         []RuntimeUsageEntry  `json:"invocations"`
+	OpenCodeInvocations []OpenCodeUsageEntry `json:"open_code_invocations,omitempty"`
+	// controllerOrder is the derived actual controller order of feedback
+	// observation identities across Codex host intents and OpenCode
+	// admissions in shared journal-event space. It is read-only advisory
+	// ordering metadata: unexported, never serialized, hashed or granted
+	// authority, and never part of the durable wire.
+	controllerOrder []string
 }
 
 // AdmissionUsage reports controller-authorized resource reservations separately
@@ -43,9 +55,105 @@ type AdmissionUsage struct {
 }
 
 type usageTarget struct {
-	invocation runtime.Invocation
-	path, head string
-	resultHash string
+	failedExplorer bool
+	failedPlanner  bool
+	invocation     runtime.Invocation
+	path, head     string
+	resultHash     string
+	// order is the controller journal-event index of the host intent.
+	order int
+}
+
+// openCodeFeedbackPositions derives advisory controller positions for
+// OpenCode invocations in shared journal-event space, mirroring collect
+// admission order (dispatch admission index, else receipt index) without
+// revalidating evidence. Only opencode-http admissions and receipts are
+// considered, so Codex host intents never collide. It performs no writes,
+// never synthesizes totals and grants no authority; positions are consumed
+// only for sequential advisory feedback ordering.
+func openCodeFeedbackPositions(events []journal.Event) map[string]int {
+	admissionOrder := map[string]int{}
+	for index, event := range events {
+		if event.Kind != "agent.dispatch-admitted" {
+			continue
+		}
+		var admission AgentDispatchAdmission
+		if err := canonical.Decode(event.Payload, &admission); err != nil {
+			continue
+		}
+		if admission.Invocation.Profile.Runtime != "opencode-http" {
+			continue
+		}
+		if _, duplicate := admissionOrder[admission.Invocation.ID]; !duplicate {
+			admissionOrder[admission.Invocation.ID] = index
+		}
+	}
+	positions := map[string]int{}
+	for index, event := range events {
+		var receipt providerDispatchReceipt
+		switch event.Kind {
+		case "planning.provider-observed", "role.provider-observed":
+			if err := canonical.Decode(event.Payload, &receipt); err != nil {
+				continue
+			}
+		default:
+			continue
+		}
+		if receipt.Result.Requested.Runtime != "opencode-http" {
+			continue
+		}
+		if order, ok := admissionOrder[receipt.InvocationID]; ok {
+			positions[receipt.InvocationID] = order
+		} else if _, ok := positions[receipt.InvocationID]; !ok {
+			positions[receipt.InvocationID] = index
+		}
+	}
+	for id, order := range admissionOrder {
+		if _, ok := positions[id]; !ok {
+			positions[id] = order
+		}
+	}
+	return positions
+}
+
+// mergeFeedbackControllerOrder derives actual controller observation order
+// across Codex host intents and OpenCode admissions in shared journal-event
+// space. Positions never collide across groups; a lexical tiebreak keeps the
+// merge deterministic. The result carries no authority and is consumed only
+// for sequential advisory feedback ordering, never as budget evidence.
+func mergeFeedbackControllerOrder(targets []usageTarget, openCodeOrder map[string]int) []string {
+	positioned := make([]struct {
+		id    string
+		order int
+	}, 0, len(targets)+len(openCodeOrder))
+	for _, target := range targets {
+		positioned = append(positioned, struct {
+			id    string
+			order int
+		}{target.invocation.ID, target.order})
+	}
+	for id, order := range openCodeOrder {
+		positioned = append(positioned, struct {
+			id    string
+			order int
+		}{id, order})
+	}
+	sort.SliceStable(positioned, func(i, j int) bool {
+		if positioned[i].order != positioned[j].order {
+			return positioned[i].order < positioned[j].order
+		}
+		return positioned[i].id < positioned[j].id
+	})
+	ids := make([]string, 0, len(positioned))
+	seen := map[string]bool{}
+	for _, item := range positioned {
+		if seen[item.id] {
+			continue
+		}
+		seen[item.id] = true
+		ids = append(ids, item.id)
+	}
+	return ids
 }
 
 func admittedRuntimeTerminal(s Snapshot, invocation runtime.Invocation) (string, string) {
@@ -204,7 +312,17 @@ func measureAdmissions(path string, s Snapshot) ([]AdmissionUsage, error) {
 
 // MeasureRunUsage replays controller evidence and verifies each runtime receipt
 // head before returning accounting. Missing or changed admitted journals fail.
+// Composite turns fail safely without an exact scheduler binding; use
+// MeasureRunUsageWithScheduler to supply one.
 func MeasureRunUsage(path string) (RunUsage, error) {
+	return MeasureRunUsageWithScheduler(path, "")
+}
+
+// MeasureRunUsageWithScheduler is MeasureRunUsage with an exact scheduler
+// journal binding for composite turns. The scheduler is consulted only
+// through the existing journal-only composite verifier for v3 turns; all
+// other turns never read it.
+func MeasureRunUsageWithScheduler(path, schedulerPath string) (RunUsage, error) {
 	events, err := journal.Read(path)
 	if err != nil {
 		return RunUsage{}, err
@@ -220,6 +338,10 @@ func MeasureRunUsage(path string) (RunUsage, error) {
 		return RunUsage{}, errors.New("run journal required")
 	}
 	report := RunUsage{RunID: s.RunID, ControllerHead: events[len(events)-1].Hash, Scope: "journaled_codex_hosts", Invocations: []RuntimeUsageEntry{}}
+	if workingContextEnabled(s) {
+		usage := measureWorkingContextUsage(s)
+		report.WorkingContext = &usage
+	}
 	report.Admissions, err = measureAdmissions(path, s)
 	if err != nil {
 		return RunUsage{}, err
@@ -229,36 +351,36 @@ func MeasureRunUsage(path string) (RunUsage, error) {
 	}
 	targets := []usageTarget{}
 	indices := map[string]int{}
-	add := func(i runtime.Invocation, path string) {
+	add := func(order int, i runtime.Invocation, path string) {
 		indices[i.ID] = len(targets)
 		head, resultHash := admittedRuntimeTerminal(s, i)
-		target := usageTarget{invocation: i, path: path, head: head, resultHash: resultHash}
+		target := usageTarget{invocation: i, path: path, head: head, resultHash: resultHash, order: order}
 		targets = append(targets, target)
 	}
-	for _, e := range events {
+	for eventIndex, e := range events {
 		switch e.Kind {
 		case "explorer.host-intent":
 			var intent ExplorerHostIntent
 			if err := canonical.Decode(e.Payload, &intent); err != nil {
 				return RunUsage{}, err
 			}
-			add(intent.Invocation, filepath.Join(intent.Launch.Root, "explorer.jsonl"))
+			add(eventIndex, intent.Invocation, filepath.Join(intent.Launch.Root, "explorer.jsonl"))
 		case "planning.host-intent":
 			var l codexhost.Launch
 			if err := canonical.Decode(e.Payload, &l); err != nil {
 				return RunUsage{}, err
 			}
-			i, err := plannerInvocation(s.Creation.Config, s.Creation.Objective)
+			i, err := plannerInvocationForSnapshot(s)
 			if err != nil {
 				return RunUsage{}, err
 			}
-			add(i, filepath.Join(l.Root, "planner.jsonl"))
+			add(eventIndex, i, filepath.Join(l.Root, "planner.jsonl"))
 		case "writer.host-intent":
 			var intent WriterHostIntent
 			if err := canonical.Decode(e.Payload, &intent); err != nil {
 				return RunUsage{}, err
 			}
-			add(intent.Invocation, filepath.Join(intent.Launch.Root, "writer.jsonl"))
+			add(eventIndex, intent.Invocation, filepath.Join(intent.Launch.Root, "writer.jsonl"))
 		case "graph.writer.host-intent":
 			var event GraphWriterHostEvent
 			if err := canonical.Decode(e.Payload, &event); err != nil {
@@ -267,13 +389,13 @@ func MeasureRunUsage(path string) (RunUsage, error) {
 			if event.Intent == nil || event.TaskID == "" {
 				return RunUsage{}, errors.New("graph writer usage intent lacks task binding")
 			}
-			add(event.Intent.Invocation, filepath.Join(event.Intent.Launch.Root, "writer.jsonl"))
+			add(eventIndex, event.Intent.Invocation, filepath.Join(event.Intent.Launch.Root, "writer.jsonl"))
 		case "review.host-intent":
 			var intent ReviewHostIntent
 			if err := canonical.Decode(e.Payload, &intent); err != nil {
 				return RunUsage{}, err
 			}
-			add(intent.Invocation, filepath.Join(intent.Launch.Root, "review.jsonl"))
+			add(eventIndex, intent.Invocation, filepath.Join(intent.Launch.Root, "review.jsonl"))
 		case "planning.runtime-observed", "writer.runtime-observed", "review.runtime-observed", "explorer.runtime-observed", "graph.writer.runtime-observed":
 			// These receipt schemas deliberately have the same correlation fields.
 			var receipt PlannerReceipt
@@ -286,8 +408,21 @@ func MeasureRunUsage(path string) (RunUsage, error) {
 					return RunUsage{}, errors.New("graph writer usage receipt lacks task binding")
 				}
 				receipt = PlannerReceipt{InvocationID: event.RuntimeReceipt.InvocationID, JournalHead: event.RuntimeReceipt.JournalHead, ResultHash: event.RuntimeReceipt.ResultHash}
+			} else if e.Kind == "explorer.runtime-observed" {
+				var explorer ExplorerRuntimeReceipt
+				if err := canonical.Decode(e.Payload, &explorer); err != nil {
+					return RunUsage{}, err
+				}
+				receipt = PlannerReceipt{InvocationID: explorer.InvocationID, JournalHead: explorer.JournalHead, ResultHash: explorer.ResultHash}
+				if index, ok := indices[explorer.InvocationID]; ok {
+					targets[index].failedExplorer = explorer.FailureCode != ""
+				}
 			} else if err := canonical.Decode(e.Payload, &receipt); err != nil {
 				return RunUsage{}, err
+			} else if e.Kind == "planning.runtime-observed" {
+				if index, ok := indices[receipt.InvocationID]; ok {
+					targets[index].failedPlanner = receipt.FailureCode != ""
+				}
 			}
 			index, ok := indices[receipt.InvocationID]
 			if !ok {
@@ -313,16 +448,31 @@ func MeasureRunUsage(path string) (RunUsage, error) {
 			if err != nil {
 				return RunUsage{}, err
 			}
-			if observedHead != target.head || state.Result == nil {
+			if observedHead != target.head || state.Result == nil && !target.failedExplorer && !target.failedPlanner {
 				return RunUsage{}, errors.New("runtime terminal head no longer matches journal")
 			}
-			domain, err := runtimeResultDomain(target.invocation.Profile.Role)
-			if err != nil {
-				return RunUsage{}, err
-			}
-			resultHash, err := canonical.Hash(domain, *state.Result)
-			if err != nil || resultHash != target.resultHash {
-				return RunUsage{}, errors.New("runtime terminal output no longer matches receipt")
+			if target.failedExplorer {
+				host, ok := explorerRunForInvocation(s, target.invocation.ID)
+				if !ok || !explorerCapacityFailure(state, *host, s) {
+					return RunUsage{}, errors.New("explorer failure evidence no longer matches receipt")
+				}
+				hash, err := canonical.Hash("harness.explorer-capacity-failure.v1", *state.TerminalResponse)
+				if err != nil || hash != target.resultHash {
+					return RunUsage{}, errors.New("explorer failure hash changed")
+				}
+			} else if target.failedPlanner {
+				if target.invocation.Profile.Role != "planner" || validatePlannerCapacityFailureRuntime(s, path) != nil {
+					return RunUsage{}, errors.New("planner capacity failure evidence no longer matches receipt")
+				}
+			} else {
+				domain, err := runtimeResultDomain(target.invocation.Profile.Role)
+				if err != nil {
+					return RunUsage{}, err
+				}
+				resultHash, err := canonical.Hash(domain, *state.Result)
+				if err != nil || resultHash != target.resultHash {
+					return RunUsage{}, errors.New("runtime terminal output no longer matches receipt")
+				}
 			}
 		}
 		usage, err := codexruntime.MeasureContext(target.path)
@@ -336,7 +486,7 @@ func MeasureRunUsage(path string) (RunUsage, error) {
 		if usage.InvocationID != target.invocation.ID || usage.Requested != target.invocation.Profile {
 			return RunUsage{}, errors.New("runtime usage invocation substitution")
 		}
-		if target.head != "" && (target.head != usage.JournalHead || !usage.Completed) {
+		if target.head != "" && (target.head != usage.JournalHead || !usage.Completed && !target.failedExplorer && !target.failedPlanner) {
 			return RunUsage{}, errors.New("runtime usage receipt no longer matches journal")
 		}
 		entry.JournalPresent = true
@@ -344,5 +494,11 @@ func MeasureRunUsage(path string) (RunUsage, error) {
 		entry.Usage = &usage
 		report.Invocations = append(report.Invocations, entry)
 	}
+	openCode, err := collectOpenCodeUsageWithScheduler(path, schedulerPath, s, events)
+	if err != nil {
+		return RunUsage{}, err
+	}
+	report.OpenCodeInvocations = openCode
+	report.controllerOrder = mergeFeedbackControllerOrder(targets, openCodeFeedbackPositions(events))
 	return report, nil
 }

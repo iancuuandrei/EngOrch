@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"harness.local/engorch/internal/agenttree"
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/codexhost"
 	"harness.local/engorch/internal/codexruntime"
@@ -19,7 +20,7 @@ import (
 
 // RunExplorer executes or resumes a private read-only host for the exact question.
 // Admission requires its runtime receipt and a still-current candidate.
-func RunExplorer(ctx context.Context, path, question string) (ExplorerRecord, error) {
+func RunExplorer(ctx context.Context, path, question string) (_ ExplorerRecord, err error) {
 	s, err := Inspect(path)
 	if err != nil {
 		return ExplorerRecord{}, err
@@ -46,8 +47,11 @@ func RunExplorer(ctx context.Context, path, question string) (ExplorerRecord, er
 	if err != nil {
 		return ExplorerRecord{}, err
 	}
-	invocation, err = scheduledInvocationFromContext(ctx, taskscheduler.OperationExplorer, invocation)
+	invocation, err = scheduledExplorerInvocationFromContext(ctx, s, invocation)
 	if err != nil {
+		return ExplorerRecord{}, err
+	}
+	if err := requireModelAccessAdmissionAvailable(s, invocation); err != nil {
 		return ExplorerRecord{}, err
 	}
 	if err := requireExecutableRoleRuntime(invocation.Profile); err != nil {
@@ -61,25 +65,81 @@ func RunExplorer(ctx context.Context, path, question string) (ExplorerRecord, er
 			return ExplorerRecord{}, errors.New("exploration already recorded")
 		}
 	}
+	var managed *agentDispatchBinding
+	settled := false
+	if turn := scheduledAgentTurn(ctx); turn != nil && managedExplorerDispatchEnabled(s) && (invocation.Profile.Runtime == "codex-app-server" || invocation.Profile.Runtime == "fake") {
+		prior, hasPrior := s.AgentDispatch[invocation.ID]
+		completed := hasPrior && prior.Observation != nil && prior.Observation.Status == agenttree.StatusSucceeded
+		settled = completed
+		if completed && invocation.Profile.Runtime == "codex-app-server" {
+			runtimePath, pathErr := scheduledRuntimeJournal(s, invocation, taskscheduler.TaskSpec{Operation: taskscheduler.OperationExplorer}, turn)
+			if pathErr != nil {
+				return ExplorerRecord{}, pathErr
+			}
+			if err := requireScheduledOfflineRuntime(invocation.Profile.Runtime, runtimePath); err != nil {
+				return ExplorerRecord{}, err
+			}
+		}
+		var binding agentDispatchBinding
+		var bindingErr error
+		if completed {
+			admissionID, idErr := prior.Admission.ID()
+			if idErr != nil || prior.Admission.Invocation != invocation || prior.Admission.AgentTurn == nil || *prior.Admission.AgentTurn != *turn {
+				return ExplorerRecord{}, errors.Join(errors.New("completed explorer admission differs"), idErr)
+			}
+			binding = agentDispatchBinding{JournalPath: path + ".agent-tree", ControllerPath: path, AdmissionID: admissionID, Node: prior.Admission.Node, InvocationID: invocation.ID, AgentTurn: turn}
+		} else {
+			binding, bindingErr = beginAgentDispatchForTurn(path, s, invocation, turn)
+		}
+		if bindingErr != nil {
+			return ExplorerRecord{}, bindingErr
+		}
+		managed = &binding
+		defer func() {
+			if err != nil && !settled {
+				err = errors.Join(err, finishAgentDispatchUnknown(binding))
+			}
+		}()
+		if !completed {
+			if err := markAgentDispatchRunning(managed); err != nil {
+				return ExplorerRecord{}, err
+			}
+		}
+		s, err = Inspect(path)
+		if err != nil {
+			return ExplorerRecord{}, err
+		}
+	}
+	complete := func(result runtime.Result) (ExplorerRecord, error) {
+		if managed != nil {
+			hash, hashErr := canonical.Hash("harness.explorer-result.v1", result)
+			if hashErr != nil {
+				return ExplorerRecord{}, hashErr
+			}
+			if err := finishAgentDispatch(*managed, hash); err != nil {
+				return ExplorerRecord{}, err
+			}
+			settled = true
+		}
+		record := ExplorerRecord{question, invocation, result}
+		_, err := RecordExploration(path, record)
+		return record, err
+	}
 	if invocation.Profile.Runtime == "fake" && s.Creation.Execution != nil && s.Creation.Execution.GraphEnabled() {
 		result, err := runFakeExplorer(ctx, path, s, invocation, question)
 		if err != nil {
 			return ExplorerRecord{}, err
 		}
-		record := ExplorerRecord{question, invocation, result}
-		_, err = RecordExploration(path, record)
-		return record, err
+		return complete(result)
 	}
 	if invocation.Profile.Runtime == "opencode-http" {
 		result, err := executeOpenCodeRole(ctx, path, s, invocation, question)
 		if err != nil {
 			return ExplorerRecord{}, err
 		}
-		record := ExplorerRecord{question, invocation, result}
-		_, err = RecordExploration(path, record)
-		return record, err
+		return complete(result)
 	}
-	expected, err := expectedExplorerHost(s, question)
+	expected, err := expectedExplorerHostForInvocation(s, question, invocation)
 	if err != nil {
 		return ExplorerRecord{}, err
 	}
@@ -87,9 +147,7 @@ func RunExplorer(ctx context.Context, path, question string) (ExplorerRecord, er
 	if err != nil {
 		return ExplorerRecord{}, err
 	}
-	record := ExplorerRecord{question, expected.Invocation, result}
-	_, err = RecordExploration(path, record)
-	return record, err
+	return complete(result)
 }
 
 // runFakeExplorer synthesizes a deterministic bounded explorer result for the
@@ -116,7 +174,7 @@ func runFakeExplorer(ctx context.Context, path string, s Snapshot, invocation ru
 		return result, err
 	}
 	// Resolve scheduled turn scoping if present (static graph claims have none).
-	scoped, err := scheduledInvocationFromContext(ctx, taskscheduler.OperationExplorer, current)
+	scoped, err := scheduledExplorerInvocationFromContext(ctx, fresh, current)
 	if err != nil {
 		return result, err
 	}
@@ -160,7 +218,19 @@ func runFakeExplorer(ctx context.Context, path string, s Snapshot, invocation ru
 	if len(summary) > 8192 {
 		summary = summary[:8192]
 	}
-	body, err := canonical.Bytes(Exploration{CandidateID: candidateID, Summary: summary, Paths: []string{}})
+	observation := Exploration{CandidateID: candidateID, Summary: summary, Paths: []string{}}
+	var contextEnvelope workingContextTurnEnvelope
+	if workingContextEnabled(fresh) && canonical.Decode([]byte(invocation.Input), &contextEnvelope) == nil && contextEnvelope.ContextVersion == 1 {
+		observation.WorkingContextUpdate, err = canonical.Bytes(struct {
+			ExpectedID   string `json:"expected_id"`
+			ExpectedHash string `json:"expected_content_hash"`
+			Content      string `json:"content"`
+		}{contextEnvelope.ExpectedID, contextEnvelope.ExpectedHash, summary})
+		if err != nil {
+			return result, err
+		}
+	}
+	body, err := canonical.Bytes(observation)
 	if err != nil {
 		return result, err
 	}
@@ -189,7 +259,7 @@ func executeExplorer(ctx context.Context, path string, s Snapshot, expected Expl
 	if err != nil {
 		return result, err
 	}
-	current, err := expectedExplorerHost(s, expected.Question)
+	current, err := expectedExplorerHostForInvocation(s, expected.Question, expected.Invocation)
 	if err != nil {
 		return result, err
 	}
@@ -234,6 +304,9 @@ func executeExplorer(ctx context.Context, path string, s Snapshot, expected Expl
 	// Per-invocation state: every map lookup binds the exact invocation, no
 	// sibling host is substituted. Legacy singleton is mirrored in the map.
 	if run, ok := explorerRunForInvocation(s, expected.Invocation.ID); !ok || run.Intent != expected {
+		if _, _, _, _, policyErr := codexRuntimeUsagePolicy(s, expected.Invocation.Profile.Role); policyErr != nil {
+			return result, policyErr
+		}
 		if err := Append(path, "explorer.host-intent", expected); err != nil {
 			return result, err
 		}
@@ -291,7 +364,18 @@ func executeExplorer(ctx context.Context, path string, s Snapshot, expected Expl
 		cancel()
 		return result, errors.Join(errors.New("explorer runtime is terminal without a result"), terminalErr)
 	}
-	if readErr != nil || state.Result == nil {
+	var pendingResult *runtime.Result
+	usagePending := false
+	if readErr == nil && s.Creation.Config.Version == 2 && state.SemanticResult != nil && state.Result == nil &&
+		state.UsagePolicy != nil && state.UsagePolicy.Required && (state.UsageReceipt == nil || state.UsageReceipt.Coverage != "OBSERVED") {
+		_, semantic, _, pendingErr := observeSemanticUsagePending(ctx, path, runtimePath, expected.Invocation, "harness.explorer-result.v1")
+		if pendingErr != nil {
+			return result, pendingErr
+		}
+		pendingResult = &semantic
+		usagePending = true
+	}
+	if readErr != nil || state.Result == nil && !usagePending {
 		usageBudget, requireLiveUsage, usageQualified, unlimitedTokens, policyErr := codexRuntimeUsagePolicy(s, expected.Invocation.Profile.Role)
 		if policyErr != nil {
 			return result, policyErr
@@ -326,6 +410,16 @@ func executeExplorer(ctx context.Context, path string, s Snapshot, expected Expl
 		} else {
 			_, err = a.Resume(ctx, expected.Invocation.ID)
 		}
+		if errors.Is(err, codexruntime.ErrUsageReconciliation) && s.Creation.Config.Version == 2 {
+			_, semantic, _, pendingErr := observeSemanticUsagePending(ctx, path, runtimePath, expected.Invocation, "harness.explorer-result.v1")
+			if pendingErr == nil {
+				pendingResult = &semantic
+				usagePending = true
+				err = nil
+			} else {
+				return result, errors.Join(err, pendingErr)
+			}
+		}
 		if err != nil {
 			if s.Creation.Config.Version == 2 {
 				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
@@ -333,7 +427,8 @@ func executeExplorer(ctx context.Context, path string, s Snapshot, expected Expl
 				cancel()
 				return result, errors.Join(err, terminalErr)
 			}
-			return result, err
+			_, settleErr := reconcileExplorerCapacityFailures(path, s)
+			return result, errors.Join(err, settleErr)
 		}
 	}
 	state, head, err := codexruntime.InspectWithHead(runtimePath)
@@ -347,7 +442,14 @@ func executeExplorer(ctx context.Context, path string, s Snapshot, expected Expl
 	if run, ok := explorerRunForInvocation(latest, expected.Invocation.ID); !ok || run.Intent != expected || !run.Ready || run.Receipt == nil {
 		return result, errors.New("explorer host observation missing")
 	}
-	if state.Intent == nil || state.Intent.Invocation != expected.Invocation || state.Intent.Directory != filepath.Join(l.Root, "workspace") || state.Result == nil || state.Thread == nil || state.TurnStatus != "completed" || state.Source == nil || *state.Source != s.Creation.Repository {
+	semanticResult := state.Result
+	if usagePending {
+		if state.SemanticResult == nil || pendingResult == nil || !sameCanonical(*state.SemanticResult, *pendingResult) {
+			return result, errors.New("explorer semantic usage pending result is missing or changed")
+		}
+		semanticResult = state.SemanticResult
+	}
+	if state.Intent == nil || state.Intent.Invocation != expected.Invocation || state.Intent.Directory != filepath.Join(l.Root, "workspace") || semanticResult == nil || state.Thread == nil || state.TurnStatus != "completed" || state.Source == nil || *state.Source != s.Creation.Repository {
 		return result, errors.New("explorer runtime evidence incomplete or substituted")
 	}
 	if (state.RI == nil) != (runtimeRI == nil) || (runtimeRI != nil && *state.RI != *runtimeRI) {
@@ -366,7 +468,7 @@ func executeExplorer(ctx context.Context, path string, s Snapshot, expected Expl
 	if err := state.Thread.Validate(expected.Invocation.Profile, filepath.Join(l.Root, "workspace")); err != nil {
 		return result, err
 	}
-	if err := runtime.ValidateResult(expected.Invocation, *state.Result, true); err != nil {
+	if err := runtime.ValidateResult(expected.Invocation, *semanticResult, true); err != nil {
 		return result, err
 	}
 	after, err := worktree.Fingerprint(ctx, *s.Workspace)
@@ -376,11 +478,15 @@ func executeExplorer(ctx context.Context, path string, s Snapshot, expected Expl
 	if after != before {
 		return result, errors.New("explorer source changed during execution")
 	}
-	hash, err := canonical.Hash("harness.explorer-result.v1", *state.Result)
+	hash, err := canonical.Hash("harness.explorer-result.v1", *semanticResult)
 	if err != nil {
 		return result, err
 	}
-	if s.Creation.Config.Version == 2 {
+	if s.Creation.Config.Version == 2 && usagePending {
+		if err := requireModelAccessResult(latest, expected.Invocation, head, hash, state.Thread.ThreadID, state.TurnID, true); err != nil {
+			return result, err
+		}
+	} else if s.Creation.Config.Version == 2 {
 		var terminal ModelAccessTerminal
 		latest, terminal, err = completeModelAccess(ctx, path, runtimePath, expected.Invocation, "harness.explorer-result.v1")
 		if err != nil {
@@ -390,7 +496,7 @@ func executeExplorer(ctx context.Context, path string, s Snapshot, expected Expl
 			return result, errors.New("explorer result differs from terminal model access receipt")
 		}
 	}
-	receipt := ExplorerRuntimeReceipt{expected.Invocation.ID, state.Thread.ThreadID, state.TurnID, head, hash}
+	receipt := ExplorerRuntimeReceipt{InvocationID: expected.Invocation.ID, ThreadID: state.Thread.ThreadID, TurnID: state.TurnID, JournalHead: head, ResultHash: hash, UsagePending: usagePending}
 	if run, ok := explorerRunForInvocation(latest, expected.Invocation.ID); !ok || run.RuntimeReceipt == nil {
 		if err := Append(path, "explorer.runtime-observed", receipt); err != nil {
 			return result, err
@@ -398,5 +504,5 @@ func executeExplorer(ctx context.Context, path string, s Snapshot, expected Expl
 	} else if *run.RuntimeReceipt != receipt {
 		return result, errors.New("explorer runtime journal no longer matches recorded receipt")
 	}
-	return *state.Result, nil
+	return *semanticResult, nil
 }

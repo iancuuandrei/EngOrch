@@ -68,8 +68,36 @@ func preflightAutonomousVerification(s Snapshot) error {
 	if err != nil {
 		return err
 	}
+	return preflightVerificationEnvironment(s, candidateID, s.Workspace.Request.Path)
+}
+
+// preflightInitialVerification checks the initial environment before planning
+// dispatch. Candidate-bound verification is still repeated after workspace creation.
+func preflightInitialVerification(s Snapshot) error {
+	if s.Creation.Execution == nil || s.State != "OBJECTIVE" && s.State != "PLANNING" {
+		return nil
+	}
+	// Existing admitted planning effects must follow their recovery path.
+	if s.State == "PLANNING" && (s.PlannerAccess != nil || s.PlannerHost != nil || s.PlannerReceipt != nil || s.PlannerProvider != nil || len(s.ModelAccess) != 0 || len(s.AgentDispatch) != 0) {
+		return nil
+	}
+	r, err := worktree.Prepare(s.RunID, s.Creation.Repository)
+	if err != nil {
+		return err
+	}
+	if err := worktree.CheckDestination(r); err != nil {
+		return err
+	}
+	id, err := s.Creation.Repository.ID()
+	if err != nil {
+		return errors.Join(ErrAutonomousUnsafe, err)
+	}
+	return preflightVerificationEnvironment(s, id, s.Creation.Repository.Root)
+}
+
+func preflightVerificationEnvironment(s Snapshot, sourceID, directory string) error {
 	for _, check := range s.Creation.Config.Verification {
-		invocation, err := verification.Prepare(candidateID, s.Workspace.Request.Path, check)
+		invocation, err := verification.Prepare(sourceID, directory, check)
 		if err != nil {
 			return fmt.Errorf("autonomous verification check %q preflight failed: %w", check.Name, err)
 		}

@@ -123,6 +123,49 @@ func TestRecorderOwnedRunningBindsBrokerCallerCatalogAndBearer(t *testing.T) {
 	closed = true
 }
 
+func TestRecorderOwnedDeadlinePolicyBindsInvocationBudget(t *testing.T) {
+	broker := bridgeFixture(t)
+	projection := recorderAgentProjection(func(context.Context, toolbridge.Call) (toolbridge.Result, error) {
+		return toolbridge.Result{JSON: json.RawMessage(`{"ok":true}`)}, nil
+	})
+	catalogID, err := RecorderCatalogSHA256(broker, projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, wait, err := QueuePolicyForCallBudget(InvocationToolCallBudget, RecorderOwnedBridgeCallTimeout)
+	if err != nil || queued != 63 || wait != 63*RecorderOwnedBridgeCallTimeout {
+		t.Fatal("invocation budget did not produce exact deadlines", queued, wait, err)
+	}
+	prepared, err := PrepareRecorderBindingWithTimeouts(broker, strings.Repeat("a", 64), strings.Repeat("c", 64), projection, queued, wait, RecorderOwnedBridgeCallTimeout)
+	if err != nil || prepared.Version != 3 || prepared.MaxQueuedCalls != 63 || prepared.QueueWaitMillis != wait.Milliseconds() || prepared.CallbackTimeoutMillis != RecorderOwnedBridgeCallTimeout.Milliseconds() || prepared.CatalogSHA256 != catalogID {
+		t.Fatal("deadline receipt binding differs", prepared, err)
+	}
+	path := filepath.Join(t.TempDir(), "deadline-receipts.jsonl")
+	server, err := NewRecorderOwned(broker, strings.Repeat("b", 40), RecorderOwnedConfig{
+		Path: path, InvocationID: strings.Repeat("a", 64), CallerBindingSHA256: strings.Repeat("c", 64), CatalogSHA256: catalogID,
+		AgentProjection: projection, MaxQueuedCalls: queued, QueueWaitTimeout: wait, CallbackTimeout: RecorderOwnedBridgeCallTimeout,
+	}, nil)
+	if err != nil {
+		t.Fatal("deadline-bound recorder server rejected", err)
+	}
+	running, err := server.Listen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, ok := running.RecorderBinding()
+	if !ok || !reflect.DeepEqual(binding, prepared) {
+		t.Fatal("opened v3 recorder differs from preflight binding", binding, prepared)
+	}
+	closeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := running.Close(closeCtx); err != nil {
+		t.Fatal(err)
+	}
+	if err := running.Wait(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestNewRecorderOwnedPreservesLegacyZeroQueueBinding(t *testing.T) {
 	broker := bridgeFixture(t)
 	projection := recorderAgentProjection(func(context.Context, toolbridge.Call) (toolbridge.Result, error) {

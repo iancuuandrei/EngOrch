@@ -108,12 +108,29 @@ func repairDesignFakeResult(t *testing.T, invocation runtime.Invocation, output 
 }
 
 func TestRepairDesignPathRevisionWriterAndFreshGatesReachReady(t *testing.T) {
+	exerciseRepairDesignPathRevision(t, false, false)
+}
+
+func TestReviewRechecksRepairDesignAndExactClosure(t *testing.T) {
+	exerciseRepairDesignPathRevision(t, true, false)
+}
+
+func TestRepairSpectrumContextWriterAndFreshGatesReachReady(t *testing.T) {
+	exerciseRepairDesignPathRevision(t, false, true)
+}
+
+func exerciseRepairDesignPathRevision(t *testing.T, reviewRechecks, withSpectrum bool) {
 	ctx := context.Background()
 	c := graphCreation(t, 1)
 	c.Config.Version = 1
 	c.Config.PlannerContract = plannerContractGraphV3
 	c.Config.ReviewerContract = "json-v1"
 	c.Execution.RepairPlanningVersion = 1
+	c.Execution.Context = taskContextBoundedV1
+	c.Execution.RepairIntelligenceVersion = 1
+	if reviewRechecks {
+		c.Execution.ReviewRecheckVersion = 1
+	}
 	initial := engineeringplan.Graph{Version: engineeringplan.Version, Mode: engineeringplan.ModeGraph, Summary: "generated repair fixture", Tasks: []engineeringplan.Task{
 		{ID: "impl", Kind: engineeringplan.Implementation, Title: "Initial implementation", ScopePaths: []string{"."}, WritePaths: []string{"file.txt"}, ExpectedEvidence: []engineeringplan.Evidence{{Kind: "file", Description: "candidate"}}, EstimatedSeconds: 20},
 		{ID: "verify", Kind: engineeringplan.Verification, Title: "Verify", Dependencies: []string{"impl"}, ScopePaths: []string{"."}, ExpectedEvidence: []engineeringplan.Evidence{{Kind: "test", Description: "native"}}, EstimatedSeconds: 10},
@@ -159,6 +176,10 @@ func TestRepairDesignPathRevisionWriterAndFreshGatesReachReady(t *testing.T) {
 	s, err = Inspect(path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	originalReviewDiagnosis, err := DiagnoseRepair(s)
+	if err != nil || len(originalReviewDiagnosis.Findings) != 1 {
+		t.Fatal("original review finding unavailable", err)
 	}
 	s, err = autonomousGraphRepairing(ctx, path, s)
 	if err != nil || s.RepairAttempts != 1 || s.Graph.Revision != 2 {
@@ -254,12 +275,49 @@ func TestRepairDesignPathRevisionWriterAndFreshGatesReachReady(t *testing.T) {
 	if !ok || !stringListsEqual(impl.WritePaths, []string{"bool_ext.go"}) {
 		t.Fatalf("repair write ownership differs from design: %+v", impl)
 	}
+	diagnosis, err := DiagnoseRepair(refined)
+	if err != nil || refined.State != "REPAIRING" || len(diagnosis.Specifications) != 1 || !stringListsEqual(diagnosis.Specifications[0].AllowedWritePaths, impl.WritePaths) {
+		t.Fatalf("replay-valid repair lost its admitted diagnosis scope: %+v err=%v", diagnosis, err)
+	}
+	anchored, err := DiagnoseRepairAnchored(ctx, path, refined, nil)
+	if err != nil || anchored.AnchoringStatus != "observed" || len(anchored.Anchors) != 1 || anchored.Anchors[0].Status != "file_verified" || anchored.Specifications[0].SuggestedStrategy != "localization_required" {
+		t.Fatalf("read-only anchor widened unrelated repair ownership: %+v err=%v", anchored, err)
+	}
+	if withSpectrum {
+		checkRepairSpectrumAdmission(t, ctx, path, refined)
+	}
 	if err := maybeAdmitTaskContext(ctx, path, "writer", c.Objective); err != nil {
 		t.Fatal(err)
 	}
 	writerInvocation, err := PrepareWriterInvocation(path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	inputSnapshot, err := Inspect(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	largePlan := *inputSnapshot.Plan
+	largePlan.Output += strings.Repeat("x", (256<<10)-len(writerInvocation.Input)+1)
+	inputSnapshot.Plan = &largePlan
+	largeInvocation, err := writerInvocationBody(inputSnapshot, "", nil)
+	var largeInput struct {
+		Plan string `json:"plan"`
+	}
+	decodeErr := json.Unmarshal([]byte(largeInvocation.Input), &largeInput)
+	if err != nil || decodeErr != nil || strings.Contains(largeInvocation.Input, "\"repair_intelligence\"") || largeInput.Plan != largePlan.Output {
+		t.Fatalf("optional intelligence blocked or truncated mandatory large input: %v", err)
+	}
+	var repairInput struct {
+		Repair *RepairDiagnosis `json:"repair_intelligence"`
+	}
+	if err := json.Unmarshal([]byte(writerInvocation.Input), &repairInput); err != nil || repairInput.Repair == nil || len(repairInput.Repair.Findings) != 1 || len(repairInput.Repair.Specifications) != 1 || !stringListsEqual(repairInput.Repair.Specifications[0].AllowedWritePaths, impl.WritePaths) || repairInput.Repair.ControllerHead != "" {
+		t.Fatalf("repair invocation lacks exact recorded intelligence: %+v %v", repairInput.Repair, err)
+	}
+	if withSpectrum {
+		if repairInput.Repair.Spectrum == nil || repairInput.Repair.Spectrum.SourceStatus != "recorded_task_context_bytes_verified" || len(repairInput.Repair.Spectrum.Blocks) != 0 || strings.Contains(writerInvocation.Input, "\"repair_spectrum\"") || strings.Contains(writerInvocation.Input, "mode: set") {
+			t.Fatal("repair input leaked raw profiles or locations outside write paths")
+		}
 	}
 	candidateID, err = refined.Candidate.ID()
 	if err != nil {
@@ -308,7 +366,50 @@ func TestRepairDesignPathRevisionWriterAndFreshGatesReachReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reviewOutput, err := canonical.Bytes(ReviewVerdict{CandidateID: candidateID, VerificationPlanID: s.Verification.PlanID, Decision: "approve", Findings: []ReviewFinding{}})
+	verdict := ReviewVerdict{CandidateID: candidateID, VerificationPlanID: s.Verification.PlanID, Decision: "approve", Findings: []ReviewFinding{}}
+	if reviewRechecks {
+		var input struct {
+			Rechecks *reviewRecheckPrompt `json:"repair_rechecks"`
+		}
+		if err := json.Unmarshal([]byte(freshReview.Input), &input); err != nil || input.Rechecks == nil || len(input.Rechecks.Findings) != 1 || input.Rechecks.Findings[0].ID != originalReviewDiagnosis.Findings[0].ID {
+			t.Fatal("explicit original review concern missing", err)
+		}
+		badOutput, err := canonical.Bytes(verdict)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before, err := Inspect(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		largeState := before
+		largePlan := *before.Plan
+		largePlan.Output += strings.Repeat("x", (256<<10)-len(freshReview.Input)+1)
+		largeState.Plan = &largePlan
+		largeInvocation, err := reviewInvocationBase(largeState)
+		var largeInput struct {
+			Plan     string               `json:"plan"`
+			Rechecks *reviewRecheckPrompt `json:"repair_rechecks"`
+		}
+		if err != nil {
+			t.Fatal("optional rechecks blocked ordinary large input", err)
+		}
+		if err := json.Unmarshal([]byte(largeInvocation.Input), &largeInput); err != nil || largeInput.Plan != largePlan.Output || largeInput.Rechecks != nil {
+			t.Fatal("large review fallback altered mandatory input", err)
+		}
+		if err := validateReviewRechecks(largeState, largeInvocation, verdict); err != nil {
+			t.Fatal("ordinary fallback lost its legacy output contract", err)
+		}
+		if _, err := RecordReview(path, ReviewRecord{Invocation: freshReview, Result: repairDesignFakeResult(t, freshReview, string(badOutput))}); err == nil {
+			t.Fatal("generic approval bypassed explicit rechecks")
+		}
+		after, err := Inspect(path)
+		if err != nil || before.ControllerHead != after.ControllerHead {
+			t.Fatal("rejected review changed journal", err)
+		}
+		verdict.Rechecks = []ReviewFindingRecheck{{FindingID: input.Rechecks.Findings[0].ID, Decision: "closed", Rationale: "The candidate now preserves the wrapper methods."}}
+	}
+	reviewOutput, err := canonical.Bytes(verdict)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,6 +425,14 @@ func TestRepairDesignPathRevisionWriterAndFreshGatesReachReady(t *testing.T) {
 	}
 	if err := requireGraphReady(ready); err != nil {
 		t.Fatal("READY lacks complete actual repair evidence", err)
+	}
+	closure, err := ReadRepairClosure(path, ready.Creation.Repository.Root, ready.RunID)
+	expectedStatus := "recheck_required"
+	if reviewRechecks {
+		expectedStatus = "reviewer_recheck_closed"
+	}
+	if err != nil || !closure.Accepted || len(closure.Findings) != 1 || closure.Findings[0].Status != expectedStatus || closure.Findings[0].Finding.ID != originalReviewDiagnosis.Findings[0].ID {
+		t.Fatalf("generic approved review silently closed original concern: %+v %v", closure, err)
 	}
 }
 

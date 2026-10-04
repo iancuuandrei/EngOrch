@@ -58,26 +58,34 @@ type ToolOwner struct {
 
 // Binding fixes the caller, invocation, catalog, and every tool owner.
 type Binding struct {
-	Version             int         `json:"version"`
-	InvocationID        string      `json:"invocation_id"`
-	CallerBindingSHA256 string      `json:"caller_binding_sha256"`
-	CatalogSHA256       string      `json:"catalog_sha256"`
-	Tools               []ToolOwner `json:"tools"`
-	QueuePolicy         string      `json:"queue_policy,omitempty"`
-	MaxQueuedCalls      int         `json:"max_queued_calls,omitempty"`
-	BindingID           string      `json:"binding_id"`
+	Version               int         `json:"version"`
+	InvocationID          string      `json:"invocation_id"`
+	CallerBindingSHA256   string      `json:"caller_binding_sha256"`
+	CatalogSHA256         string      `json:"catalog_sha256"`
+	Tools                 []ToolOwner `json:"tools"`
+	QueuePolicy           string      `json:"queue_policy,omitempty"`
+	MaxQueuedCalls        int         `json:"max_queued_calls,omitempty"`
+	QueueWaitMillis       int64       `json:"queue_wait_millis,omitempty"`
+	CallbackTimeoutMillis int64       `json:"callback_timeout_millis,omitempty"`
+	BindingID             string      `json:"binding_id"`
 }
 
 // QueuePolicySerialFIFO identifies the bounded transport queue implemented by
 // toolbridge. The receipt recorder binds this policy but does not enforce it.
 const QueuePolicySerialFIFO = "serial-fifo-v1"
 
+// QueuePolicySerialFIFOWithDeadlines identifies the v3 FIFO policy with
+// separately bound admission-wait and callback deadlines.
+const QueuePolicySerialFIFOWithDeadlines = "serial-fifo-v2"
+
 // ID validates and hashes a binding without its derived identifier.
 func (b Binding) ID() (string, error) {
-	if b.Version != 1 && b.Version != 2 || safepath.RequireDigest(b.InvocationID) != nil || safepath.RequireDigest(b.CallerBindingSHA256) != nil || safepath.RequireDigest(b.CatalogSHA256) != nil || len(b.Tools) < 2 || len(b.Tools) > 128 {
+	if b.Version < 1 || b.Version > 3 || safepath.RequireDigest(b.InvocationID) != nil || safepath.RequireDigest(b.CallerBindingSHA256) != nil || safepath.RequireDigest(b.CatalogSHA256) != nil || len(b.Tools) < 2 || len(b.Tools) > 128 {
 		return "", errors.New("invalid MCP tool receipt binding")
 	}
-	if b.Version == 1 && (b.QueuePolicy != "" || b.MaxQueuedCalls != 0) || b.Version == 2 && (b.QueuePolicy != QueuePolicySerialFIFO || b.MaxQueuedCalls < 1 || b.MaxQueuedCalls > 32) {
+	if b.Version == 1 && (b.QueuePolicy != "" || b.MaxQueuedCalls != 0 || b.QueueWaitMillis != 0 || b.CallbackTimeoutMillis != 0) ||
+		b.Version == 2 && (b.QueuePolicy != QueuePolicySerialFIFO || b.MaxQueuedCalls < 1 || b.MaxQueuedCalls > 32 || b.QueueWaitMillis != 0 || b.CallbackTimeoutMillis != 0) ||
+		b.Version == 3 && (b.QueuePolicy != QueuePolicySerialFIFOWithDeadlines || b.MaxQueuedCalls < 1 || b.MaxQueuedCalls > 63 || b.CallbackTimeoutMillis < 1 || b.CallbackTimeoutMillis > 60_000 || b.QueueWaitMillis != int64(b.MaxQueuedCalls)*b.CallbackTimeoutMillis || b.QueueWaitMillis > 3_780_000) {
 		return "", errors.New("invalid MCP tool receipt queue policy")
 	}
 	seen := make(map[string]struct{}, len(b.Tools))
@@ -145,13 +153,15 @@ type Observation struct {
 // Config supplies a precomputed transport catalog identity and exact caller
 // binding. Open validates every projection before it appends a binding.
 type Config struct {
-	Path                string
-	InvocationID        string
-	CallerBindingSHA256 string
-	CatalogSHA256       string
-	Owners              []OwnedProjection
-	QueuePolicy         string
-	MaxQueuedCalls      int
+	Path                  string
+	InvocationID          string
+	CallerBindingSHA256   string
+	CatalogSHA256         string
+	Owners                []OwnedProjection
+	QueuePolicy           string
+	MaxQueuedCalls        int
+	QueueWaitMillis       int64
+	CallbackTimeoutMillis int64
 }
 
 // Recorder owns frozen catalog and callback snapshots for one journal binding.
@@ -208,10 +218,12 @@ func Open(config Config) (*Recorder, error) {
 		return nil, errors.New("MCP tool receipt catalog hash mismatch")
 	}
 	version := 1
-	if config.QueuePolicy != "" || config.MaxQueuedCalls != 0 {
+	if config.QueueWaitMillis != 0 || config.CallbackTimeoutMillis != 0 {
+		version = 3
+	} else if config.QueuePolicy != "" || config.MaxQueuedCalls != 0 {
 		version = 2
 	}
-	binding := Binding{Version: version, InvocationID: config.InvocationID, CallerBindingSHA256: config.CallerBindingSHA256, CatalogSHA256: catalogID, Tools: tools, QueuePolicy: config.QueuePolicy, MaxQueuedCalls: config.MaxQueuedCalls}
+	binding := Binding{Version: version, InvocationID: config.InvocationID, CallerBindingSHA256: config.CallerBindingSHA256, CatalogSHA256: catalogID, Tools: tools, QueuePolicy: config.QueuePolicy, MaxQueuedCalls: config.MaxQueuedCalls, QueueWaitMillis: config.QueueWaitMillis, CallbackTimeoutMillis: config.CallbackTimeoutMillis}
 	binding.BindingID, err = binding.ID()
 	if err != nil {
 		return nil, err

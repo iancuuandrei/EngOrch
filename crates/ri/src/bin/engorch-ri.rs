@@ -120,6 +120,14 @@ enum Request {
         source_text: String,
         source_sha256: String,
     },
+    GoFileFacts {
+        path: String,
+        source_text: String,
+        source_sha256: String,
+        producer_sha256: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_dir: Option<String>,
+    },
     Status {
         path: String,
         snapshot_id: String,
@@ -454,6 +462,11 @@ fn execute_request(request: Request, retained: &mut RetainedIndex) -> Result<Val
             if result.source_sha256 != source_sha256 {
                 return Err("structural source hash mismatch".into());
             }
+            serde_json::to_value(result).map_err(|e| e.to_string())
+        }
+        Request::GoFileFacts { path, source_text, source_sha256, producer_sha256, cache_dir } => {
+            let cache_dir = cache_dir.as_deref().map(Path::new);
+            let result = engorch_ri::intelligence::go_file_facts(&path, source_text.as_bytes(), &source_sha256, &producer_sha256, cache_dir)?;
             serde_json::to_value(result).map_err(|e| e.to_string())
         }
         Request::Status {

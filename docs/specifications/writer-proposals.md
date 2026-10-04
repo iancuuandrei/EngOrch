@@ -12,6 +12,79 @@ This example creates `hello` followed by a newline; the candidate digest must ma
 
 `PrepareWriterFiles` treats model output as untrusted, rejecting routing/input substitution, stale candidates and invalid output. It prepares the normal leased file proposal and checks that preparation observed the invocation's candidate. `RecordWriterProposal` records the invocation, result and prepared effect; replay reconstructs these bindings and rejects duplicate invocation proposals. `ApplyFiles` requires separate authorization for the exact effect identity.
 
+Isolated version 2 initial waves MUST freeze `isolated_implementation_version: 2`,
+all initial ready implementation identities with exact demands, and
+deterministically derived `waves` with per-wave `wave_estimated` peaks and
+per-wave `wave_blocked` typed provenance; legacy version 1 MUST omit wave
+fields. `estimated` is the overall work total across all demands, while each
+`wave_estimated` entry is that wave's per-wave peak. Each wave MUST be
+nonempty and resource-bounded, and the single parent aggregate MUST require
+every frozen proposal with one file effect. Foreign, stale, or missing wave,
+demand, or proposal identities MUST be rejected, and UNKNOWN MUST stop without
+a next wave. Cohort scope replanning is unsupported for version 2 waves.
+
+Staged version 3 dependent cohorts MUST freeze `isolated_implementation_version: 3`
+with `plan-graph-v8`, the exact CURRENT ready implementation subset with exact
+graph, candidate, HEAD, resources, and deterministically derived waves via the
+existing resource-bounded derivation when the current subset exceeds capacity.
+Each stage cohort MUST carry its `cohort_index` and `base_candidate_id` binding
+the exact parent candidate for that stage; each leaf child MUST be forked from
+that exact parent via a durable fork intent before destination creation, copying
+only the parent-authorized delta (regular bytes and mode) with existing
+worktree and file-effect primitives and confirming the exact child candidate
+except the owned worktree ID. Fork deltas MUST enforce the existing 64-change,
+256 KiB decoded, and canonical-base64 bounds before any intent or creation; full
+`Preflight` still requires the child binding so it runs after intent, and its
+failure leaves an UNKNOWN fork requiring explicit reconciliation without
+redispatch. A streaming copy remains a documented alternative to the current
+bounded reuse; it is not implemented. The current aggregate MUST be version 4 with the
+stage `cohort_index` and require every frozen proposal of that stage with one
+parent file effect; the prior CONFIRMED cohort MUST advance via the compact
+`graph.staged-advanced` event carrying exact identities and hashes
+(`cohort_index`, `preparation_id`, base/candidate IDs, task IDs, batch/file
+proposal IDs, observation hash) after a pre-effect envelope check, reconstructing
+the full archive during replay ONLY from already validated current state
+without rewriting journal past,
+completed history, or repair budgets, and MUST reject any active memory
+reservation. Memory `ConfiguredMax` MUST stay stable for the whole version 3 run
+(configured ceiling, not per-cohort size) with per-wave grants bounded
+separately; adaptive decision and pressure history is retained across cohorts.
+Foreign, stale, manifest, mode, path, or
+source drift MUST be rejected; UNKNOWN forks or cohorts MUST stop without next
+dispatch or redispatch. Cohort scope replanning is unsupported for version 3.
+Intermediate hubs MAY integrate without final READY; final native verification
+and review MUST bind the exact last candidate. This is an opt-in scheduling
+and isolation policy without measured benefit claims.
+
+Staged runs MAY freeze `isolation_cohort_selector_version: 1` for the exact
+finite lexicographic wave optimum; absent MUST preserve the greedy derivation
+byte-for-byte. Both selectors share the same hard gates (exact ready identity,
+pairwise dependency/write-overlap independence, every explicit resource
+ceiling, the 1..8 bound); objectives apply in strict order (admitted count,
+summed declared critical-path length, summed estimated CPU, memory,
+verification, then runtime slots, sorted task-ID tie-break) over declared
+estimates only, with no measured-makespan or coupling-optimality claim. The
+version 3 preparation MUST record `cohort_selector_version` when nonzero and
+omit it when zero; replay MUST recompute with the frozen policy selector and
+reject substitution or an out-of-range value. A nonzero selector on any
+non-staged policy MUST be rejected, and frozen policy MUST NOT change on
+resume.
+
+Staged runs MAY freeze `isolation_cohort_selector_version: 2` with
+`plan-graph-v9` for the coupling-aware optimum. Hard gates match selector 1
+plus the C4 hard-coupling gate (no C4 pair in one wave); objectives minimize
+C3 concurrency risk before admitted count, then admitted count, then C2, then
+C1 co-scheduling before the same critical/resource packing, over declared
+estimates only. Risk-based exclusions MUST render the explicit bounded reason
+`coupling_risk` with the smallest coupled partner; any other fitting
+remainder MUST fail closed. Couplings MUST be planner-declared advisory only
+(`planner_declared_advisory`); observed labels without an admitted
+source-bound record MUST be rejected as forged. C4 MUST require one owner or
+an explicit implementation dependency before writer effects; serial waves from
+the same parent base MUST NOT satisfy the gate. C1-C3 MUST NOT grant
+readiness, ownership, or write authority, and absent coupling (C0) MUST NOT
+prove independence.
+
 ## Runtime and provenance
 
 `RunWriter` creates a private host per invocation and records host intent, readiness and observation. A workspace lease spans dispatch and before/after candidate fingerprints. The adapter executes or resumes its durable runtime; source, candidate, thread configuration, requested/observed model and result must match before admission. Host closure precedes lease release.

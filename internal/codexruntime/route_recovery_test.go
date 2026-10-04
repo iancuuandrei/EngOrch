@@ -24,7 +24,7 @@ func seedRecovery(t *testing.T) (string, string, runtime.Invocation, codexrpc.Th
 		k string
 		p any
 	}{
-		{"runtime.intent", Intent{i, root}}, {"runtime.thread", s},
+		{"runtime.intent", Intent{Invocation: i, Directory: root}}, {"runtime.thread", s},
 		{"runtime.turn-intent", map[string]string{"invocation_id": i.ID}},
 		{"runtime.turn", map[string]string{"id": "turn-1"}},
 	} {
@@ -121,7 +121,7 @@ func TestContradictionBeforeThreadIsDurable(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "runtime.db")
 	i := invocation(t)
-	if err := appendEvent(path, "runtime.intent", Intent{i, root}); err != nil {
+	if err := appendEvent(path, "runtime.intent", Intent{Invocation: i, Directory: root}); err != nil {
 		t.Fatal(err)
 	}
 	if err := appendEvent(path, "runtime.route-contradiction", RouteFailureEvidence{Reason: "ROUTE_IDENTITY_CONTRADICTION"}); err != nil {

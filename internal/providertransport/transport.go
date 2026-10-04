@@ -32,7 +32,8 @@ var (
 	// ErrPending means a durable intent exists or journal state cannot prove its
 	// absence, so the external effect must be treated as unknown. The same call
 	// must never be sent again.
-	ErrPending = errors.New("provider transport call outcome unresolved")
+	ErrPending                      = errors.New("provider transport call outcome unresolved")
+	errRequestBodyExceedsCloneBound = errors.New("provider request exceeds clone bound")
 )
 
 // ClientOptions fixes the TLS roots used by the transport. Nil selects a
@@ -89,6 +90,9 @@ func (c *Client) Execute(ctx context.Context, input Request) (Result, error) {
 		return Result{}, rejected(ctx)
 	}
 	request, err := freezeRequest(input)
+	if errors.Is(err, errRequestBodyExceedsCloneBound) {
+		return Result{}, pending(ctx)
+	}
 	if err != nil || validateLeaseBinding(request) != nil || validateReservation(request) != nil {
 		return Result{}, rejected(ctx)
 	}
@@ -210,6 +214,12 @@ func freezeRequest(source Request) (Request, error) {
 	var result Request
 	if source.AccessJournalPath == "" || source.GatewayJournalPath == "" || len(source.Body) == 0 {
 		return result, ErrRejected
+	}
+	// Keep the only request-body copy below the largest model contract and
+	// preflight evidence bound. Larger bodies retain the existing pending error:
+	// their rejection cannot be durably recorded without first copying them.
+	if len(source.Body) > maximumPreflightRequestBytes {
+		return result, errRequestBodyExceedsCloneBound
 	}
 	result.AccessJournalPath = source.AccessJournalPath
 	result.GatewayJournalPath = source.GatewayJournalPath

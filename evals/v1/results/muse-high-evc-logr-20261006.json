@@ -1,0 +1,63 @@
+{
+  "schema": "fabric.evc-canary.outcome.v1",
+  "source": "b58a649d81c468e92656966d54b02c951d7a5eae",
+  "binary_sha256": "98b2e5444030f30842eff7bb87c84d1b2e424a93c11644e59c53ff6ccdade0e8",
+  "task_source": "e99cde667024c0da5e20141f88fb7952e5f4e582",
+  "config_sha256": "c651a309b4cd6ca3f48fb88ac7b3e1cf6a99d948b921635c57f15649766b439f",
+  "policy_sha256": "8175b51927ab8380ac1f423a4cf24a65ffaf4c0c940f1b117c11564d562b7b33",
+  "oracle_sha256": "290eb12c1448c4b611dfb0ed2aa84a945fa6e4fdfd98746c0aa9435e0710bf51",
+  "frozen_plan_sha256": "e267dea720cdc656d5b243b797a2ea8983ebdc46023ec9d84fa9f35bdc271a86",
+  "run_id": "5dc719f58cb3d71309ef6d644502bc4e49ef64404a83294eb7b1f291197c7728",
+  "candidate_id": "2401f06c2996603f5ff7ba1597b3f24665f38f14f2c1abbf7d64aad6dee6e480",
+  "state": "READY",
+  "native": "PASS",
+  "review": "APPROVE",
+  "review_findings": 0,
+  "heldout": "PASS",
+  "wall_seconds": 177.8714694,
+  "roles": [
+    {
+      "role": "planner",
+      "calls": 3,
+      "receipts": 3
+    },
+    {
+      "role": "reviewer",
+      "calls": 5,
+      "receipts": 5
+    },
+    {
+      "role": "writer",
+      "calls": 6,
+      "receipts": 6
+    }
+  ],
+  "model": "muse-spark-1.3-contributor",
+  "effort": "high",
+  "provider_calls": 14,
+  "provider_receipts": 14,
+  "usage": {
+    "input_tokens": 386751,
+    "cache_read_tokens": 289966,
+    "output_tokens": 8470,
+    "reasoning_tokens": 6037,
+    "uncached_input_tokens": 96785,
+    "ordinary_output_tokens": 2433,
+    "cache_write_tokens": null
+  },
+  "cost": "UNKNOWN",
+  "evidence_selected_action": "inspect-withvalues",
+  "evidence_decisions": 1,
+  "same_initial_candidate": true,
+  "acquired_source_in_writer": [
+    {
+      "path": "logr.go",
+      "hash": "cce9b9499b3111c29e6cc9a816618b4af3a70fa6d44667134215477191f976bc",
+      "excerpt_hash": "2b15b03ef2c9424847e81762d27c5460d5663c44af22a73df4d39740bf25424b"
+    }
+  ],
+  "efficiency_claim": false,
+  "estimates_calibrated": false,
+  "repairs": 0,
+  "v2_qualification": false
+}

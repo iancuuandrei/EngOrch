@@ -85,6 +85,21 @@ func TestStaleLockIsNeverStolen(t *testing.T) {
 	}
 }
 
+func TestLockUnavailablePreservesTypedAndFilesystemCauses(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "run.jsonl")
+	if err := os.WriteFile(p+".lock", []byte("owner"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := lock(p)
+	if !errors.Is(err, ErrLockUnavailable) || !errors.Is(err, os.ErrExist) {
+		t.Fatalf("lock failure lost stable or filesystem cause: %v", err)
+	}
+	owner, readErr := os.ReadFile(p + ".lock")
+	if readErr != nil || string(owner) != "owner" {
+		t.Fatalf("existing owner changed: %q %v", owner, readErr)
+	}
+}
+
 func TestCrashedProcessLeavesExplicitLock(t *testing.T) {
 	if path := os.Getenv("HARNESS_TEST_CRASH_LOCK"); path != "" {
 		if _, err := lock(path); err != nil {

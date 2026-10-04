@@ -26,6 +26,8 @@ type RecorderOwnedConfig struct {
 	CatalogSHA256       string
 	AgentProjection     toolbridge.Projection
 	MaxQueuedCalls      int
+	QueueWaitTimeout    time.Duration
+	CallbackTimeout     time.Duration
 }
 
 // RecorderOwnedBridgeCallTimeout is the ceiling for admitted agent tool callbacks on the recorder-owned MCP bridge.
@@ -57,7 +59,7 @@ func RecorderCatalogSHA256(broker *contextbroker.Broker, agent toolbridge.Projec
 // opening or changing a journal. Catalog callbacks are inspected, but tool
 // callbacks are never invoked.
 func PrepareRecorderBinding(broker *contextbroker.Broker, invocationID, callerBindingSHA256 string, agent toolbridge.Projection) (toolreceipts.Binding, error) {
-	return prepareRecorderBinding(broker, invocationID, callerBindingSHA256, agent, 0)
+	return prepareRecorderBinding(broker, invocationID, callerBindingSHA256, agent, 0, 0, 0)
 }
 
 // PrepareRecorderBindingWithQueue derives the v2 binding for one serial,
@@ -66,10 +68,20 @@ func PrepareRecorderBindingWithQueue(broker *contextbroker.Broker, invocationID,
 	if maxQueuedCalls < 0 || maxQueuedCalls > 32 {
 		return toolreceipts.Binding{}, errors.New("invalid recorder-owned MCP queue capacity")
 	}
-	return prepareRecorderBinding(broker, invocationID, callerBindingSHA256, agent, maxQueuedCalls)
+	return prepareRecorderBinding(broker, invocationID, callerBindingSHA256, agent, maxQueuedCalls, 0, 0)
 }
 
-func prepareRecorderBinding(broker *contextbroker.Broker, invocationID, callerBindingSHA256 string, agent toolbridge.Projection, maxQueuedCalls int) (toolreceipts.Binding, error) {
+// PrepareRecorderBindingWithTimeouts derives a v3 receipt binding that fixes
+// both the maximum FIFO wait and a fresh callback timeout after admission.
+func PrepareRecorderBindingWithTimeouts(broker *contextbroker.Broker, invocationID, callerBindingSHA256 string, agent toolbridge.Projection, maxQueuedCalls int, queueWaitTimeout, callbackTimeout time.Duration) (toolreceipts.Binding, error) {
+	wantQueued, wantWait, err := QueuePolicyForCallBudget(maxQueuedCalls+1, callbackTimeout)
+	if err != nil || maxQueuedCalls < 1 || wantQueued != maxQueuedCalls || queueWaitTimeout != wantWait || queueWaitTimeout <= 0 || queueWaitTimeout%time.Millisecond != 0 {
+		return toolreceipts.Binding{}, errors.New("invalid recorder-owned MCP deadlines")
+	}
+	return prepareRecorderBinding(broker, invocationID, callerBindingSHA256, agent, maxQueuedCalls, queueWaitTimeout, callbackTimeout)
+}
+
+func prepareRecorderBinding(broker *contextbroker.Broker, invocationID, callerBindingSHA256 string, agent toolbridge.Projection, maxQueuedCalls int, queueWaitTimeout, callbackTimeout time.Duration) (toolreceipts.Binding, error) {
 	if broker == nil || safepath.RequireDigest(invocationID) != nil || safepath.RequireDigest(callerBindingSHA256) != nil {
 		return toolreceipts.Binding{}, errors.New("invalid recorder-owned MCP binding input")
 	}
@@ -113,7 +125,10 @@ func prepareRecorderBinding(broker *contextbroker.Broker, invocationID, callerBi
 	}
 	version := 1
 	policy := ""
-	if maxQueuedCalls > 0 {
+	if queueWaitTimeout > 0 || callbackTimeout > 0 {
+		version = 3
+		policy = toolreceipts.QueuePolicySerialFIFOWithDeadlines
+	} else if maxQueuedCalls > 0 {
 		version = 2
 		policy = toolreceipts.QueuePolicySerialFIFO
 	}
@@ -121,6 +136,7 @@ func prepareRecorderBinding(broker *contextbroker.Broker, invocationID, callerBi
 		Version: version, InvocationID: invocationID, CallerBindingSHA256: callerBindingSHA256,
 		CatalogSHA256: catalogID, Tools: tools,
 		QueuePolicy: policy, MaxQueuedCalls: maxQueuedCalls,
+		QueueWaitMillis: queueWaitTimeout.Milliseconds(), CallbackTimeoutMillis: callbackTimeout.Milliseconds(),
 	}
 	binding.BindingID, err = binding.ID()
 	if err != nil {
@@ -134,10 +150,19 @@ func prepareRecorderBinding(broker *contextbroker.Broker, invocationID, callerBi
 // agent callback. The context projection is derived here from broker so a
 // caller cannot substitute a foreign context owner.
 func NewRecorderOwned(broker *contextbroker.Broker, bearer string, config RecorderOwnedConfig, observe toolbridge.ObserveFunc) (*OwnedServer, error) {
-	if broker == nil || !cleanRecorderPath(config.Path) || !validRecorderBearer(bearer) || safepath.RequireDigest(config.InvocationID) != nil || safepath.RequireDigest(config.CallerBindingSHA256) != nil || safepath.RequireDigest(config.CatalogSHA256) != nil || config.MaxQueuedCalls < 0 || config.MaxQueuedCalls > 32 {
+	if broker == nil || !cleanRecorderPath(config.Path) || !validRecorderBearer(bearer) || safepath.RequireDigest(config.InvocationID) != nil || safepath.RequireDigest(config.CallerBindingSHA256) != nil || safepath.RequireDigest(config.CatalogSHA256) != nil || config.MaxQueuedCalls < 0 || config.MaxQueuedCalls > 63 {
 		return nil, errors.New("invalid recorder-owned context bridge configuration")
 	}
-	prepared, err := PrepareRecorderBindingWithQueue(broker, config.InvocationID, config.CallerBindingSHA256, config.AgentProjection, config.MaxQueuedCalls)
+	var prepared toolreceipts.Binding
+	var err error
+	if config.QueueWaitTimeout != 0 || config.CallbackTimeout != 0 {
+		prepared, err = PrepareRecorderBindingWithTimeouts(broker, config.InvocationID, config.CallerBindingSHA256, config.AgentProjection, config.MaxQueuedCalls, config.QueueWaitTimeout, config.CallbackTimeout)
+	} else {
+		if config.MaxQueuedCalls > 32 {
+			return nil, errors.New("deadline-bound MCP queue policy required above legacy capacity")
+		}
+		prepared, err = PrepareRecorderBindingWithQueue(broker, config.InvocationID, config.CallerBindingSHA256, config.AgentProjection, config.MaxQueuedCalls)
+	}
 	if err != nil || prepared.CatalogSHA256 != config.CatalogSHA256 {
 		return nil, errors.Join(errors.New("recorder-owned MCP catalog differs"), err)
 	}
@@ -158,6 +183,7 @@ func NewRecorderOwned(broker *contextbroker.Broker, bearer string, config Record
 		CallerBindingSHA256: config.CallerBindingSHA256,
 		CatalogSHA256:       prepared.CatalogSHA256, Owners: owners,
 		QueuePolicy: prepared.QueuePolicy, MaxQueuedCalls: config.MaxQueuedCalls,
+		QueueWaitMillis: prepared.QueueWaitMillis, CallbackTimeoutMillis: prepared.CallbackTimeoutMillis,
 	})
 	if err != nil {
 		return nil, err
@@ -165,6 +191,10 @@ func NewRecorderOwned(broker *contextbroker.Broker, bearer string, config Record
 	binding := recorder.Binding()
 	if !reflect.DeepEqual(binding, prepared) {
 		return nil, errors.New("recorder-owned MCP binding differs from prepared binding")
+	}
+	queueWaitTimeout, callbackTimeout := config.QueueWaitTimeout, config.CallbackTimeout
+	if callbackTimeout == 0 {
+		callbackTimeout = RecorderOwnedBridgeCallTimeout
 	}
 	server, err := toolbridge.New(toolbridge.Config{
 		Token: bearer, Observe: observe, MaxConcurrentCalls: 1,
@@ -175,8 +205,8 @@ func NewRecorderOwned(broker *contextbroker.Broker, bearer string, config Record
 		// and cancels the callback at this deadline, so a wait admitted
 		// near the cap must resolve to its own finite timeout first.
 		// Server maximum is one minute; fast tools are unaffected.
-		CallTimeout: RecorderOwnedBridgeCallTimeout,
-		Catalog:     recorder.Projection().Catalog, Call: recorder.Projection().Call,
+		QueueWaitTimeout: queueWaitTimeout, CallTimeout: callbackTimeout,
+		Catalog: recorder.Projection().Catalog, Call: recorder.Projection().Call,
 	})
 	if err != nil {
 		return nil, err

@@ -1,5 +1,10 @@
 # Donor gap audit
 
+**SUPERSEDED — 2026-10-05.** This is historical research against an older
+EngOrch baseline, not a current backlog. Use the [current product plan](../roadmap/v2-product-plan.md)
+and [evidence-driven runtime brief](../roadmap/v2-evidence-runtime-brief.md).
+Retain the donor findings below for provenance and reuse limitations.
+
 Status: IN PROGRESS, 2026-09-08. Implementation follows the completed audit,
 as requested by the user. Complete the remaining donor comparisons before selecting
 and implementing the prioritized mechanisms. Existing local work is preserved.

@@ -75,7 +75,10 @@ type ToolGenerationObservation struct {
 
 // ToolReasoningObservation retains the exact opaque state needed to replay a
 // pinned OpenAI Responses reasoning item. ProviderItemID is distinct from tool
-// call and broker identities; TextSHA256 binds the visible summary text.
+// call and broker identities; TextSHA256 binds the visible summary text. When
+// the adapter emits several summary parts for one item, one observation
+// aggregates them against the same-generation encrypted carrier; a summary
+// never authorizes anything.
 type ToolReasoningObservation struct {
 	PartID           string         `json:"part_id"`
 	ProviderItemID   ProviderItemID `json:"provider_item_id"`
@@ -444,6 +447,7 @@ func decodeToolGenerationWithRuntimeMetadata(raw []byte, assistant turnAssistant
 func decodeToolGenerationWithOptions(raw []byte, assistant turnAssistant, final bool, pairs map[string]brokerPair, seenProviderCalls, seenRequests map[string]bool, structured *StructuredOutputExpectation, expected *RuntimeMetadataExpectation) (ToolGenerationObservation, error) {
 	generation := ToolGenerationObservation{Assistant: assistant.Assistant, Finish: assistant.Finish, Calls: []ToolCallObservation{}}
 	var completedText bytes.Buffer
+	var reasoningFragments []reasoningFragment
 	var parts []json.RawMessage
 	if len(raw) > (1<<20)-10 || json.Unmarshal(raw, &parts) != nil || parts == nil || len(parts) < 2 || len(parts) > 4096 {
 		return generation, errors.New("invalid tool assistant parts")
@@ -514,12 +518,12 @@ func decodeToolGenerationWithOptions(raw []byte, assistant turnAssistant, final 
 				generation.TextProviderItems = append(generation.TextProviderItems, ToolTextObservation{ProviderItemID: itemID, Phase: phase})
 			}
 		case "reasoning":
-			reasoning, err := decodeCompletedReasoningPart(part, assistant.Assistant)
+			fragment, err := decodeReasoningFragment(part, assistant.Assistant)
 			if err != nil {
 				return generation, err
 			}
-			if reasoning != nil {
-				generation.Reasoning = append(generation.Reasoning, *reasoning)
+			if fragment != nil {
+				reasoningFragments = append(reasoningFragments, *fragment)
 			}
 		case "patch":
 			if expected == nil {
@@ -530,6 +534,11 @@ func decodeToolGenerationWithOptions(raw []byte, assistant turnAssistant, final 
 			return generation, errors.New("unsupported tool assistant part")
 		}
 	}
+	paired, aggregateErr := aggregateReasoningFragments(reasoningFragments)
+	if aggregateErr != nil {
+		return generation, aggregateErr
+	}
+	generation.Reasoning = paired
 	if stepStart != 0 || stepFinish < 0 || len(patchIndexes) == 0 && stepFinish != len(parts)-1 {
 		return generation, errors.New("tool assistant step framing mismatch")
 	}
@@ -946,13 +955,35 @@ func responsesProviderItemMetadata(part map[string]json.RawMessage, allowPhase b
 	return itemID, phase, nil
 }
 
-func decodeCompletedReasoningPart(part map[string]json.RawMessage, assistant Assistant) (*ToolReasoningObservation, error) {
+// reasoningFragment is one validated OpenCode reasoning part within a single
+// assistant generation. Summary fragments carry only the provider item
+// locator; exactly one carrier per item additionally carries the opaque
+// encrypted content needed for replay.
+type reasoningFragment struct {
+	partID       string
+	itemID       ProviderItemID
+	encrypted    string
+	hasEncrypted bool
+	text         string
+}
+
+// decodeReasoningFragment validates identity, timing, text and metadata of
+// one reasoning part. A nil fragment means the part carries no provider
+// metadata and remains ignored, as before. An itemId-only summary fragment
+// is returned without authorization: pairing with a fully validated
+// encrypted carrier for the same item in the same generation is still
+// required before it can project to an observation.
+func decodeReasoningFragment(part map[string]json.RawMessage, assistant Assistant) (*reasoningFragment, error) {
 	var text string
 	if field(part, "text", &text) != nil || !utf8.ValidString(text) || len(text) > 256<<10 {
 		return nil, errors.New("invalid tool-turn reasoning")
 	}
 	if err := validatePartTime(part["time"], assistant); err != nil {
 		return nil, err
+	}
+	var partID string
+	if field(part, "id", &partID) != nil || !locator(partID) {
+		return nil, errors.New("invalid tool-turn reasoning identity")
 	}
 	raw, ok := part["metadata"]
 	if !ok {
@@ -963,17 +994,83 @@ func decodeCompletedReasoningPart(part map[string]json.RawMessage, assistant Ass
 		return nil, errors.New("unbound reasoning metadata rejected")
 	}
 	openai, err := wireObject(metadata["openai"])
-	if err != nil || len(openai) != 2 {
+	if err != nil {
 		return nil, errors.New("invalid OpenAI Responses reasoning metadata")
 	}
-	var result ToolReasoningObservation
-	if field(part, "id", &result.PartID) != nil || !locator(result.PartID) ||
-		field(openai, "itemId", &result.ProviderItemID) != nil || !validProviderItemID(result.ProviderItemID) ||
-		field(openai, "reasoningEncryptedContent", &result.EncryptedContent) != nil || !validReasoningEncryptedContent(result.EncryptedContent) {
+	for key := range openai {
+		if key != "itemId" && key != "reasoningEncryptedContent" {
+			return nil, errors.New("invalid OpenAI Responses reasoning metadata")
+		}
+	}
+	var fragment reasoningFragment
+	fragment.partID, fragment.text = partID, text
+	var itemID ProviderItemID
+	if field(openai, "itemId", &itemID) != nil || !validProviderItemID(itemID) {
 		return nil, errors.New("invalid OpenAI Responses reasoning metadata")
 	}
-	result.TextSHA256 = toolTurnDigest([]byte(text))
-	return &result, nil
+	fragment.itemID = itemID
+	if _, present := openai["reasoningEncryptedContent"]; present {
+		var encrypted string
+		if field(openai, "reasoningEncryptedContent", &encrypted) != nil || !validReasoningEncryptedContent(encrypted) {
+			return nil, errors.New("invalid OpenAI Responses reasoning metadata")
+		}
+		fragment.encrypted, fragment.hasEncrypted = encrypted, true
+	}
+	if fragment.hasEncrypted != (len(openai) == 2) {
+		return nil, errors.New("invalid OpenAI Responses reasoning metadata")
+	}
+	return &fragment, nil
+}
+
+// aggregateReasoningFragments pairs every itemId-only summary fragment with
+// exactly one fully validated encrypted carrier for the same provider item
+// within the same assistant generation. Fragments never match across
+// generations: an unpaired summary stays rejected, and duplicate or
+// contradictory carriers reject as ambiguous. Each item projects to one
+// ToolReasoningObservation retaining the carrier part identity and exact
+// opaque encrypted state; TextSHA256 binds the concatenated visible
+// summaries in wire order. A lone carrier aggregates to the previously
+// supported single-part shape.
+func aggregateReasoningFragments(fragments []reasoningFragment) ([]ToolReasoningObservation, error) {
+	if len(fragments) == 0 {
+		return nil, nil
+	}
+	order := []ProviderItemID{}
+	byItem := map[ProviderItemID][]reasoningFragment{}
+	for _, fragment := range fragments {
+		if _, seen := byItem[fragment.itemID]; !seen {
+			order = append(order, fragment.itemID)
+		}
+		byItem[fragment.itemID] = append(byItem[fragment.itemID], fragment)
+	}
+	paired := make([]ToolReasoningObservation, 0, len(order))
+	for _, itemID := range order {
+		group := byItem[itemID]
+		var carrier *reasoningFragment
+		for index := range group {
+			if group[index].hasEncrypted {
+				if carrier != nil {
+					return nil, errors.New("duplicate reasoning carrier rejected")
+				}
+				duplicate := group[index]
+				carrier = &duplicate
+			}
+		}
+		if carrier == nil {
+			return nil, errors.New("unpaired reasoning summary rejected")
+		}
+		var text bytes.Buffer
+		for _, fragment := range group {
+			text.WriteString(fragment.text)
+		}
+		paired = append(paired, ToolReasoningObservation{
+			PartID:           carrier.partID,
+			ProviderItemID:   itemID,
+			EncryptedContent: carrier.encrypted,
+			TextSHA256:       toolTurnDigest(text.Bytes()),
+		})
+	}
+	return paired, nil
 }
 
 func validReasoningEncryptedContent(value string) bool {

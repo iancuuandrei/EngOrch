@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"harness.local/engorch/internal/contextmcp"
 	"harness.local/engorch/internal/runtime"
 	"harness.local/engorch/internal/taskscheduler"
 )
@@ -61,17 +62,17 @@ func TestStaticExplorerQueueDepthGrantsQueueOnlyToStaticScheduledExplorers(t *te
 			if got != want {
 				t.Fatalf("queue depth %d, want %d", got, want)
 			}
-			if want != 0 && want != 32 {
+			if want != 0 && want != contextmcp.InvocationToolCallBudget-1 {
 				t.Fatalf("queue depth %d is not the frozen serial-fifo bound", want)
 			}
 		})
 	}
-	if compositeToolQueueLimit != 32 {
+	if compositeToolQueueLimit != contextmcp.InvocationToolCallBudget-1 {
 		t.Fatal("serial-fifo queue bound changed without updating static explorer policy")
 	}
 }
 
-func TestWriterFixerQueueDepthGrantsQueueOnlyToWriterAndFixer(t *testing.T) {
+func TestContextRoleQueueDepthSerializesEngineeringRoleBursts(t *testing.T) {
 	invocation := func(role string) runtime.Invocation {
 		return runtime.Invocation{Version: 1, ID: strings.Repeat("f", 64), Profile: runtime.Profile{Role: role}, Input: "question"}
 	}
@@ -81,13 +82,14 @@ func TestWriterFixerQueueDepthGrantsQueueOnlyToWriterAndFixer(t *testing.T) {
 	}{
 		{"writer", true},
 		{"fixer", true},
-		{"explorer", false},
-		{"planner", false},
-		{"reviewer", false},
+		{"explorer", true},
+		{"planner", true},
+		{"reviewer", true},
+		{"unknown", false},
 	}
 	for _, test := range cases {
 		t.Run(test.role, func(t *testing.T) {
-			got := writerFixerQueueDepth(invocation(test.role))
+			got := contextRoleQueueDepth(invocation(test.role))
 			want := 0
 			if test.wantQueued {
 				want = compositeToolQueueLimit

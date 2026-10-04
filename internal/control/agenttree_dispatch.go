@@ -11,7 +11,6 @@ import (
 	"harness.local/engorch/internal/config"
 	"harness.local/engorch/internal/journal"
 	"harness.local/engorch/internal/opencoderuntime"
-	"harness.local/engorch/internal/providerruntime"
 	"harness.local/engorch/internal/runtime"
 	"harness.local/engorch/internal/safepath"
 	"harness.local/engorch/internal/taskscheduler"
@@ -100,13 +99,13 @@ func executeDirectProvider(ctx context.Context, controllerPath string, configura
 	if err != nil {
 		return runtime.Result{}, providerDispatchReceipt{}, err
 	}
-	if err := ensureDirectDispatchCapacity(configuration, runID, invocation); err != nil {
+	if err := ensureDirectDispatchCapacity(snapshot, invocation); err != nil {
 		return runtime.Result{}, providerDispatchReceipt{}, err
 	}
 	if err := markAgentDispatchRunning(&binding); err != nil {
 		return runtime.Result{}, providerDispatchReceipt{}, err
 	}
-	result, receipt, dispatchErr := executeDirectProviderRuntime(ctx, controllerPath, configuration, runID, invocation)
+	result, receipt, dispatchErr := executeDirectProviderRuntime(ctx, controllerPath, snapshot, invocation)
 	if dispatchErr != nil {
 		return result, receipt, errors.Join(dispatchErr, finishAgentDispatchUnknown(binding))
 	}
@@ -143,6 +142,82 @@ func providerRoleJournalStem(role string, turn *taskscheduler.AgentTurnBinding) 
 		return role
 	}
 	return role + ".turn-" + turn.TurnID
+}
+
+// A role may perform several independent turns in one engineering run. Keep
+// the historical first-turn path for exact recovery, but never bind another
+// invocation to that first turn's gateway or runtime state.
+func providerInvocationJournalStem(controllerPath string, invocation runtime.Invocation, turn *taskscheduler.AgentTurnBinding) (string, error) {
+	stem := providerRoleJournalStem(invocation.Profile.Role, turn)
+	if turn != nil {
+		return stem, nil
+	}
+	events, err := journal.Read(controllerPath + "." + stem + ".opencode-runtime.jsonl")
+	if err != nil {
+		return "", err
+	}
+	if len(events) == 0 {
+		return stem, nil
+	}
+	var prior opencoderuntime.Intent
+	if events[0].Kind != "opencode-runtime.intent" || canonical.Decode(events[0].Payload, &prior) != nil {
+		return "", errors.Join(opencoderuntime.ErrRecoveryRequired, errors.New("provider runtime first intent is invalid"))
+	}
+	if id, err := prior.ID(); err != nil || id != prior.IntentID {
+		return "", errors.Join(opencoderuntime.ErrRecoveryRequired, errors.New("provider runtime intent identity is invalid"))
+	}
+	if prior.Invocation.ID == invocation.ID {
+		return stem, nil
+	}
+	return stem + ".invocation-" + invocation.ID, nil
+}
+
+// isolatedWriterJournalStem returns the collision-free deterministic journal
+// namespace for one controller-admitted static isolated/staged OpenCode task
+// writer turn: `<role>.invocation-<invocationID>`. It is derived from the
+// admitted task/invocation binding before any journal read or write, so two
+// distinct valid task invocations derive distinct journals even when neither
+// journal exists yet; concurrent writers never share a journal by racing the
+// legacy claimant read below. Serial, scheduled (turn-bound) and Codex paths
+// are untouched: this applies only to turn-free writer/fixer invocations with
+// the opencode-http runtime admitted by the frozen isolated cohort. Legacy
+// absent-field serialization is unchanged and old journals are never renamed.
+// The second return value reports whether the deterministic namespace applies;
+// callers fall back to providerInvocationJournalStem when it does not.
+func isolatedWriterJournalStem(s Snapshot, invocation runtime.Invocation, turn *taskscheduler.AgentTurnBinding) (string, bool) {
+	if turn != nil {
+		return "", false
+	}
+	if invocation.Profile.Role != "writer" && invocation.Profile.Role != "fixer" {
+		return "", false
+	}
+	if invocation.Profile.Runtime != "opencode-http" {
+		return "", false
+	}
+	if !isolatedImplementationEnabled(s) {
+		return "", false
+	}
+	// Controller-admitted binding only: the exact frozen child invocation must
+	// equal the candidate invocation. Model prose, scheduler hints and
+	// journal contents never grant this namespace.
+	admitted, _, err := isolatedWriterInvocationForReceiptID(s, invocation.ID)
+	if err != nil || admitted != invocation {
+		return "", false
+	}
+	return invocation.Profile.Role + ".invocation-" + invocation.ID, true
+}
+
+// providerInvocationJournalStemForSnapshot resolves the same journal stem as
+// providerInvocationJournalStem for serial and scheduled turns, but consults
+// the controller-admitted isolated task/invocation binding first. Execution,
+// usage verification, scheduler reconciliation and resumed observation must all
+// resolve through this snapshot-aware helper with their own current snapshot
+// so every path derives the identical deterministic namespace.
+func providerInvocationJournalStemForSnapshot(controllerPath string, s Snapshot, invocation runtime.Invocation, turn *taskscheduler.AgentTurnBinding) (string, error) {
+	if stem, ok := isolatedWriterJournalStem(s, invocation, turn); ok {
+		return stem, nil
+	}
+	return providerInvocationJournalStem(controllerPath, invocation, turn)
 }
 
 func beginAgentDispatchForTurn(controllerPath string, snapshot Snapshot, invocation runtime.Invocation, turn *taskscheduler.AgentTurnBinding) (agentDispatchBinding, error) {
@@ -241,11 +316,7 @@ func markAgentDispatchRunning(binding *agentDispatchBinding) error {
 }
 
 func ensureOpenCodeDispatchCapacity(snapshot Snapshot, invocation runtime.Invocation) error {
-	inputHash, err := access.InputID(invocation.Input)
-	if err != nil {
-		return err
-	}
-	selected, err := ResolveProviderRouting(snapshot.Creation.Config, snapshot.RunID, invocation.Profile.Role, inputHash, 1, invocation.Profile)
+	selected, err := resolveProviderRoutingForSnapshot(snapshot, invocation, 1)
 	if err != nil || selected.Profile != invocation.Profile {
 		return errors.Join(errors.New("OpenCode provider selection changed"), err)
 	}
@@ -253,29 +324,63 @@ func ensureOpenCodeDispatchCapacity(snapshot Snapshot, invocation runtime.Invoca
 	return err
 }
 
-func ensureDirectDispatchCapacity(configuration config.Config, runID string, invocation runtime.Invocation) error {
-	_, expectation, err := ConfiguredProviderExpectation(configuration, invocation.Profile.Role, invocation.Profile)
-	if err != nil {
-		return err
-	}
-	direct := providerruntime.Invocation{Version: 1, System: "Return exactly one JSON value for the controller role request. Do not claim tools or repository access.", Prompt: invocation.Input, Output: providerruntime.OutputContract{Kind: "json"}}
-	inputHash, err := direct.InputHash(expectation)
-	if err != nil {
-		return err
-	}
-	selected, err := ResolveProviderRouting(configuration, runID, invocation.Profile.Role, inputHash, 1, invocation.Profile)
+func ensureDirectDispatchCapacity(snapshot Snapshot, invocation runtime.Invocation) error {
+	selected, err := resolveProviderRoutingForSnapshot(snapshot, invocation, 1)
 	if err != nil || selected.Profile != invocation.Profile {
 		return errors.Join(errors.New("direct provider selection changed"), err)
 	}
-	_, err = ensureTaskPool(configuration, runID, selected.Intent)
+	_, err = ensureTaskPool(snapshot.Creation.Config, snapshot.RunID, selected.Intent)
 	return err
+}
+
+// prepareManagedExplorerRoot registers the already accepted planner result for
+// opt-in dynamic explorers. It does not dispatch a planner or grant new scope.
+func prepareManagedExplorerRoot(controllerPath string, snapshot Snapshot) error {
+	if !managedExplorerDispatchEnabled(snapshot) {
+		return nil
+	}
+	if err := autonomousDispatchBlocked(snapshot); err != nil {
+		return err
+	}
+	path := controllerPath + ".agent-tree"
+	tree, err := agenttree.Inspect(path)
+	if err != nil {
+		return err
+	}
+	if tree.TreeID == "" {
+		_, err = bootstrapAgentTreeRoot(path, snapshot)
+		return err
+	}
+	planner, err := plannerInvocationForSnapshot(snapshot)
+	if err != nil {
+		return err
+	}
+	contextHash, err := access.InputID(planner.Input)
+	if err != nil {
+		return err
+	}
+	root, ok := agentNodeByID(tree, tree.RootAgentID)
+	if tree.TreeID != snapshot.RunID || !ok || !exactNodeFields(root, "", "/root", agenttree.NodeSpec{Name: "root", Role: "planner", Authority: agenttree.AuthorityReadOnly, InvocationID: planner.ID, ContextSHA256: contextHash}) {
+		return errors.New("managed explorer planner root differs")
+	}
+	if snapshot.Plan == nil {
+		return errors.New("managed explorer accepted planner result unavailable")
+	}
+	if err := runtime.ValidateResult(planner, *snapshot.Plan, true); err != nil {
+		return err
+	}
+	resultHash, err := canonical.Hash("harness.planner-result.v1", *snapshot.Plan)
+	if err != nil || root.Status != agenttree.StatusSucceeded || root.ResultSHA256 != resultHash {
+		return errors.Join(errors.New("managed explorer planner result binding differs"), err)
+	}
+	return nil
 }
 
 func bootstrapAgentTreeRoot(journalPath string, snapshot Snapshot) (agenttree.Snapshot, error) {
 	if snapshot.Plan == nil {
 		return agenttree.Snapshot{}, errors.New("agent tree planner root unavailable")
 	}
-	planner, err := plannerInvocation(snapshot.Creation.Config, snapshot.Creation.Objective)
+	planner, err := plannerInvocationForSnapshot(snapshot)
 	if err != nil {
 		return agenttree.Snapshot{}, err
 	}
@@ -490,13 +595,13 @@ func replayAgentDispatch(snapshot *Snapshot, event journal.Event) error {
 		if err := canonical.Decode(event.Payload, &admission); err != nil {
 			return err
 		}
-		expected, err := runtime.NewInvocation(admission.Invocation.Profile, admission.Invocation.Input)
+		err := admission.Invocation.Validate()
 		contextHash, contextErr := access.InputID(admission.Invocation.Input)
 		authority, authorityErr := agentAuthority(admission.Invocation.Profile.Role)
 		_, idErr := admission.ID()
 		nodeErr := agenttree.ValidateQueuedNode(admission.TreeID, admission.Node)
 		turnErr := validateAdmissionAgentTurn(admission, contextHash)
-		if err != nil || contextErr != nil || authorityErr != nil || idErr != nil || nodeErr != nil || turnErr != nil || admission.Version != 1 || admission.RunID != snapshot.RunID || admission.TreeID != snapshot.RunID || admission.Invocation != expected || admission.Node.Role != admission.Invocation.Profile.Role || admission.Node.Authority != authority || safepath.RequireDigest(admission.Node.AgentID) != nil || admission.Node.Status != agenttree.StatusQueued || admission.Node.ResultSHA256 != "" {
+		if err != nil || contextErr != nil || authorityErr != nil || idErr != nil || nodeErr != nil || turnErr != nil || admission.Version != 1 || admission.RunID != snapshot.RunID || admission.TreeID != snapshot.RunID || admission.Node.Role != admission.Invocation.Profile.Role || admission.Node.Authority != authority || safepath.RequireDigest(admission.Node.AgentID) != nil || admission.Node.Status != agenttree.StatusQueued || admission.Node.ResultSHA256 != "" {
 			return errors.Join(errors.New("invalid agent dispatch admission"), err, contextErr, authorityErr, idErr, nodeErr, turnErr)
 		}
 		if admission.Invocation.Profile.Role == "planner" {

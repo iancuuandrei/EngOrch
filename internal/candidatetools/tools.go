@@ -17,6 +17,7 @@ import (
 	"harness.local/engorch/internal/repository"
 	"harness.local/engorch/internal/safepath"
 	"harness.local/engorch/internal/sourcetools"
+	"harness.local/engorch/internal/toolcontent"
 	"harness.local/engorch/internal/worktree"
 )
 
@@ -93,6 +94,14 @@ func CatalogWithAnchoredEdits() []sourcetools.Definition {
 	return catalog(true)
 }
 
+// LegacyCatalog returns the byte-identical candidate catalog used by v1
+// context bindings.
+func LegacyCatalog() []sourcetools.Definition {
+	definitions := Catalog()
+	definitions[1].Description = "Read a byte page from the admitted candidate, including modifications. Returns exact full-file hash and binary/UTF-8 views. Follow next_offset until null. Any candidate drift fails the request."
+	return definitions
+}
+
 func catalog(includeAnchoredEdits bool) []sourcetools.Definition {
 	definitions := []sourcetools.Definition{
 		{
@@ -108,7 +117,7 @@ func catalog(includeAnchoredEdits bool) []sourcetools.Definition {
 		},
 		{
 			Name:        ReadName,
-			Description: "Read a byte page from the admitted candidate, including modifications. Returns exact full-file hash and binary/UTF-8 views. Follow next_offset until null. Any candidate drift fails the request.",
+			Description: "Read a byte page from the admitted candidate, including modifications. For valid UTF-8 pages, content_utf8 contains the bytes and content_base64 is omitted; binary pages include content_base64 and null content_utf8. sha256 binds the full candidate file. Follow next_offset until null. Any candidate drift fails the request.",
 			InputSchema: object(
 				map[string]any{
 					"path":   map[string]any{"type": "string"},
@@ -151,9 +160,40 @@ type ReadArgs struct {
 	Limit  int    `json:"limit"`
 }
 
+// ReadResult is the model-facing view of an admitted candidate page. Text
+// pages omit their redundant Base64 copy; binary pages retain Base64.
+type ReadResult struct {
+	CandidateID   string  `json:"candidate_id"`
+	Path          string  `json:"path"`
+	SHA256        string  `json:"sha256"`
+	Size          int64   `json:"size"`
+	Offset        int64   `json:"offset"`
+	ContentBase64 string  `json:"content_base64,omitempty"`
+	ContentUTF8   *string `json:"content_utf8"`
+	NextOffset    *int64  `json:"next_offset"`
+}
+
+func readResult(chunk worktree.SourceChunk) (ReadResult, error) {
+	encoded, text, err := toolcontent.UTF8First(chunk.ContentBase64, chunk.ContentUTF8)
+	if err != nil {
+		return ReadResult{}, err
+	}
+	return ReadResult{chunk.CandidateID, chunk.Path, chunk.SHA256, chunk.Size, chunk.Offset, encoded, text, chunk.NextOffset}, nil
+}
+
 // Execute strictly decodes and executes one supported candidate tool. Unknown
 // names are returned as unhandled without inspecting the binding or workspace.
 func Execute(ctx context.Context, binding Binding, name string, arguments json.RawMessage) (content any, handled bool, err error) {
+	return execute(ctx, binding, name, arguments, true)
+}
+
+// ExecuteLegacy retains the v1 candidate-read result shape for sessions whose
+// model was given the v1 tool catalog.
+func ExecuteLegacy(ctx context.Context, binding Binding, name string, arguments json.RawMessage) (content any, handled bool, err error) {
+	return execute(ctx, binding, name, arguments, false)
+}
+
+func execute(ctx context.Context, binding Binding, name string, arguments json.RawMessage, utf8First bool) (content any, handled bool, err error) {
 	switch name {
 	case ListName:
 		var args ListArgs
@@ -179,8 +219,18 @@ func Execute(ctx context.Context, binding Binding, name string, arguments json.R
 		if err := binding.Validate(binding.Workspace.Request.Source); err != nil {
 			return nil, true, err
 		}
-		content, err := worktree.ReadSource(ctx, binding.Workspace, binding.Candidate, args.Path, args.Offset, args.Limit)
-		return content, true, err
+		chunk, err := worktree.ReadSource(ctx, binding.Workspace, binding.Candidate, args.Path, args.Offset, args.Limit)
+		if err != nil {
+			return nil, true, err
+		}
+		if !utf8First {
+			return chunk, true, nil
+		}
+		result, err := readResult(chunk)
+		if err != nil {
+			return nil, true, err
+		}
+		return result, true, nil
 	case ValidateAnchoredEditsName:
 		if binding.AnchorValidationVersion != AnchorValidationVersion {
 			return nil, true, errors.New("candidate anchored edit validation is not enabled")

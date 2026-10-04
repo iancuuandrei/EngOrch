@@ -148,6 +148,9 @@ func scheduleCommand(ctx context.Context, root, command string, args []string, o
 		if err != nil {
 			return err
 		}
+		if err := admitSettledScheduledCorrection(ctx, path, decision); err != nil {
+			return errors.Join(err, output(out, decision))
+		}
 		return output(out, decision)
 	}
 	if command == "schedule-recover" {
@@ -158,4 +161,24 @@ func scheduleCommand(ctx context.Context, root, command string, args []string, o
 		return output(out, decision)
 	}
 	return output(out, snapshot)
+}
+
+func admitSettledScheduledCorrection(ctx context.Context, path string, decision taskscheduler.Decision) error {
+	if decision.Status != taskscheduler.StatusFailed || decision.TaskID == "" {
+		return nil
+	}
+	schedule, err := taskscheduler.Inspect(path)
+	if err != nil {
+		return err
+	}
+	state, ok := schedule.Tasks[decision.TaskID]
+	if !ok || state.Claim == nil || state.Evidence == nil || state.Status != taskscheduler.StatusFailed {
+		return errors.New("failed scheduler decision lacks settled claim evidence")
+	}
+	claimID, err := state.Claim.ID()
+	if err != nil || claimID != decision.ClaimID || state.Claim.Task.ID != decision.TaskID {
+		return errors.Join(errors.New("failed scheduler decision claim changed"), err)
+	}
+	_, err = control.AfterSettledScheduledClaim(ctx, state.Claim.Task.ControllerPath, path, decision.TaskID)
+	return err
 }

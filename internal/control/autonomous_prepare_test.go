@@ -6,8 +6,82 @@ import (
 	"strings"
 	"testing"
 
+	"harness.local/engorch/internal/access"
+	"harness.local/engorch/internal/agenttree"
+	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/engineeringplan"
 )
+
+func TestPrepareAutonomousRegistersOptInExplorerRootWithoutDispatch(t *testing.T) {
+	c := graphCreation(t, 1)
+	c.Config = modelAccessSnapshot(t, "subscription").Creation.Config
+	c.Config.PlannerContract = plannerContractGraphV1
+	c.Config.ExplorerContract = "json-v2"
+	c.Execution.ScheduledExplorerDispatchVersion = 1
+	path, _ := graphAwaitingApproval(t, c)
+	prepared, err := PrepareAutonomous(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := agenttree.Inspect(path + ".agent-tree")
+	if err != nil || tree.TreeID != prepared.RunID || len(tree.Nodes) != 1 {
+		t.Fatal("prepared explorer root missing", err)
+	}
+	resultHash, err := canonical.Hash("harness.planner-result.v1", *prepared.Plan)
+	if err != nil || tree.Nodes[0].Role != "planner" || tree.Nodes[0].Authority != agenttree.AuthorityReadOnly || tree.Nodes[0].Status != agenttree.StatusSucceeded || tree.Nodes[0].ResultSHA256 != resultHash {
+		t.Fatal("root is not the exact accepted planner result", err)
+	}
+	if len(prepared.Explorations) != 0 || len(prepared.ModelAccess) != 0 {
+		t.Fatal("root preparation dispatched role work")
+	}
+	if err := prepareManagedExplorerRoot(path, prepared); err != nil {
+		t.Fatal(err)
+	}
+	again, err := agenttree.Inspect(path + ".agent-tree")
+	if err != nil || !sameCanonical(tree, again) {
+		t.Fatal("root preparation changed existing topology", err)
+	}
+	planner, err := plannerInvocationForSnapshot(prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contextHash, err := access.InputID(planner.Input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []agenttree.Status{agenttree.StatusRunning, agenttree.StatusUnknown, agenttree.StatusSucceeded} {
+		t.Run(string(status), func(t *testing.T) {
+			otherPath := filepath.Join(t.TempDir(), "run.jsonl")
+			node, err := agenttree.Create(otherPath+".agent-tree", prepared.RunID, agenttree.NodeSpec{Name: "root", Role: "planner", Authority: agenttree.AuthorityReadOnly, InvocationID: planner.ID, ContextSHA256: contextHash})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := agenttree.ObserveStatus(otherPath+".agent-tree", node.AgentID, agenttree.StatusRunning); err != nil {
+				t.Fatal(err)
+			}
+			if status == agenttree.StatusUnknown {
+				if err := agenttree.ObserveStatus(otherPath+".agent-tree", node.AgentID, status); err != nil {
+					t.Fatal(err)
+				}
+			} else if status == agenttree.StatusSucceeded {
+				if err := agenttree.ObserveResult(otherPath+".agent-tree", node.AgentID, strings.Repeat("f", 64)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := agenttree.Inspect(otherPath + ".agent-tree")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := prepareManagedExplorerRoot(otherPath, prepared); err == nil {
+				t.Fatal("nonterminal or foreign-result root admitted")
+			}
+			after, err := agenttree.Inspect(otherPath + ".agent-tree")
+			if err != nil || !sameCanonical(before, after) {
+				t.Fatal("rejection mutated existing root", err)
+			}
+		})
+	}
+}
 
 func TestPrepareAutonomousStopsBeforeRolesAndResumeKeepsOwnership(t *testing.T) {
 	c := graphCreation(t, 3)

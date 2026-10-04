@@ -69,7 +69,7 @@ func TestCandidateBrokerReadsModifiedStateAndRejectsDrift(t *testing.T) {
 	if !read.Success {
 		t.Fatal(read)
 	}
-	var chunk worktree.SourceChunk
+	var chunk candidatetools.ReadResult
 	if err := canonical.Decode([]byte(read.Content), &chunk); err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestAnchoredEditValidationIsDurableAndInvocationBound(t *testing.T) {
 	for _, event := range events {
 		payload := event.Payload
 		if event.Kind == "runtime.intent" {
-			payload, err = canonical.Bytes(Intent{i, a.Directory})
+			payload, err = canonical.Bytes(Intent{Invocation: i, Directory: a.Directory, ToolOutputVersion: 1})
 		}
 		if event.Kind == "runtime.turn-intent" {
 			payload, err = canonical.Bytes(map[string]any{"invocation_id": i.ID})

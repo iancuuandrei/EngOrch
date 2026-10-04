@@ -1,11 +1,13 @@
 package control
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"harness.local/engorch/internal/access"
 	"harness.local/engorch/internal/config"
+	"harness.local/engorch/internal/modelpolicy"
 	"harness.local/engorch/internal/runtime"
 )
 
@@ -55,6 +57,20 @@ func modelAccessSnapshot(t *testing.T, kind string) Snapshot {
 
 func modelAccessProfilePointer(profile runtime.Profile) *runtime.Profile { return &profile }
 
+func TestCodexFiniteUsageRequiresQualificationWithoutStrictFlag(t *testing.T) {
+	s := modelAccessSnapshot(t, "subscription")
+	s.Creation.Config.Codex = &config.Codex{}
+	for _, role := range []string{"planner", "explorer", "writer", "fixer", "reviewer"} {
+		if _, _, _, _, err := codexRuntimeUsagePolicy(s, role); !errors.Is(err, ErrUsageQualification) {
+			t.Fatalf("finite %s budget must refuse before admission: %v", role, err)
+		}
+	}
+	s.Creation.Config.Codex.UsageQualified = true
+	if budget, strict, qualified, unlimited, err := codexRuntimeUsagePolicy(s, "writer"); err != nil || budget != 300 || strict || !qualified || unlimited {
+		t.Fatalf("qualified finite reservation changed: %d %v %v %v %v", budget, strict, qualified, unlimited, err)
+	}
+}
+
 func TestDeriveModelAccessIntentAllRoles(t *testing.T) {
 	s := modelAccessSnapshot(t, "subscription")
 	for n, role := range []string{"planner", "explorer", "writer", "fixer", "reviewer"} {
@@ -84,6 +100,30 @@ func TestDeriveModelAccessIntentAllRoles(t *testing.T) {
 				t.Fatal("intent reservation differs from configured role limit or billing")
 			}
 		})
+	}
+}
+
+func TestModelAccessIntentIncludesOptedInRoutingEvidence(t *testing.T) {
+	s := modelAccessSnapshot(t, "subscription")
+	profile := s.Creation.Config.Planner
+	s.Creation.Config.ModelPolicy = &modelpolicy.Policy{
+		Version: 1, DecisionEvidenceVersion: 1,
+		Profiles: []modelpolicy.Profile{
+			{Name: "standard", Runtime: profile.Runtime, Provider: profile.Provider, Model: profile.Model, Effort: profile.Effort},
+			{Name: "strong", Runtime: profile.Runtime, Provider: profile.Provider, Model: profile.Model, Effort: profile.Effort},
+		},
+		Rules: map[string]modelpolicy.Rule{"planner": {DefaultProfile: "standard", EscalatedProfile: "strong", ContextEscalationTokens: modelpolicy.MaxContextTokens, ContextEscalationBytes: modelpolicy.MaxContextBytes, FailureEscalationCount: 1}},
+	}
+	invocation, err := runtime.NewInvocation(profile, "controller-owned planner input")
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := deriveModelAccessIntent(s, invocation, 1)
+	if err != nil || intent.RoutingDecision == nil || intent.RoutingDecision.ContextBytes != int64(len(invocation.Input)) || intent.RoutingDecision.AcceptedFailures != 0 {
+		t.Fatalf("Codex/model-access intent omitted opt-in decision evidence: %+v %v", intent, err)
+	}
+	if err := intent.RoutingDecision.Validate(intent.Route, intent.ModelChoice); err != nil {
+		t.Fatalf("decision evidence does not match admitted access route: %v", err)
 	}
 }
 

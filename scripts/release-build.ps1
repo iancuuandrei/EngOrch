@@ -160,7 +160,7 @@ foreach ($platformSpec in $selectedPlatformSpecs) {
     $savedGoOS, $savedGoArch, $savedCGO = $env:GOOS, $env:GOARCH, $env:CGO_ENABLED
     try {
         $env:GOOS, $env:GOARCH, $env:CGO_ENABLED = $platformSpec.GoOS, $platformSpec.GoArch, '0'
-        Invoke-Checked $Go @('-C', $root, 'build', '-trimpath', '-buildvcs=false', '-ldflags', $ldflags, '-o', $fabric, './cmd/fabric')
+        Invoke-Checked $Go @('-C', $root, 'build', '-trimpath', '-buildvcs=true', '-ldflags', $ldflags, '-o', $fabric, './cmd/fabric')
     } finally { $env:GOOS, $env:GOARCH, $env:CGO_ENABLED = $savedGoOS, $savedGoArch, $savedCGO }
     $savedRustFlags = $env:RUSTFLAGS
     $savedEncodedRustFlags = $env:CARGO_ENCODED_RUSTFLAGS

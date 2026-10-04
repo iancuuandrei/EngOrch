@@ -95,3 +95,35 @@ func TestRuntimeRejectsMutationAndCancellation(t *testing.T) {
 		t.Fatal("executed closed runtime")
 	}
 }
+
+func TestExecutionPolicyValidatesCodexAutoCompactOption(t *testing.T) {
+	policy := ExecutionPolicy{Mode: "autonomous-v1", CodexAutoCompact: &runtime.CodexAutoCompactOptions{Version: runtime.CodexAutoCompactVersion, TokenLimit: 64000}}
+	if err := policy.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, option := range []*runtime.CodexAutoCompactOptions{
+		{Version: 0, TokenLimit: 64000},
+		{Version: runtime.CodexAutoCompactVersion, TokenLimit: 0},
+		{Version: runtime.CodexAutoCompactVersion, TokenLimit: runtime.MaxCodexAutoCompactTokenLimit + 1},
+	} {
+		policy.CodexAutoCompact = option
+		if err := policy.Validate(); err == nil {
+			t.Fatalf("invalid auto-compaction policy admitted: %+v", option)
+		}
+	}
+	policy.CodexAutoCompact = &runtime.CodexAutoCompactOptions{Version: runtime.CodexAutoCompactVersion, TokenLimit: 64000}
+	c := creation(t)
+	c.Execution = &policy
+	path := filepath.Join(t.TempDir(), "run.jsonl")
+	if err := Append(path, "run.created", c); err == nil {
+		t.Fatal("Codex compaction option admitted when no Codex role is configured")
+	}
+	compatible := config.Config{Planner: runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "model", Effort: "high", Role: "planner"}}
+	if !creationSupportsCodexAutoCompact(compatible) {
+		t.Fatal("all-Codex role configuration was rejected")
+	}
+	compatible.Writer = &runtime.Profile{Runtime: "fake", Provider: "deterministic", Model: "writer", Effort: "low", Role: "writer"}
+	if creationSupportsCodexAutoCompact(compatible) {
+		t.Fatal("mixed runtime role configuration silently admitted native Codex compaction")
+	}
+}

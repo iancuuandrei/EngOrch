@@ -1,6 +1,7 @@
 package doccheck
 
 import (
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -81,6 +82,37 @@ func TestDocumentationLinksAndADRs(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestModelAllocationCodexAccessExampleUsesSupportedAuthMode(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(root(t), "docs", "guides", "model-allocation.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = "For a Codex subscription route"
+	_, after, ok := strings.Cut(string(raw), marker)
+	if !ok {
+		t.Fatal("Codex subscription example is missing")
+	}
+	_, after, ok = strings.Cut(after, "```json\n")
+	if !ok {
+		t.Fatal("Codex subscription JSON example is missing")
+	}
+	jsonText, _, ok := strings.Cut(after, "\n```")
+	if !ok {
+		t.Fatal("Codex subscription JSON example is unterminated")
+	}
+	var example struct {
+		Profiles []struct {
+			AuthMode string `json:"auth_mode"`
+		} `json:"profiles"`
+	}
+	if err := json.Unmarshal([]byte(jsonText), &example); err != nil {
+		t.Fatalf("decode Codex subscription example: %v", err)
+	}
+	if len(example.Profiles) != 1 || example.Profiles[0].AuthMode != "chatgpt-session" {
+		t.Fatalf("Codex subscription example must use chatgpt-session auth mode: %+v", example.Profiles)
 	}
 }
 

@@ -29,15 +29,29 @@ type ExplorerHostState struct {
 
 // ExplorerRuntimeReceipt binds a completed runtime observation to its journal head.
 type ExplorerRuntimeReceipt struct {
+	FailureCode  string `json:"failure_code,omitempty"`
 	InvocationID string `json:"invocation_id"`
 	ThreadID     string `json:"thread_id"`
 	TurnID       string `json:"turn_id"`
 	JournalHead  string `json:"journal_head"`
 	ResultHash   string `json:"result_hash"`
+	UsagePending bool   `json:"usage_pending,omitempty"`
 }
 
 func expectedExplorerHost(s Snapshot, question string) (ExplorerHostIntent, error) {
 	i, err := explorerInvocation(s, question)
+	if err != nil {
+		return ExplorerHostIntent{}, err
+	}
+	return expectedExplorerHostForInvocation(s, question, i)
+}
+
+func expectedExplorerHostForInvocation(s Snapshot, question string, observed runtime.Invocation) (ExplorerHostIntent, error) {
+	base, err := explorerInvocation(s, question)
+	if err != nil {
+		return ExplorerHostIntent{}, err
+	}
+	i, err := resolveScheduledRecordedInvocation(s, base, observed)
 	if err != nil {
 		return ExplorerHostIntent{}, err
 	}
@@ -116,6 +130,9 @@ func replayExplorerHost(s *Snapshot, e journal.Event) error {
 		if err := canonical.Decode(e.Payload, &receipt); err != nil {
 			return err
 		}
+		if receipt.FailureCode != "" && (receipt.FailureCode != "serverOverloaded" || receipt.UsagePending || s.Creation.Config.Version != 1) {
+			return errors.New("invalid explorer failure receipt")
+		}
 		if receipt.InvocationID != expected.Invocation.ID || strings.TrimSpace(receipt.ThreadID) == "" || len(receipt.ThreadID) > 256 || strings.TrimSpace(receipt.TurnID) == "" || len(receipt.TurnID) > 256 {
 			return errors.New("explorer runtime receipt identity mismatch")
 		}
@@ -170,7 +187,7 @@ func replayExplorerHostParallel(s *Snapshot, e journal.Event) error {
 		if err := canonical.Decode(e.Payload, &intent); err != nil {
 			return err
 		}
-		expected, err := expectedExplorerHost(*s, intent.Question)
+		expected, err := expectedExplorerHostForInvocation(*s, intent.Question, intent.Invocation)
 		if err != nil {
 			return err
 		}
@@ -190,7 +207,7 @@ func replayExplorerHostParallel(s *Snapshot, e journal.Event) error {
 		if !ok || run.Ready {
 			return errors.New("explorer host preparation transition rejected")
 		}
-		expected, err := expectedExplorerHost(*s, intent.Question)
+		expected, err := expectedExplorerHostForInvocation(*s, intent.Question, intent.Invocation)
 		if err != nil || intent != expected || run.Intent != expected {
 			return errors.New("explorer host preparation transition rejected")
 		}
@@ -221,7 +238,7 @@ func replayExplorerHostParallel(s *Snapshot, e journal.Event) error {
 			return errors.New("explorer host observation transition rejected")
 		}
 		run, _ := explorerRunForInvocation(*s, matched)
-		expected, err := expectedExplorerHost(*s, run.Intent.Question)
+		expected, err := expectedExplorerHostForInvocation(*s, run.Intent.Question, run.Intent.Invocation)
 		if err != nil || run.Intent != expected {
 			return errors.New("explorer host observation transition rejected")
 		}
@@ -239,9 +256,12 @@ func replayExplorerHostParallel(s *Snapshot, e journal.Event) error {
 		if !ok || !run.Ready || run.Receipt == nil || run.RuntimeReceipt != nil {
 			return errors.New("explorer runtime receipt transition rejected")
 		}
-		expected, err := expectedExplorerHost(*s, run.Intent.Question)
+		expected, err := expectedExplorerHostForInvocation(*s, run.Intent.Question, run.Intent.Invocation)
 		if err != nil || run.Intent != expected {
 			return errors.New("explorer runtime receipt transition rejected")
+		}
+		if receipt.FailureCode != "" && (receipt.FailureCode != "serverOverloaded" || receipt.UsagePending || s.Creation.Config.Version != 1) {
+			return errors.New("invalid explorer failure receipt")
 		}
 		if receipt.InvocationID != expected.Invocation.ID || strings.TrimSpace(receipt.ThreadID) == "" || len(receipt.ThreadID) > 256 || strings.TrimSpace(receipt.TurnID) == "" || len(receipt.TurnID) > 256 {
 			return errors.New("explorer runtime receipt identity mismatch")

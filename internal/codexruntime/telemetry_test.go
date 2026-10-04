@@ -40,7 +40,7 @@ func TestTerminalResponseTelemetryDoesNotConferOutcomeAuthority(t *testing.T) {
 		kind    string
 		payload any
 	}{
-		{"runtime.intent", Intent{i, root}},
+		{"runtime.intent", Intent{Invocation: i, Directory: root}},
 		{"runtime.thread", settings},
 		{"runtime.turn-intent", struct {
 			InvocationID string `json:"invocation_id"`
@@ -92,7 +92,7 @@ func TestTerminalResponseTelemetryRejectsRawParamsThatCannotFitJournalEvent(t *t
 		kind    string
 		payload any
 	}{
-		{"runtime.intent", Intent{i, root}},
+		{"runtime.intent", Intent{Invocation: i, Directory: root}},
 		{"runtime.thread", settings},
 		{"runtime.turn-intent", struct {
 			InvocationID string `json:"invocation_id"`

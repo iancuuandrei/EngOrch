@@ -79,7 +79,10 @@ type ExecuteConfig struct {
 	// transport admission bound, not tool authority: the served catalog is
 	// unchanged. Composite turns ignore it; their queue comes from the
 	// receipts binding.
-	MCPQueueDepth     int
+	MCPQueueDepth int
+	// MCPQueueWait is a separately bounded admission deadline for fresh
+	// context-only servers. Zero retains the historical single deadline.
+	MCPQueueWait      time.Duration
 	Diagnostic        bool
 	InterruptShutdown InterruptShutdownLookup
 	Composite         *contextmcp.RecorderOwnedConfig
@@ -159,7 +162,7 @@ func Execute(ctx context.Context, cfg ExecuteConfig) (ResultRecord, error) {
 		// failure is recovery-only even when the immediate failing operation
 		// appears to precede the provider POST: its durable effect may be partial
 		// and a second fresh attempt would violate the one-dispatch contract.
-		return ResultRecord{}, errors.Join(ErrRecoveryRequired, err)
+		return ResultRecord{}, errors.Join(ErrRecoveryRequired, err, preserveDispatchDiagnostic(cfg, err))
 	}
 	return prepared.result, err
 }

@@ -67,3 +67,8 @@ third_party/tgrep/LICENSE. Used as a pinned dependency without source modificati
 The qualification-only OpenCode R29/R31 patch under third_party/opencode/qualification
 is an adaptation of OpenCode revision 16747470f976aca3d362ad730bcd3fe82ecc2c9a.
 Copyright (c) 2025 opencode. MIT license retained in third_party/opencode/LICENSE.
+
+Go syntax facts use the unmodified tree-sitter-go 0.25.0 Cargo dependency,
+Copyright (c) 2014 Max Brunsfeld, MIT licensed. Full license retained in
+third_party/dependencies/tree-sitter-go/LICENSE (SHA-256
+2e0110e07abef7c2548b26ec9d6969775617ca539a0dc8dbeeb14d6452c711d1).

@@ -133,6 +133,7 @@ not reduced to a project-selected license.
 | `tree-sitter` | 0.27.0 | `MIT` | crates.io |
 | `tree-sitter-language` | 0.1.8 | `MIT` | crates.io |
 | `tree-sitter-rust` | 0.24.2 | `MIT` | crates.io |
+| `tree-sitter-go` | 0.25.0 | `MIT` | crates.io; archive checksum `c8560a4d2f835cc0d4d2c2e03cbd0dde2f6114b43bc491164238d333e28b16ea` |
 | `typenum` | 1.20.1 | `MIT OR Apache-2.0` | crates.io |
 | `unicode-ident` | 1.0.24 | `(MIT OR Apache-2.0) AND Unicode-3.0` | crates.io |
 | `walkdir` | 2.5.0 | `Unlicense/MIT` | crates.io |

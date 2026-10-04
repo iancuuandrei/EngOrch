@@ -94,10 +94,19 @@ func (b Binding) ID() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if b.CatalogID != expected {
+	legacy, err := catalogID(legacyCatalogFor(b.Candidate != nil))
+	if err != nil {
+		return "", err
+	}
+	if b.CatalogID != expected && b.CatalogID != legacy {
 		return "", errors.New("context broker catalog identity mismatch")
 	}
 	return canonical.Hash("harness.context-broker-binding.v1", b)
+}
+
+func (b Binding) usesLegacyCatalog() bool {
+	legacy, err := catalogID(legacyCatalogFor(b.Candidate != nil))
+	return err == nil && b.CatalogID == legacy
 }
 
 // Request is persisted before any repository or candidate IO.
@@ -195,7 +204,11 @@ func Open(path string, binding Binding) (*Broker, error) {
 	if state.Binding == nil || !reflect.DeepEqual(*state.Binding, snapshot) {
 		return nil, errors.New("context broker binding differs from journal")
 	}
-	return &Broker{path: path, binding: snapshot, catalog: cloneCatalog(catalogFor(snapshot.Candidate != nil)), execute: executeTools, shutdown: state.Closed}, nil
+	catalog := catalogFor(snapshot.Candidate != nil)
+	if snapshot.usesLegacyCatalog() {
+		catalog = legacyCatalogFor(snapshot.Candidate != nil)
+	}
+	return &Broker{path: path, binding: snapshot, catalog: cloneCatalog(catalog), execute: executeTools, shutdown: state.Closed}, nil
 }
 
 // Catalog returns a deep copy of the exact catalog bound to this broker.
@@ -291,11 +304,21 @@ func (b *Broker) append(kind string, payload any) error {
 }
 
 func executeTools(ctx context.Context, binding Binding, tool string, arguments json.RawMessage) (any, bool, error) {
-	content, handled, err := sourcetools.Execute(ctx, binding.Source, tool, arguments)
+	var content any
+	var handled bool
+	var err error
+	if binding.usesLegacyCatalog() {
+		content, handled, err = sourcetools.ExecuteLegacy(ctx, binding.Source, tool, arguments)
+	} else {
+		content, handled, err = sourcetools.Execute(ctx, binding.Source, tool, arguments)
+	}
 	if handled || err != nil {
 		return content, handled, err
 	}
 	if binding.Candidate != nil {
+		if binding.usesLegacyCatalog() {
+			return candidatetools.ExecuteLegacy(ctx, *binding.Candidate, tool, arguments)
+		}
 		return candidatetools.Execute(ctx, *binding.Candidate, tool, arguments)
 	}
 	return nil, false, nil
@@ -305,6 +328,14 @@ func catalogFor(candidate bool) []sourcetools.Definition {
 	catalog := sourcetools.Catalog()
 	if candidate {
 		catalog = append(catalog, candidatetools.Catalog()...)
+	}
+	return catalog
+}
+
+func legacyCatalogFor(candidate bool) []sourcetools.Definition {
+	catalog := sourcetools.LegacyCatalog()
+	if candidate {
+		catalog = append(catalog, candidatetools.LegacyCatalog()...)
 	}
 	return catalog
 }

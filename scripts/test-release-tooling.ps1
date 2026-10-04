@@ -154,6 +154,7 @@ try {
     if ($verifyCode -match '\[Convert\]::ToHexString\s*\(') { throw 'verifier must not invoke ToHexString (PowerShell 5.1 incompatible)' }
     if ($verifyCode -match 'signing|authenticity|signed release|published release') { throw 'verifier must describe integrity, not signing/authenticity' }
     $buildCode = Get-CodeWithoutComments $buildText
+    if ($buildCode -notmatch "'-buildvcs=true'" -or $buildCode -match "'-buildvcs=false'") { throw 'release binaries must retain clean VCS provenance for native evaluation' }
     if ($buildCode -notmatch 'NoCompression') { throw 'release build must use NoCompression for reproducibility' }
     if ($buildCode -notmatch 'StringComparer\]::Ordinal') { throw 'release build must sort ZIP entries with ordinal comparison' }
     if ($buildCode -notmatch 'CARGO_ENCODED_RUSTFLAGS' -or $buildCode -match '\$env:RUSTFLAGS\s*=\s*"--remap') { throw 'release build must use CARGO_ENCODED_RUSTFLAGS without clobbering RUSTFLAGS' }

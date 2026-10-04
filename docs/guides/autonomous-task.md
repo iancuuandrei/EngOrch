@@ -23,11 +23,30 @@ a rejected or uncertain old result is never normalized into a successful one.
 
 ## 0. Prerequisites
 
+New autonomous runs also bind committed repository instructions and selected
+role workflows. See [agent context resolution](agent-context.md); use
+`--agent-context=false` for a new run without that input. Existing runs keep
+their original frozen instructions.
+
+`--working-context` separately opts new configuration-v2 runs into experimental
+editable reasoning for dynamic explorer follow-ups. It is off by default and
+does not change static graph tasks. See the [working-context guide](working-context.md)
+for replacement, replay and pending live qualification.
+
 - A Codex account with local authentication: run `codex login` first so the
   auth file exists (default `~/.codex/auth.json`, or `$CODEX_HOME/auth.json`).
   `fabric init` only binds the auth path; it never reads credential contents.
 - A Go toolchain, and a committed Git repository for the task (real-model
   `init` requires one).
+
+On Windows, use a short repository path such as `D:\work\project`. Fabric adds
+`.harness\worktrees\` plus a 64-character run ID to that checkout. The current
+Git for Windows working-directory route cannot observe paths of 260 or more
+UTF-16 code units, even with `core.longpaths=true`. New runs check this before
+calling the planner and report `workspace_path_unsupported` with the action
+`use_shorter_repository_checkout_before_new_run`. This is a platform limitation,
+not long-path support. Existing UNKNOWN workspaces remain UNKNOWN: preserve
+their journals and use explicit reconciliation rather than recreating them.
 
 Fabric Git operations resolve Git from conventional system installation paths instead
 of searching `PATH`. For a nonstandard installation, set
@@ -87,6 +106,28 @@ fabric init --codex /absolute/path/to/codex --model <model>
 fabric doctor
 ```
 
+### Inspect options before dispatch (v1.1 development)
+
+`doctor` reports configured roles, runtime support and verification executable
+readiness. To inspect the effective autonomous options, use the same run flags
+with `--inspect-plan` and omit the objective:
+
+```sh
+fabric run --autonomous --inspect-plan --max-parallel 3
+fabric run --autonomous --inspect-plan --parallel-writers --auto-compact-token-limit 32000
+```
+
+This reads configuration, repository identity and executable pins; it creates
+no run and makes no provider calls. The report includes selected context,
+writer topology, cache and compaction settings, resource estimates and admitted
+capability fallbacks. `AVAILABLE_NOT_RUN` means the executable was resolved and
+hashed, not that verification passed. Provider qualification remains `NOT_RUN`.
+Memory observations report `OBSERVED` or `UNAVAILABLE`; unavailable observations
+do not mean zero free memory. With isolated-writer options, the report includes
+an `ESTIMATED_NOT_ADMITTED` future-worker preview using the supplied per-worker
+estimate. It is neither a worker memory measurement nor a reservation. Actual
+future claims recheck pressure; an observation does not cancel admitted work.
+
 Useful flags: `--effort medium|high`, `--auth-source PATH` (non-default
 auth file), `--state-root PATH` (private runtime state; must be outside the
 repository). `init` never overwrites an existing `harness.toml`.
@@ -143,6 +184,12 @@ fabric diff [RUN]
 An omitted RUN on `resume --autonomous` selects the latest validated
 autonomous run by modification timestamp. That is a documented convenience,
 not a framework: on timestamp ties, or in scripts, pass RUN explicitly.
+`status` and omitted-RUN `inspect`/`diff`/`resume` skip only well-formed
+canonical sidecars (`model-access`, scheduler, and exact role/runtime/provider
+journals: bare role names for every runtime, explorer-only turn-scoped names,
+and invocation-scoped names for opencode-runtime and provider-gateway only).
+Corrupt run journals and unknown sidecar names still fail closed; they are
+reported, not hidden.
 `diff` shows the tracked HEAD diff plus non-ignored untracked files with
 coverage metadata. Results land in the isolated workspace at
 `.harness/worktrees/<RUN>/` (default layout).
@@ -157,3 +204,59 @@ coverage metadata. Results land in the isolated workspace at
 - UNKNOWN workspace, file or commit outcomes mean stop: run
   `fabric reconcile RUN` to observe them without retrying writes, and never
   resend uncertain work.
+
+### v1.1 development behavior
+
+For configuration v1, a Codex read-only explorer rejected with a sealed
+`serverOverloaded` failure can continue on `resume --autonomous RUN`. Fabric
+retains that failed invocation and admits at most one new invocation for the
+same graph task. Missing terminal evidence remains UNKNOWN and is never resent.
+Failed invocation usage remains incomplete; it is not counted as successful
+exploration. Configuration v2 retains its model-access settlement rules.
+
+New autonomous runs admit at most two separate output-correction turns per
+role. Each correction has a new invocation identity and retains the exact
+completed predecessor receipt and rejected output. An unapplied invalid anchor
+can be corrected only against captured, hash-verified candidate source; a wrong
+candidate or preimage hash remains an authority failure. Output correction does
+not consume the code-repair allowance.
+
+When explorer and writer roles are configured, new runs admit at most two
+candidate-bound ownership replans. Serial and parallel/isolated runs use their
+respective scope policies. A read-only design must approve the exact additional
+paths within the original immutable scope. Completed proposals may be retained;
+integration freshly prepares a parent file effect and keeps its normal
+authorization and verification requirements. Existing runs retain the policy
+recorded at creation.
+
+`NEEDS_ATTENTION` retains useful work when the current budget, accounting or
+environment prevents progress. Required usage that is missing after a known
+completed turn preserves the semantic result and its unsettled reservation;
+new provider calls wait for usage reconciliation. Missing usage and cost remain
+unknown. `NEEDS_REPLAN` retains the candidate when a legal ownership revision
+has not completed. Neither outcome means acceptance. `UNSAFE` identifies an
+authority, identity or history failure; `PAUSED` requires a settled pause.
+
+### Explained runtime stops
+
+Failure JSON retains `run_id`, `phase`, `blocked_reason` and `next_action`.
+For synchronous OpenCode failures, `runtime_diagnostic` adds a bounded stage
+and code: for example `response_decode` / `validation_or_runtime_failure`.
+The runtime's first diagnostic is also retained beside its journal as
+`<runtime journal>.failure.json`. These labels contain no provider response,
+prompt or credentials and never authorize a retry or validate an output.
+When the validated gateway journal shows a pending-free, unfinished call
+budget exhaustion for the exact configured binding, the sidecar keeps its
+stage and UNKNOWN status but reports `provider_call_budget_exhausted`. The
+failed invocation remains UNKNOWN until admissible evidence settles it; preserve
+it and reconcile without resending. The diagnostic grants no retry, resume, or
+settlement authority; see [durable run lifecycle](../specifications/run-lifecycle.md).
+
+An exactly sealed initial Codex planner `serverOverloaded` refusal is reported
+as `planner_capacity_refused` / `NEEDS_ATTENTION`. It contains no accepted plan;
+wait for capacity before explicitly starting a new run. The failed invocation
+is preserved. Incomplete terminal evidence or genuinely uncertain provider
+effects remain UNKNOWN and must be reconciled without resending.
+
+These development behaviors require final release qualification; the published
+release package is qualified separately from later development commits.

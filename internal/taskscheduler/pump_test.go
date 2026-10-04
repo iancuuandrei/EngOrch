@@ -8,6 +8,80 @@ import (
 	"time"
 )
 
+type skipClaimAdmissionAdapter struct{ *fakeAdapter }
+
+func (skipClaimAdmissionAdapter) BeforeClaim(context.Context, TaskSpec) (func(AdmissionClaimOutcome) (func(), error), error) {
+	return nil, nil
+}
+
+type refreshedAdmissionAdapter struct {
+	probes     int
+	callback   bool
+	recorded   *AdmissionClaimOutcome
+	dispatches int
+}
+
+func (a *refreshedAdmissionAdapter) Probe(_ context.Context, request ProbeRequest) (Evidence, error) {
+	a.probes++
+	status := StatusReady
+	if a.probes > 1 {
+		status = StatusPaused
+	}
+	return Evidence{RunID: request.Task.RunID, InvocationID: request.Task.InvocationID, ControllerHead: digest('b'), Status: status}, nil
+}
+
+func (a *refreshedAdmissionAdapter) Dispatch(_ context.Context, claim Claim) (Evidence, error) {
+	a.dispatches++
+	return admittedEvidence(claim.Task, StatusSucceeded, 'c'), nil
+}
+
+func (a *refreshedAdmissionAdapter) Reconcile(context.Context, Claim) (Evidence, error) {
+	return Evidence{}, errors.New("unexpected reconcile")
+}
+
+func (a *refreshedAdmissionAdapter) BeforeClaim(context.Context, TaskSpec) (func(AdmissionClaimOutcome) (func(), error), error) {
+	return func(recorded AdmissionClaimOutcome) (func(), error) {
+		a.callback = true
+		*a.recorded = recorded
+		return nil, nil
+	}, nil
+}
+
+func TestTickReleasesAdmissionWhenRefreshedProbeIsNoLongerReady(t *testing.T) {
+	task := TaskSpec{ID: "task", RunID: digest('a'), ControllerPath: filepath.Join(t.TempDir(), "run"), Operation: OperationWriter, InvocationID: digest('1')}
+	path := filepath.Join(t.TempDir(), "schedule")
+	if _, err := Bind(path, scheduleDefinition(t, task)); err != nil {
+		t.Fatal(err)
+	}
+	recorded := AdmissionClaimRecorded
+	adapter := &refreshedAdmissionAdapter{recorded: &recorded}
+	decision, err := Tick(context.Background(), path, adapter)
+	if err != nil || decision.TaskID != "" || !adapter.callback || recorded != AdmissionClaimNotRecorded || adapter.dispatches != 0 {
+		t.Fatalf("pre-claim reservation was not released: decision=%+v callback=%v recorded=%v dispatches=%d err=%v", decision, adapter.callback, recorded, adapter.dispatches, err)
+	}
+	snapshot, err := Inspect(path)
+	if err != nil || snapshot.Tasks[task.ID].Generation != 0 || snapshot.Tasks[task.ID].Status != StatusReady {
+		t.Fatalf("refresh stop still claimed the task: snapshot=%+v err=%v", snapshot.Tasks[task.ID], err)
+	}
+}
+
+func TestTickSkipsCandidateWhenAdmissionGateFindsItStale(t *testing.T) {
+	task := TaskSpec{ID: "task", RunID: digest('a'), ControllerPath: filepath.Join(t.TempDir(), "run"), Operation: OperationWriter, InvocationID: digest('1')}
+	path := filepath.Join(t.TempDir(), "schedule")
+	if _, err := Bind(path, scheduleDefinition(t, task)); err != nil {
+		t.Fatal(err)
+	}
+	base := &fakeAdapter{evidence: map[string]Evidence{task.ID: readyEvidence(task, 'b')}, dispatches: map[string]int{}}
+	decision, err := Tick(context.Background(), path, skipClaimAdmissionAdapter{fakeAdapter: base})
+	if err != nil || decision.TaskID != "" {
+		t.Fatalf("stale candidate was claimed: decision=%+v err=%v", decision, err)
+	}
+	snapshot, err := Inspect(path)
+	if err != nil || snapshot.Tasks[task.ID].Generation != 0 || snapshot.Tasks[task.ID].Status != StatusReady || base.count(task.ID) != 0 {
+		t.Fatalf("stale candidate produced a claim or dispatch: snapshot=%+v count=%d err=%v", snapshot.Tasks[task.ID], base.count(task.ID), err)
+	}
+}
+
 func TestPumpDispatchesLateChildWhileParentWaits(t *testing.T) {
 	parent := TaskSpec{ID: "parent", RunID: digest('a'), ControllerPath: filepath.Join(t.TempDir(), "run"), Operation: OperationPlanner, InvocationID: digest('1')}
 	child := TaskSpec{ID: digest('2'), RunID: parent.RunID, ControllerPath: parent.ControllerPath, Operation: OperationExplorer, InvocationID: digest('3'), Input: "inspect"}

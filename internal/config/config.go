@@ -134,21 +134,21 @@ func (c Config) Validate() error {
 	if c.CandidateIdentity != "" && c.CandidateIdentity != "semantic-index-v2" {
 		return errors.New("unsupported candidate identity contract")
 	}
-	if c.WriterContract != "" && c.WriterContract != "nonempty-v1" && c.WriterContract != "utf8-v2" && c.WriterContract != writercontract.ContractChangesJSONV1 && c.WriterContract != writercontract.ContractUTF8ReplaceV3 && c.WriterContract != writercontract.ContractUTF8ScopedV4 && c.WriterContract != writercontract.ContractAnchoredEditsV1 && c.WriterContract != writercontract.ContractAnchoredEditsV2 {
+	if c.WriterContract != "" && c.WriterContract != "nonempty-v1" && c.WriterContract != "utf8-v2" && c.WriterContract != writercontract.ContractChangesJSONV1 && c.WriterContract != writercontract.ContractUTF8ReplaceV3 && c.WriterContract != writercontract.ContractUTF8ScopedV4 && c.WriterContract != writercontract.ContractAnchoredEditsV1 && c.WriterContract != writercontract.ContractAnchoredEditsV2 && c.WriterContract != writercontract.ContractAnchoredEditsV3 {
 		return errors.New("unsupported writer contract")
 	}
-	if c.WriterContract == writercontract.ContractAnchoredEditsV2 {
+	if c.WriterContract == writercontract.ContractAnchoredEditsV2 || c.WriterContract == writercontract.ContractAnchoredEditsV3 {
 		if c.Writer == nil || c.Writer.Runtime != "codex-app-server" {
-			return errors.New("anchored-edits-v2 requires a Codex writer runtime")
+			return errors.New("validated anchored edits require a Codex writer runtime")
 		}
 		if c.Fixer != nil && c.Fixer.Runtime != "codex-app-server" {
-			return errors.New("anchored-edits-v2 requires a Codex fixer runtime")
+			return errors.New("validated anchored edits require a Codex fixer runtime")
 		}
 	}
-	if c.PlannerContract != "" && c.PlannerContract != "plan-v1" && c.PlannerContract != plannerContractGraphV1 && c.PlannerContract != "plan-graph-v2" && c.PlannerContract != "plan-graph-v3" && c.PlannerContract != "plan-graph-v4" && c.PlannerContract != "plan-graph-v5" && c.PlannerContract != "plan-graph-v6" {
+	if c.PlannerContract != "" && c.PlannerContract != "plan-v1" && c.PlannerContract != plannerContractGraphV1 && c.PlannerContract != "plan-graph-v2" && c.PlannerContract != "plan-graph-v3" && c.PlannerContract != "plan-graph-v4" && c.PlannerContract != "plan-graph-v5" && c.PlannerContract != "plan-graph-v6" && c.PlannerContract != "plan-graph-v7" && c.PlannerContract != "plan-graph-v8" && c.PlannerContract != "plan-graph-v9" {
 		return errors.New("unsupported planner contract")
 	}
-	if c.PlannerContract == "plan-graph-v4" || c.PlannerContract == "plan-graph-v6" {
+	if c.PlannerContract == "plan-graph-v4" || c.PlannerContract == "plan-graph-v6" || c.PlannerContract == "plan-graph-v7" || c.PlannerContract == "plan-graph-v8" || c.PlannerContract == "plan-graph-v9" {
 		if !writercontract.IsAnchoredEdits(c.WriterContract) || c.ExplorerContract != "json-v2" || c.Writer == nil || c.Explorer == nil {
 			return errors.New("parallel graph contracts require anchored-edits writer and json-v2 explorer contracts")
 		}
@@ -156,8 +156,13 @@ func (c Config) Validate() error {
 		// pinned Codex runtime. The deterministic fake route remains available
 		// for local contract tests; provider-backed routes need separate
 		// qualification before they can receive parallel writer dispatches.
+		// Opt-in isolated (v7) and staged (v8/v9) cohorts additionally admit
+		// the configured OpenCode writer runtime for child-bound execution;
+		// shared-workspace parallel cohorts (v4/v6) remain Codex-only.
 		if c.Writer.Runtime != "codex-app-server" && c.Writer.Runtime != "fake" {
-			return errors.New("parallel graph contracts require a Codex writer runtime")
+			if c.Writer.Runtime != "opencode-http" || (c.PlannerContract != "plan-graph-v7" && c.PlannerContract != "plan-graph-v8" && c.PlannerContract != "plan-graph-v9") {
+				return errors.New("parallel graph contracts require a Codex writer runtime")
+			}
 		}
 	}
 	if c.ExplorerContract != "" && c.ExplorerContract != "json-v1" && c.ExplorerContract != "json-v2" {

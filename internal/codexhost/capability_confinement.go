@@ -51,6 +51,7 @@ type CapabilityConfinementError struct {
 
 // Error returns the confinement decision reason.
 func (e *CapabilityConfinementError) Error() string { return e.Decision.Reason }
+
 // Unwrap returns ErrCapabilityConfinementUnverified.
 func (e *CapabilityConfinementError) Unwrap() error { return ErrCapabilityConfinementUnverified }
 
@@ -429,7 +430,14 @@ func validateTopologyAttestation(a CapabilityConfinementAttestation, launch Laun
 
 // StartWithCapabilityConfinement starts a host and records the confinement decision for the request.
 func StartWithCapabilityConfinement(ctx context.Context, launch Launch, requested string, handler codexrpc.ToolHandler) (*Host, CapabilityConfinementDecision, error) {
-	host, err := StartWithToolHandler(ctx, launch, handler)
+	return StartWithCapabilityConfinementAtThreadDirectory(ctx, launch, requested, "", handler)
+}
+
+// StartWithCapabilityConfinementAtThreadDirectory binds constrained thread
+// creation to a caller-validated working directory while leaving the owned
+// Codex host process in its private launch workspace.
+func StartWithCapabilityConfinementAtThreadDirectory(ctx context.Context, launch Launch, requested, threadDirectory string, handler codexrpc.ToolHandler) (*Host, CapabilityConfinementDecision, error) {
+	host, err := StartWithToolHandlerAtThreadDirectory(ctx, launch, handler, threadDirectory)
 	if err != nil {
 		return nil, CapabilityConfinementDecision{}, err
 	}
@@ -446,6 +454,13 @@ func StartWithCapabilityConfinement(ctx context.Context, launch Launch, requeste
 
 // StartWithCapabilityConfinementAttested starts a host only after validating the referenced attestation.
 func StartWithCapabilityConfinementAttested(ctx context.Context, launch Launch, requested string, attestation CapabilityConfinementAttestation, handler codexrpc.ToolHandler) (*Host, CapabilityConfinementDecision, error) {
+	return StartWithCapabilityConfinementAttestedAtThreadDirectory(ctx, launch, requested, "", attestation, handler)
+}
+
+// StartWithCapabilityConfinementAttestedAtThreadDirectory validates the pinned
+// capability attestation before launch and additionally binds constrained
+// thread creation to the caller-validated working directory.
+func StartWithCapabilityConfinementAttestedAtThreadDirectory(ctx context.Context, launch Launch, requested, threadDirectory string, attestation CapabilityConfinementAttestation, handler codexrpc.ToolHandler) (*Host, CapabilityConfinementDecision, error) {
 	if requested != CapabilityConfinementRequired {
 		decision, deny := unverified(requested)
 		return nil, decision, deny
@@ -455,7 +470,7 @@ func StartWithCapabilityConfinementAttested(ctx context.Context, launch Launch, 
 		decision, deny := unverified(requested)
 		return nil, decision, errors.Join(deny, err)
 	}
-	host, err := startWithToolHandlerAndConstraint(ctx, launch, handler, validated.catalogSource, validated.manifest.CatalogSHA256, validated.manifest.CLIIdentity, attestation.Profile, attestation.DynamicTools, validated.expires)
+	host, err := startWithToolHandlerAndConstraint(ctx, launch, handler, validated.catalogSource, validated.manifest.CatalogSHA256, validated.manifest.CLIIdentity, attestation.Profile, attestation.DynamicTools, validated.expires, threadDirectory)
 	if err != nil {
 		return nil, CapabilityConfinementDecision{}, err
 	}

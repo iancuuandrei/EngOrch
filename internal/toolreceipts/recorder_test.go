@@ -37,6 +37,11 @@ func TestBindingQueuePolicyVersionsPreserveLegacyIdentity(t *testing.T) {
 	if err != nil || queuedID == legacyID {
 		t.Fatal("queued binding did not derive a distinct valid identity", queuedID, err)
 	}
+	queued.BindingID = queuedID
+	queuedWire, err := json.Marshal(queued)
+	if err != nil || strings.Contains(string(queuedWire), "queue_wait_millis") || strings.Contains(string(queuedWire), "callback_timeout_millis") {
+		t.Fatal("v2 binding wire shape changed", string(queuedWire), err)
+	}
 	for name, mutate := range map[string]func(*Binding){
 		"v1 policy":             func(b *Binding) { b.QueuePolicy = QueuePolicySerialFIFO },
 		"v1 capacity":           func(b *Binding) { b.MaxQueuedCalls = 1 },
@@ -52,6 +57,60 @@ func TestBindingQueuePolicyVersionsPreserveLegacyIdentity(t *testing.T) {
 				t.Fatal("malformed queue policy admitted", id, err)
 			}
 		})
+	}
+}
+
+func TestDeadlineQueueBindingV3IsStrictAndDurable(t *testing.T) {
+	base := Binding{
+		Version: 3, InvocationID: strings.Repeat("a", 64), CallerBindingSHA256: strings.Repeat("b", 64), CatalogSHA256: strings.Repeat("c", 64),
+		Tools:       []ToolOwner{{Tool: "source_list", Owner: OwnerContext}, {Tool: "agent_wait", Owner: OwnerAgent}},
+		QueuePolicy: QueuePolicySerialFIFOWithDeadlines, MaxQueuedCalls: 63, QueueWaitMillis: 3_780_000, CallbackTimeoutMillis: 60_000,
+	}
+	if id, err := base.ID(); err != nil || id == "" {
+		t.Fatal("valid full-budget v3 binding rejected", id, err)
+	}
+	for name, mutate := range map[string]func(*Binding){
+		"wrong policy":             func(b *Binding) { b.QueuePolicy = QueuePolicySerialFIFO },
+		"too many waiters":         func(b *Binding) { b.MaxQueuedCalls = 64; b.QueueWaitMillis = 3_840_000 },
+		"wait mismatch":            func(b *Binding) { b.QueueWaitMillis-- },
+		"callback missing":         func(b *Binding) { b.CallbackTimeoutMillis = 0 },
+		"callback over one minute": func(b *Binding) { b.CallbackTimeoutMillis = 60_001 },
+		"legacy timeout fields":    func(b *Binding) { b.Version = 2; b.QueuePolicy = QueuePolicySerialFIFO; b.MaxQueuedCalls = 4 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := cloneBinding(base)
+			mutate(&changed)
+			if id, err := changed.ID(); err == nil || id != "" {
+				t.Fatal("invalid v3 timeout binding admitted", id, err)
+			}
+		})
+	}
+
+	owners := fixtureOwners(new(atomic.Int32), new(atomic.Int32), nil)
+	catalog, err := CatalogSHA256(owners)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := t.TempDir() + "/v3-receipts.db"
+	config := Config{
+		Path: path, InvocationID: base.InvocationID, CallerBindingSHA256: base.CallerBindingSHA256, CatalogSHA256: catalog, Owners: owners,
+		QueuePolicy: QueuePolicySerialFIFOWithDeadlines, MaxQueuedCalls: 63, QueueWaitMillis: 3_780_000, CallbackTimeoutMillis: 60_000,
+	}
+	recorder, err := Open(config)
+	if err != nil {
+		t.Fatal("valid v3 binding failed to open", err)
+	}
+	binding := recorder.Binding()
+	if binding.Version != 3 || binding.QueuePolicy != QueuePolicySerialFIFOWithDeadlines || binding.MaxQueuedCalls != 63 || binding.QueueWaitMillis != 3_780_000 || binding.CallbackTimeoutMillis != 60_000 {
+		t.Fatal("v3 deadlines absent from durable binding", binding)
+	}
+	state, err := Inspect(path)
+	if err != nil || state.Binding == nil || !reflect.DeepEqual(*state.Binding, binding) {
+		t.Fatal("v3 binding did not replay exactly", state, err)
+	}
+	config.QueueWaitMillis--
+	if got, err := Open(config); err == nil || got != nil {
+		t.Fatal("changed v3 queue deadline reopened journal", got, err)
 	}
 }
 

@@ -1,5 +1,203 @@
 # Implementation and evidence status
 
+## Current published coupling — v1.1.48 (2026-10-08)
+
+Published development source `57e366ecc411092885a322b047cca4f3f8c6fdb3`
+(`dev`), synchronized to `main`
+`472cded08f0566121be3afb14bb4ef1d0333eb44`, same tree
+`ecc45b65d2166c8df5d630942ab4c0cb00c36f39`. Automation workflow
+`37743951457` SUCCESS; Sonar `90981a2a-8bc0-4b60-949c-351818f08ff0`
+PASS with 0 issues; native coupling-focused checks (13 coupling plus 2
+actual RI, no SKIP, adjacent READY, race) PASS; independent Muse review
+APPROVE. Adds opt-in staged `--cohort-selector observed-coupling-v1`
+(selector 3, plan-graph-v9, `isolation_cohort_selector_version: 3`):
+controller-derived source-observed C4 same-generation-family and C2
+same-observed-package pairs, separate from the advisory planner wire
+(forged observed labels rejected), with replay binding, stale parent-delta
+exclusion, module-manifest exclusion and a C4 pre-effect gate. It proves
+no absence (no C0 emitted) and claims no live benefit. See the
+authoritative [isolated writers](../guides/isolated-writers.md). This
+does not change defaults and does not qualify quality, latency, cost or
+cohort acceptance.
+
+## Current allocation — Phase F Calibration Version 2 opt-in source capability (scoped development evidence)
+
+Opt-in calibration `version` 2 for a strictly cheaper fixer: Beta(1,1) 95% LCB per arm per
+cohort, baseline epsilon plus absolute floor, measured cheaper
+whole-task cost in both train and holdout, conservative baseline
+fallback, immutable config with rederived routing. See the authoritative
+[empirical calibration](../guides/empirical-model-calibration.md).
+There is no default promotion; measured live quality/cost/latency and
+whole Phase F / v2 release remain NOT QUALIFIED.
+
+Prepublication verification checkpoint (historical scoped record; final
+source publication and Sonar gates handled separately, v1.1.49 not
+claimed public): focused native policy/access/config/CLI/control plus
+vet (5 packages) and doc checks PASS; independent initial review
+APPROVE recorded before a small diagnostics repair; after that repair, a
+new exhaustive exact-integer CDF check passed 2145 actual admitted cases
+across all model policy in 0.812s. Diagnostic exclusion uses filtered
+posterior counts while canonical counts retain every raw row. Final
+independent review, publication SHA, Sonar and live economics remain
+upcoming. This documentation update ran no checks.
+
+## Current staged record — 2026-10-08
+
+On 2026-10-08 one distinct internal `memlog` development task reached
+workflow READY at Fabric source `0aabeecd5eb269afeeed92fb904567cc88b3d583`
+with Muse High exclusively: native `go test -count=1 . ./memlog` PASS and
+independent review APPROVE. The original frozen oracle FAIL (CRLF versus LF)
+is retained; the supplementary race diagnostic is advisory NON-QUALIFYING.
+Hub and leaf writers ran serially, so no parallel claim. See the
+[scoped staged record](muse-high-staged-logr-20261008.md). This is one task
+only, not v2, installed, release, or cohort qualification.
+
+## Current product checkpoint — 2026-10-06
+
+On 2026-10-06 one frozen public go-logr/logr task reached READY with the
+pinned Muse High OpenCode route at exact source
+`b58a649d81c468e92656966d54b02c951d7a5eae`: planner 3, writer 6 and reviewer
+5 calls with exact receipts, native PASS, independent review APPROVE with
+zero findings, and unchanged-oracle plus full copied-package PASS. The single
+finite EVC `source_read` acquisition landed in the initial writer context;
+its caller-estimated compute is unvalidated and claims no benefit. See the
+[scoped acceptance record](muse-high-evc-logr-20261006.md). Earlier UNKNOWN
+attempts are preserved untouched. This is one task only, not cohort, quality,
+efficiency, v2, or release qualification.
+
+v1.1.26 adds opt-in automatic finite EVC acquisition once per new serial
+graph run before the initial writer, via immutable `evidence_policy` and CLI
+`--evidence-policy PATH`. Focused control regressions cover strict template
+rejection pre-run, legacy serialization, immutable binding with tag-removal/
+substitution/duplicate rejection and tag-bound decision identity, hard
+after-decision failure propagation with no-repeat resume to ordinary writer
+context, single `InspectWithHead` prefix, driver-led positive acquisition
+with a different query proving `file.txt`/`path_hint` in the persisted writer
+manifest and prompt within bounds, no-positive retention of mandatory writer
+context, single opportunity across genuine `CONFIRMED` candidate progress and
+graph implementation progress, real-journal pending/UNKNOWN/paused/READY
+gates with no reads or writes, prepare-only with no model dispatch, and a
+driver-led full graph reaching native verification, review and READY (fake
+explorer/writer/reviewer plus native `git --version` fixture scope). Focused
+CLI regressions cover `--file`, `--inspect-plan` and resume semantics with
+real Git and fake runtimes. No provider calls occur for the optional
+acquisition. Live quality, calibration and efficiency benefit remain
+**NOT RUN**; v2 remains planned.
+
+v1.1.25 reuses optional finite EVC source paths as advisory hints in existing
+bounded task-context selection for later roles. Focused control regressions
+cover valid handoff to a different role query, dedup/order, stale/wrong/
+missing/no-positive exclusion, same-query reuse and unchanged absent-feature
+behavior, with a real Git fixture and replay/prompt binding checks. This is
+operator-triggered acquisition only; automatic EVC policy and measured
+quality/token benefit remain pending.
+
+v1.1.23 adds [observed token resource feedback](evidence-resource-feedback.md).
+Clean receipt-matched Codex accounting feeds advisory AdaGrad resource prices
+with separate cached/uncached input and reasoning/ordinary output cursors.
+Historical real receipts exercise the CLI without new provider calls. Automatic
+resource policy, empirical allocation and measured efficiency remain pending.
+
+v1.1.22 connects the finite evaluator to optional bounded explorer source
+acquisition through `evidence-acquire`. Decisions are journaled and recomputed
+on replay; source admission reuses existing candidate/read/context gates. This
+is an explicit operator action, not automatic research policy or demonstrated
+efficiency. See the [acquisition evidence](evidence-acquisition.md).
+
+Goal initialization used v1.1.4 on clean `dev`
+`6ba6a6de90cd53683aa08df2d68a799f57f9ae4b`. Current `main` follows trusted
+development source through the rolling snapshot workflow.
+The published package remains immutable [v1.1.0](../guides/release.md).
+Its installed acceptance does not qualify later development source.
+
+[Eight-task coverage](v112-eight-task-closure.md) records raw original 7/8
+plus a separately identified 1/1 terminal-capacity successor. All eight task
+identities have accepted native/review/held-out evidence; no unchanged 8/8
+cohort is claimed. Historical failures and uncertainty remain retained.
+
+v1.1.4 [agent context](../guides/agent-context.md) passed focused source-bound
+scope, skills, replay and CLI regressions. Its [initial parser canary](agent-context-parser-canary.md)
+is **NOT QUALIFIED**: Disabled exhausted two repairs with native FAIL; Enabled
+stopped with an unresolved turn intent after local schema rejection. The schema
+compatibility fix passed focused wire/replay regressions and independent review.
+Live guidance/skill quality and matched benefit remain unqualified; earlier
+cohorts cannot qualify this behavior.
+
+The next Repair Intelligence increment adds
+[read-only repair diagnosis](../guides/repair-diagnosis.md): typed native versus
+review findings, full-evidence identities, conservative Go diagnostic locations,
+explicit stale/unvalidated labels and specs limited to already ready repair
+tasks. [Executed diagnosis checks](repair-diagnosis.md) cover gate/scope isolation, pending launches,
+hidden diagnostic tails, ambiguous paths and no journal mutation. The subsequent
+[`--anchor` increment](repair-anchors.md) validates bounded current preimages and uniquely relocates
+explicit prior code hints, with optional failure degradation. Automatic strategy
+execution and live repair-benefit qualification remain **NOT RUN**.
+
+The v1.1.9 [fixer-context integration](repair-fixer-context.md) adds explicit
+`--repair-intelligence` for new runs. Focused regressions cover recorded preimage
+validation, replay-stable input, exact task scope and optional byte-budget
+degradation. The existing real Git fixture reaches READY after a repair, fresh
+native checks and independent fixture review. This is integration evidence;
+live model quality and token/cost benefit remain **NOT RUN**.
+
+v1.1.10 adds [historical native recheck evidence](repair-closure.md) through
+`diagnose RUN --closure`. Original finding identities remain separate from
+matching final native oracle receipts. A real Git check failure, authorized
+fixture repair, fresh native PASS and deterministic review reach READY with a
+matching receipt. Reviewer concerns remain explicitly `recheck_required`;
+automatic exact reviewer closure and live repair-benefit qualification remain
+**NOT RUN**.
+
+The subsequent v1.1.11 [explicit reviewer recheck](reviewer-rechecks.md) supplies
+original concern IDs to opted-in structured reviewers and validates complete
+answers. Unresolved concerns remain actionable in ordinary repair feedback;
+only the final accepted explicit recheck can report reviewer closure. Focused
+fixtures establish the contract; live quality and token benefits remain NOT RUN.
+
+The [historical working-context pilot](working-context-pilot-20261005.md)
+reached accepted B/C candidates and external PASS, with A retained UNKNOWN.
+Explorer retention remains opt-in: C used more observed tokens, and the single
+task/timing limitations do not establish benefit. The v1.1.16
+[imported coverage localization](repair-spectrum-localization.md) adds bounded
+Ochiai ranking with source-byte validation and explicitly untrusted test labels.
+It does not execute tests. The v1.1.17 explicit pre-invocation admission now
+projects compact scoped rankings into fixer inputs through existing task context;
+raw profiles remain private and frozen inputs cannot be replaced. Focused replay,
+bound and repair-lifecycle evidence is recorded in the
+[fixer integration evaluation](repair-spectrum-fixer.md). Live repair benefit
+remains **NOT RUN**.
+
+The v1.1.18 [historical repair pilot](repair-intelligence-pilot-20261005.md)
+executed one completed planner per arm, but both registered workspaces hit the
+Windows working-directory limit. Workspace effects remain **UNKNOWN**;
+repair quality is **NOT_EXERCISED** and the pilot is **NOT QUALIFIED**.
+v1.1.19 adds a tested pre-effect destination check before new planner calls and
+workspace registration. It requires a shorter checkout for unsupported paths;
+it neither supplies long-path support nor settles existing effects. A subsequent
+short-root experiment must be a separate cohort, preserving these observations.
+
+That [separate short-root pilot](repair-intelligence-short-root-20261005.md)
+ran on clean v1.1.19: control BLOCKED on a rejected repair precondition;
+treatment READY and external PASS after two repairs. Its exact final candidate
+has native-oracle and explicit reviewer-recheck closure receipts. This
+demonstrates live structured-repair integration on one historical task, while
+general quality/efficiency benefit remains unqualified. Treatment used more
+observed tokens and wall time; retain it opt-in. Next product work is the finite
+Evidence Value Controller rather than another equivalent repair pilot.
+
+The v1.1.21 [finite evidence-value evaluator](evidence-value.md) exposes a
+snapshot-bound advisory CLI, finite decision models, unknown-cost/budget
+exclusion and adaptive price/reliability primitives. It changes no default
+dispatch policy. Automatic acquisition/research stopping and live benefit
+remain **NOT RUN**; Phase C is still in progress.
+
+The active [v2 goal](../roadmap/v2-product-plan.md) starts with baseline/context
+qualification, then structured repair. Final v2 tests, frozen cohort, language
+canaries, installed acceptance and release qualification remain **NOT RUN**.
+Use [capabilities](../guides/features.md) for implemented behavior. Entries
+below are historical, scoped observations; their pending/current labels do
+not override newer evidence.
+
 ### Anthropic native refusal classification
 
 Anthropic decoders now retain non-content identity/accounting metadata on
@@ -472,6 +670,41 @@ admission, shared capacity and agent-tree integration are still being completed.
 | Draft PR | Controller/CLI implemented; qualification partial | Exact approval, bounded HTTP, branch preflight, read-only reconciliation and actual process-exit lease recovery with simulated host; [contract](../specifications/draft-pr.md) |
 | Git push | Controller/CLI locally qualified; interruption recovery partial | Local bare SHA-1/SHA-256 execution, controlled receipt omission, read-only reconciliation and stale-approval rejection; [scope](../specifications/git-push.md) |
 | Performance qualification | Partial local measurements | [Search concurrency](search-concurrency.md), [task-pool components](taskpool-performance.md) and [actual OpenCode fixture concurrency](agent-concurrency.md) retain bounded evidence. Benchmark artifact binding is under review; external model economics and production capacity remain unqualified |
+
+### SCIP TypeScript 0.4.0 interop (scoped local PASS, 2026-10-08)
+
+The checkout adds a bounded explicit `scip_typescript040` profile alongside the
+unchanged `scip_go027` behavior: `crates/ri/src/scip.rs`,
+`crates/ri/src/import.rs`, `crates/ri/tests/scip_typescript.rs`,
+`internal/ri/import.go`, `internal/ri/import_plan.go` and opt-in
+`internal/cli/ri_typescript_live_test.go` (gated by
+`ENGORCH_SCIP_TYPESCRIPT_NODE`, `ENGORCH_SCIP_TYPESCRIPT_ENTRY` and
+`ENGORCH_RI_BINARY`). The v2 position policy
+`engorch.scip-typescript.0.4.0.positions.v2:utf16-code-units+omit-invalid-synthetic-file-enclosing`
+additionally drops only the advisory enclosing of the exact synthetic
+file-module marker in the derived projection; the raw index hash is retained
+and ordinary enclosing containment is unchanged, with no call, dependency or
+absence claim. The live fixture normalizes executable paths with
+`filepath.Clean` and sets `noLib` without removing the leading-comment
+fixture. The contract and orientation notes are in
+[RI occurrences](../specifications/ri-occurrences.md) and
+[engineering orientation](../guides/engineering-orientation.md). Scoped local
+PASS for the v1.1.50 increment based on `40d1ba5`: pinned Rust
+`--locked --offline` `scip_typescript` 8 PASS,
+`scip_admission` 6 PASS, `scip` 4 PASS, `import` 1 PASS (19 total), debug
+binary build PASS 20.20s; real-producer `TestActualScipTypeScriptCLI` PASS
+13.89s (package 16.884s) with Node 22.23.3 / scip-typescript 0.4.0 over
+committed LF source with leading comment + emoji, covering controller
+produce/bind/import/publish/runtime-binding/locate/definition/reference/
+semantic PARTIAL with no absence claim. Go RI import 7.368s / CLI 3.339s /
+control 3.925s PASS, doc check 1.216s PASS, vet (three packages) PASS.
+Initial local FAILs (normalized path, synthetic enclosing, descriptor
+separator, raw symbol vs ID, Result test compile) are retained; repairs were
+not pooled with the frozen cohort. Full v2, live agent benefit,
+Python/Rust producer, candidate acceptance/release remain NOT QUALIFIED;
+independent Muse High review APPROVE with no blocking findings. Import-focused
+Go race checks PASS in RI (9.194s), CLI (4.084s) and control (5.070s);
+the actual-producer CLI race run also PASS (14.19s; package 18.602s).
 
 ## Kernel milestone validation, 2026-09-06
 

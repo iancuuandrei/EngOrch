@@ -162,6 +162,38 @@ func TestDecodeNotificationRequiresSchemaFieldsAndPreservesOptionalUnknown(t *te
 	}
 }
 
+func TestTotalOnlyLastContextObservationPreservesCumulativeConsumption(t *testing.T) {
+	raw := []byte(`{"threadId":"thread","turnId":"turn","tokenUsage":{"last":{"inputTokens":0,"cachedInputTokens":0,"outputTokens":0,"reasoningOutputTokens":0,"cacheWriteInputTokens":0,"totalTokens":19175},"total":{"inputTokens":155748,"cachedInputTokens":123648,"outputTokens":2384,"reasoningOutputTokens":1052,"cacheWriteInputTokens":0,"totalTokens":158132}}}`)
+	n, err := DecodeNotification(raw)
+	if err != nil || n.TokenUsage.lastContextTokens == nil || *n.TokenUsage.lastContextTokens != 19175 || n.TokenUsage.Last != (TokenUsage{}) {
+		t.Fatalf("total-only last observation was not isolated from typed usage: context=%v last=%+v err=%v", n.TokenUsage.lastContextTokens, n.TokenUsage.Last, err)
+	}
+	legacy, err := DecodeNotificationLegacy(raw)
+	if err != nil || legacy.TokenUsage.lastContextTokens != nil || legacy.TokenUsage.Last.TotalTokens != 19175 {
+		t.Fatalf("legacy decoder did not preserve the original tracker-side validation path: last=%+v context=%v err=%v", legacy.TokenUsage.Last, legacy.TokenUsage.lastContextTokens, err)
+	}
+	limit := int64(200000)
+	tracker, err := FreshTracker("thread", "turn", &limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := tracker.Observe(n)
+	if err != nil || receipt.Coverage != CoverageObserved || receipt.After.InputTokens != 155748 || receipt.After.CachedInputTokens != 123648 || receipt.After.OutputTokens != 2384 || receipt.After.ReasoningOutputTokens != 1052 || receipt.After.TotalTokens != 158132 || receipt.Budget == nil || receipt.Budget.Used != 158132 || receipt.Budget.Exhausted {
+		t.Fatalf("total-only last observation altered cumulative accounting: receipt=%+v err=%v", receipt, err)
+	}
+}
+
+func TestTotalOnlyLastContextObservationRejectsNonzeroTypedCounters(t *testing.T) {
+	for _, raw := range [][]byte{
+		[]byte(`{"threadId":"thread","turnId":"turn","tokenUsage":{"last":{"inputTokens":1,"cachedInputTokens":0,"outputTokens":0,"reasoningOutputTokens":0,"cacheWriteInputTokens":0,"totalTokens":19175},"total":{"inputTokens":2,"cachedInputTokens":0,"outputTokens":1,"reasoningOutputTokens":0,"totalTokens":3}}}`),
+		[]byte(`{"threadId":"thread","turnId":"turn","tokenUsage":{"last":{"inputTokens":0,"cachedInputTokens":0,"outputTokens":0,"reasoningOutputTokens":0,"cacheWriteInputTokens":1,"totalTokens":19175},"total":{"inputTokens":2,"cachedInputTokens":0,"outputTokens":1,"reasoningOutputTokens":0,"totalTokens":3}}}`),
+	} {
+		if _, err := DecodeNotification(raw); !errors.Is(err, ErrInvalidUsage) {
+			t.Fatalf("non-total-only last observation accepted: %v", err)
+		}
+	}
+}
+
 func TestObserveRejectsMalformedComponentRelationships(t *testing.T) {
 	tracker, _ := FreshTracker("thread", "turn", nil)
 	malformed := []TokenUsage{

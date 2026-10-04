@@ -6,13 +6,111 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"harness.local/engorch/internal/codexrpc"
+	"harness.local/engorch/internal/journal"
 	"harness.local/engorch/internal/runtime"
 )
+
+func TestRetainedSemanticResultRejectsSubstitutionAndPreservesLegacyReplay(t *testing.T) {
+	root := t.TempDir()
+	client, done := peer(t, func(m codexrpc.Message) (any, bool) {
+		if m.Method == "thread/start" {
+			return threadResponse(root, "explicit-model"), false
+		}
+		return map[string]any{"turn": completedTurn()}, false
+	})
+	a := &Adapter{Client: client, Directory: root, JournalPath: filepath.Join(root, "source.db")}
+	result, err := a.Execute(context.Background(), invocation(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Close()
+	<-done
+	events, err := journal.Read(a.JournalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, legacy := range []bool{false, true} {
+		path := filepath.Join(t.TempDir(), "copy.db")
+		for _, event := range events {
+			if event.Kind == "runtime.result" || legacy && event.Kind == "runtime.semantic-result" {
+				continue
+			}
+			if event.Kind == "runtime.semantic-result" {
+				claimed := result
+				cost := int64(1)
+				claimed.Usage.CostMinorUnits = &cost
+				if err := appendEvent(path, event.Kind, TurnResult{TurnID: "turn-1", Result: claimed}); err == nil {
+					t.Fatal("retained output accepted unobserved cost")
+				}
+			}
+			if err := appendEvent(path, event.Kind, event.Payload); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if !legacy {
+			changed := result
+			changed.Output = "substituted output"
+			if err := appendEvent(path, "runtime.result", TurnResult{TurnID: "turn-1", Result: changed}); err == nil {
+				t.Fatal("accepted result substituted retained output")
+			}
+		}
+		if err := appendEvent(path, "runtime.result", TurnResult{TurnID: "turn-1", Result: result}); err != nil {
+			t.Fatalf("valid legacy=%v result rejected: %v", legacy, err)
+		}
+		state, err := Inspect(path)
+		if err != nil || state.Result == nil || state.Result.Output != result.Output {
+			t.Fatalf("valid replay lost output: %+v %v", state, err)
+		}
+	}
+}
+
+func TestInvalidAutoCompactionInvocationFailsBeforeRuntimeIntent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime.jsonl")
+	profile := runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "model", Effort: "high", Role: "writer"}
+	i := runtime.Invocation{Version: 1, ID: "tampered", Profile: profile, Input: "write", CodexAutoCompactVersion: runtime.CodexAutoCompactVersion, CodexAutoCompactTokenLimit: 1000}
+	a := &Adapter{JournalPath: path}
+	if _, err := a.Execute(context.Background(), i); err == nil {
+		t.Fatal("tampered invocation dispatched")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("invalid invocation wrote runtime intent: stat err=%v", err)
+	}
+}
+
+func TestRuntimeIntentReplayBindsAutoCompactionOption(t *testing.T) {
+	profile := runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "model", Effort: "high", Role: "planner"}
+	invocation, err := runtime.NewInvocationWithCodexAutoCompact(profile, "objective", &runtime.CodexAutoCompactOptions{Version: runtime.CodexAutoCompactVersion, TokenLimit: 50000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawInvocation, err := json.Marshal(invocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roundTrip runtime.Invocation
+	if err := json.Unmarshal(rawInvocation, &roundTrip); err != nil || roundTrip.Validate() != nil {
+		t.Fatalf("option-bound invocation JSON failed validation: %s, %v", rawInvocation, err)
+	}
+	validPath := filepath.Join(t.TempDir(), "valid.jsonl")
+	if err := appendEvent(validPath, "runtime.intent", Intent{Invocation: invocation, Directory: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	if state, err := Inspect(validPath); err != nil || state.Intent == nil || state.Intent.Invocation.CodexAutoCompactOption() == nil {
+		t.Fatalf("valid option-bound intent did not replay: %+v, %v", state.Intent, err)
+	}
+	forgedPath := filepath.Join(t.TempDir(), "forged.jsonl")
+	forged := invocation
+	forged.CodexAutoCompactTokenLimit = 50001
+	if err := appendEvent(forgedPath, "runtime.intent", Intent{Invocation: forged, Directory: t.TempDir()}); err == nil {
+		t.Fatal("runtime journal accepted an option changed after invocation identity was bound")
+	}
+}
 
 func invocation(t *testing.T) runtime.Invocation {
 	t.Helper()
@@ -192,7 +290,7 @@ func TestResumeOnlyReadsRecordedTurn(t *testing.T) {
 		kind    string
 		payload any
 	}{
-		{"runtime.intent", Intent{i, root}}, {"runtime.thread", settings},
+		{"runtime.intent", Intent{Invocation: i, Directory: root}}, {"runtime.thread", settings},
 		{"runtime.turn-intent", struct {
 			InvocationID string `json:"invocation_id"`
 		}{i.ID}},

@@ -38,14 +38,25 @@ func replayWriterProposal(s *Snapshot, e journal.Event, seen map[string]bool) er
 		return err
 	}
 	if i.Profile.Runtime == "codex-app-server" {
-		if s.WriterHost == nil || s.WriterHost.Intent.Invocation != i || s.WriterHost.RuntimeReceipt == nil {
+		host, ok := s.GraphWriterHosts[roleReceiptTaskID(*s, i, "")]
+		if ok {
+			if host.Intent.Invocation != i || host.RuntimeReceipt == nil {
+				return errors.New("Codex writer proposal requires linked runtime receipt")
+			}
+		} else if s.WriterHost == nil || s.WriterHost.Intent.Invocation != i || s.WriterHost.RuntimeReceipt == nil {
 			return errors.New("Codex writer proposal requires linked runtime receipt")
 		}
 		hash, err := canonical.Hash("harness.writer-result.v1", record.Result)
 		if err != nil {
 			return err
 		}
-		if hash != s.WriterHost.RuntimeReceipt.ResultHash {
+		receiptHash := ""
+		if ok {
+			receiptHash = host.RuntimeReceipt.ResultHash
+		} else {
+			receiptHash = s.WriterHost.RuntimeReceipt.ResultHash
+		}
+		if hash != receiptHash {
 			return errors.New("writer proposal differs from observed runtime result")
 		}
 	}
@@ -130,6 +141,18 @@ func canonicalWriterChanges(changes []fileeffects.Change) ([]byte, error) {
 func RecordWriterProposal(ctx context.Context, path string, invocation runtime.Invocation, result runtime.Result) (WriterRecord, error) {
 	p, preimages, err := prepareWriterFiles(ctx, path, invocation, result)
 	if err != nil {
+		if semanticOutputFailureOnly(err) {
+			s, inspectErr := Inspect(path)
+			if inspectErr != nil {
+				return WriterRecord{}, inspectErr
+			}
+			if s.Creation.Execution != nil && s.Creation.Execution.SemanticCorrectionVersion == 1 {
+				if correctionErr := startRoleSemanticCorrection(ctx, path, invocation, result); correctionErr != nil {
+					return WriterRecord{}, correctionErr
+				}
+				return RunWriter(ctx, path)
+			}
+		}
 		return WriterRecord{}, err
 	}
 	record := WriterRecord{Invocation: invocation, Result: result, Prepared: p, EditPreimages: preimages}

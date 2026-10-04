@@ -61,3 +61,15 @@ outcomes are not counted as failures.
 Semantic complexity, risk, and uncertainty currently remain `medium`
 placeholders. The policy has no measured quality, cost, or latency improvement
 claim.
+
+## Optional decision evidence
+
+Set `DecisionEvidenceVersion = 1` in `[model_policy]` to include a compact
+decision record in the existing access intent. The record binds the config ID,
+selected profile/model/effort, reason, exact input byte count, and accepted
+failure count. This opt-in changes the access-intent identity for new calls;
+the default value is omitted from serialized policy data, preserving legacy
+identities. The selected model still comes from the configured policy, and the
+record does not grant dispatch authority or trigger retries. It makes the
+mechanical choice observable; it does not establish that routing improves
+quality, latency, or cost.

@@ -1,6 +1,10 @@
 package modelpolicy
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestSelectBoundedPolicy(t *testing.T) {
 	policy := FixturePolicy()
@@ -104,6 +108,49 @@ func TestSelectRejectsOutOfBoundsSignalsAndThresholds(t *testing.T) {
 	policy.Rules["writer"] = Rule{DefaultProfile: "standard", EscalatedProfile: "architect", ContextEscalationTokens: MaxContextTokens + 1, FailureEscalationCount: 1}
 	if _, err := Select(policy, Request{Role: "writer", Complexity: LevelLow, Risk: LevelLow, Uncertainty: LevelLow}); err == nil {
 		t.Fatal("out-of-bounds context threshold accepted")
+	}
+}
+
+func TestPolicyRejectsUnknownDecisionEvidenceVersion(t *testing.T) {
+	policy := FixturePolicy()
+	policy.DecisionEvidenceVersion = 3
+	if _, err := Select(policy, Request{Role: "writer", Complexity: LevelMedium, Risk: LevelMedium, Uncertainty: LevelMedium}); err == nil {
+		t.Fatal("unknown decision evidence version was accepted")
+	}
+}
+
+func TestDecisionEvidenceVersion2RequiresExactCalibrationProfiles(t *testing.T) {
+	calibration := fixtureCalibration()
+	policy := Policy{
+		Version: 1, DecisionEvidenceVersion: 2, Calibration: &calibration,
+		Profiles: []Profile{calibration.Baseline, calibration.Candidate, {Name: "strong", Runtime: "codex", Provider: "codex", Model: "gpt-6-astra", Effort: "high"}},
+		Rules:    map[string]Rule{"fixer": {DefaultProfile: calibration.Baseline.Name, EscalatedProfile: "strong", ContextEscalationTokens: MaxContextTokens, ContextEscalationBytes: MaxContextBytes, FailureEscalationCount: 1}},
+	}
+	decision, err := Select(policy, Request{Role: "fixer", Complexity: LevelMedium, Risk: LevelMedium, Uncertainty: LevelMedium, ContextTokens: 1})
+	if err != nil || decision.Profile.Name != calibration.Baseline.Name {
+		t.Fatalf("calibration artifact changed static baseline selection: %#v %v", decision, err)
+	}
+	policy.Calibration = nil
+	if _, err := Select(policy, Request{Role: "fixer", Complexity: LevelMedium, Risk: LevelMedium, Uncertainty: LevelMedium}); err == nil {
+		t.Fatal("evidence version 2 accepted without calibration")
+	}
+	policy.DecisionEvidenceVersion = 1
+	policy.Calibration = &calibration
+	if _, err := Select(policy, Request{Role: "fixer", Complexity: LevelMedium, Risk: LevelMedium, Uncertainty: LevelMedium}); err == nil {
+		t.Fatal("calibration was accepted without evidence version 2")
+	}
+}
+
+func TestDecisionEvidenceVersionZeroIsOmittedFromLegacyJSON(t *testing.T) {
+	policy := FixturePolicy()
+	legacy, err := json.Marshal(policy)
+	if err != nil || strings.Contains(string(legacy), "decision_evidence_version") {
+		t.Fatalf("default policy encoding changed legacy identity bytes: %s %v", legacy, err)
+	}
+	policy.DecisionEvidenceVersion = 1
+	optedIn, err := json.Marshal(policy)
+	if err != nil || !strings.Contains(string(optedIn), `"decision_evidence_version":1`) {
+		t.Fatalf("opt-in evidence version was not encoded: %s %v", optedIn, err)
 	}
 }
 

@@ -37,6 +37,11 @@ func StartWorkspace(ctx context.Context, journalPath string) (snapshot Snapshot,
 	if err != nil {
 		return s, err
 	}
+	if s.WorkspaceIntent == nil && s.Workspace == nil {
+		if err = worktree.CheckDestination(r); err != nil {
+			return s, err
+		}
+	}
 	lease, err := worktree.Acquire(r)
 	if err != nil {
 		return s, err

@@ -26,7 +26,7 @@ def hardware(root):
     return json.loads(run(["powershell.exe", "-NoProfile", "-Command", command], root).stdout)
 
 
-def sample_command(argv, root, timeout=30, input_data=None):
+def sample_command(argv, root, timeout=30, input_data=None, resource_metrics=None):
     """Return output, process duration and Windows lifetime peak working set."""
     argv = absolute_argv(argv)
     start = time.perf_counter_ns()
@@ -60,6 +60,33 @@ def sample_command(argv, root, timeout=30, input_data=None):
             if not query(int(process._handle), ctypes.byref(counters), counters.cb):
                 raise ctypes.WinError(ctypes.get_last_error())
             peak = counters.peak_working_set
+            if resource_metrics is not None:
+                kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+                times = [ctypes.c_ulonglong() for _ in range(4)]
+                get_times = kernel.GetProcessTimes
+                get_times.argtypes = [ctypes.c_void_p] + [ctypes.POINTER(ctypes.c_ulonglong)] * 4
+                get_times.restype = ctypes.c_int
+                if not get_times(int(process._handle), *[ctypes.byref(value) for value in times]):
+                    raise ctypes.WinError(ctypes.get_last_error())
+
+                class IOCounters(ctypes.Structure):
+                    _fields_ = [(name, ctypes.c_ulonglong) for name in (
+                        "read_operations", "write_operations", "other_operations",
+                        "read_bytes", "write_bytes", "other_bytes")]
+
+                io_counters = IOCounters()
+                get_io = kernel.GetProcessIoCounters
+                get_io.argtypes = [ctypes.c_void_p, ctypes.POINTER(IOCounters)]
+                get_io.restype = ctypes.c_int
+                if not get_io(int(process._handle), ctypes.byref(io_counters)):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                resource_metrics.update({
+                    "kernel_cpu_ns": times[2].value * 100,
+                    "user_cpu_ns": times[3].value * 100,
+                    "peak_working_set_bytes": peak,
+                    "io": {name: getattr(io_counters, name) for name, _ in IOCounters._fields_},
+                    "scope": "process_only_excludes_children",
+                })
     return stdout, stderr, elapsed, peak
 
 
@@ -164,8 +191,10 @@ def main():
     started = datetime.datetime.now(datetime.timezone.utc).isoformat()
     observations, output_hash = [], None
     memory_samples = []
+    resource_samples = []
     for index in range(args.samples + args.warmup):
-        stdout, stderr, elapsed, peak = sample_command([str(binary), "help"], root)
+        process_resources = {}
+        stdout, stderr, elapsed, peak = sample_command([str(binary), "help"], root, resource_metrics=process_resources)
         if stderr or not stdout or len(stdout) > 1 << 20:
             raise ValueError("help response failed the benchmark output contract")
         current = hashlib.sha256(stdout).hexdigest()
@@ -175,6 +204,7 @@ def main():
         if index >= args.warmup:
             observations.append(elapsed)
             memory_samples.append(peak)
+            resource_samples.append(process_resources or None)
     if before != source_identity(root) or binary_hash != hashlib.sha256(binary.read_bytes()).hexdigest():
         raise ValueError("source or binary changed during sampling")
     report = {
@@ -193,6 +223,8 @@ def main():
         "peak_memory_bytes": max(memory_samples) if all(v is not None for v in memory_samples) else None,
         "peak_memory_samples_bytes": memory_samples,
         "memory_metric": "Windows per-process peak working set; null on other platforms",
+        "process_resource_samples": resource_samples,
+        "io_metric": "Windows process I/O accounting includes non-disk I/O; excludes child processes",
         "limitations": ["includes subprocess launch and output capture",
                         "no model invocation; not a workflow latency measurement",
                         "no guarantee of idle host or cold storage",

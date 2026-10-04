@@ -88,7 +88,7 @@ func (ScheduledDispatchAdapter) Probe(ctx context.Context, request taskscheduler
 	if err := validateScheduledAgentTurn(task, s, invocation, request.AgentTurn); err != nil {
 		return taskscheduler.Evidence{}, err
 	}
-	return scheduledEvidenceWithAcceptedResult(task.ControllerPath, s, head, invocation, task, request.AgentTurn)
+	return scheduledEvidenceWithAcceptedResult(ctx, task.ControllerPath, s, head, invocation, task, request.AgentTurn)
 }
 
 // Dispatch executes or reconciles the claim through its bound controller operation.
@@ -180,7 +180,7 @@ func ExecuteScheduledClaim(ctx context.Context, controllerPath string, claim tas
 	if err := validateScheduledAgentTurn(claim.Task, s, invocation, claim.AgentTurn); err != nil {
 		return taskscheduler.Evidence{}, err
 	}
-	before, err := scheduledEvidenceWithAcceptedResult(controllerPath, s, head, invocation, claim.Task, claim.AgentTurn)
+	before, err := scheduledEvidenceWithAcceptedResult(ctx, controllerPath, s, head, invocation, claim.Task, claim.AgentTurn)
 	if err != nil {
 		return taskscheduler.Evidence{}, err
 	}
@@ -214,11 +214,19 @@ func ExecuteScheduledClaim(ctx context.Context, controllerPath string, claim tas
 			return taskscheduler.Evidence{}, errors.Join(&taskscheduler.ParkError{Reason: taskscheduler.ParkNoEffect}, err)
 		}
 	}
-	if claim.AgentTurn != nil && invocation.Profile.Runtime != "opencode-http" && invocation.Profile.Runtime != "provider-api" {
+	correction, isCorrection := scheduledCorrectionForTask(s, claim.Task.ID)
+	managedExplorer := claim.AgentTurn != nil && claim.Task.Operation == taskscheduler.OperationExplorer && managedExplorerDispatchEnabled(s) && (invocation.Profile.Runtime == "codex-app-server" || invocation.Profile.Runtime == "fake")
+	if claim.AgentTurn != nil && invocation.Profile.Runtime != "opencode-http" && invocation.Profile.Runtime != "provider-api" && !managedExplorer && !(isCorrection && invocation.Profile.Runtime == "codex-app-server" && (claim.Task.Operation == taskscheduler.OperationWriter || claim.Task.Operation == taskscheduler.OperationReviewer)) {
 		return taskscheduler.Evidence{}, errors.Join(&taskscheduler.ParkError{Reason: taskscheduler.ParkNoEffect}, errors.New("scheduled dynamic agent turns require a provider runtime"))
 	}
 	observationCtx := ctx
 	ctx = withScheduledAgentTurn(ctx, claim.AgentTurn)
+	if managedExplorer {
+		ctx = context.WithValue(ctx, workingContextInvocationKey{}, invocation.ID)
+	}
+	if isCorrection {
+		ctx = withScheduledRoleCorrection(ctx, correction)
+	}
 	var interruptWatcher *scheduledInterruptWatcher
 	if claim.AgentTurn != nil && claim.Task.Operation == taskscheduler.OperationExplorer && invocation.Profile.Runtime == "opencode-http" {
 		ctx, interruptWatcher, err = watchScheduledAgentInterrupt(ctx, claim)
@@ -236,7 +244,9 @@ func ExecuteScheduledClaim(ctx context.Context, controllerPath string, claim tas
 			_, err = ensureAcceptedExplorerResult(ctx, controllerPath, claim, invocation, &record)
 		}
 	case taskscheduler.OperationWriter:
-		if parallelImplementationEnabled(s) {
+		if isCorrection && correction.TaskID != "" {
+			ctx = withGraphWriterTask(ctx, correction.TaskID)
+		} else if graphWriterCohortEnabled(s) && !isCorrection {
 			ctx = withGraphWriterTask(ctx, claim.Task.ID)
 		}
 		_, err = RunWriter(ctx, controllerPath)
@@ -253,9 +263,76 @@ func ExecuteScheduledClaim(ctx context.Context, controllerPath string, claim tas
 			return taskscheduler.Evidence{}, &taskscheduler.ParkError{Reason: taskscheduler.ParkCapacity}
 		}
 		after, probeErr := (ScheduledDispatchAdapter{}).Probe(observationCtx, taskscheduler.ProbeRequest{Task: claim.Task, AgentTurn: claim.AgentTurn})
+		if errors.Is(err, ErrUsageQualification) && probeErr == nil {
+			current, _, inspectErr := InspectWithHead(controllerPath)
+			if inspectErr == nil && current.RunID == claim.Task.RunID && scheduledUsageQualificationParkable(current, invocation, after) {
+				return taskscheduler.Evidence{}, errors.Join(&taskscheduler.ParkError{Reason: taskscheduler.ParkNoEffect}, err)
+			}
+		}
 		return classifyScheduledDispatchError(err, after, probeErr)
 	}
 	return (ScheduledDispatchAdapter{}).Probe(observationCtx, taskscheduler.ProbeRequest{Task: claim.Task, AgentTurn: claim.AgentTurn})
+}
+
+func scheduledUsageQualificationParkable(s Snapshot, invocation runtime.Invocation, evidence taskscheduler.Evidence) bool {
+	return evidence.Status == taskscheduler.StatusReady && evidence.AdmissionID == "" && !scheduledInvocationHasEffect(s, invocation)
+}
+
+// scheduledInvocationHasEffect is a narrow pre-dispatch guard for usage-policy
+// refusal. READY evidence alone cannot establish that no intent was persisted.
+func scheduledInvocationHasEffect(s Snapshot, invocation runtime.Invocation) bool {
+	if _, ok := s.AgentDispatch[invocation.ID]; ok {
+		return true
+	}
+	for _, access := range s.ModelAccess {
+		if access.RuntimeInvocationID == invocation.ID || access.Intent.Reservation.InvocationID == invocation.ID {
+			return true
+		}
+	}
+	if receipt, ok := s.ProviderRuntime[invocation.ID]; ok && receipt.InvocationID == invocation.ID {
+		return true
+	}
+	if s.WriterHost != nil && s.WriterHost.Intent.Invocation.ID == invocation.ID {
+		return true
+	}
+	if s.ReviewHost != nil && s.ReviewHost.Intent.Invocation.ID == invocation.ID {
+		return true
+	}
+	for _, host := range s.ScheduledReviewHosts {
+		if host.Intent.Invocation.ID == invocation.ID {
+			return true
+		}
+	}
+	if s.PlannerAccess != nil && s.PlannerAccess.Reservation.InvocationID == invocation.ID {
+		return true
+	}
+	if s.PlannerHost != nil {
+		if planner, err := plannerInvocationForSnapshot(s); err == nil && planner.ID == invocation.ID {
+			return true
+		}
+	}
+	if s.ExplorerHost != nil && s.ExplorerHost.Intent.Invocation.ID == invocation.ID {
+		return true
+	}
+	for _, host := range s.ExplorerRuns {
+		if host.Intent.Invocation.ID == invocation.ID {
+			return true
+		}
+	}
+	for _, host := range s.GraphWriterHosts {
+		if host.Intent.Invocation.ID == invocation.ID {
+			return true
+		}
+	}
+	for _, exploration := range s.Explorations {
+		if exploration.Invocation.ID == invocation.ID {
+			return true
+		}
+	}
+	if s.WriterProposal != nil && s.WriterProposal.Invocation.ID == invocation.ID || s.Review != nil && s.Review.Invocation.ID == invocation.ID || s.Plan != nil && s.Plan.InvocationID == invocation.ID {
+		return true
+	}
+	return false
 }
 
 func classifyScheduledDispatchError(dispatchErr error, after taskscheduler.Evidence, probeErr error) (taskscheduler.Evidence, error) {
@@ -390,6 +467,11 @@ func scheduledRuntimeJournal(s Snapshot, invocation runtime.Invocation, task tas
 	case "provider-api":
 		return task.ControllerPath + "." + stem + ".provider-runtime.jsonl", nil
 	case "opencode-http":
+		var err error
+		stem, err = providerInvocationJournalStemForSnapshot(task.ControllerPath, s, invocation, turn)
+		if err != nil {
+			return "", err
+		}
 		return task.ControllerPath + "." + stem + ".opencode-runtime.jsonl", nil
 	case "codex-app-server":
 		switch task.Operation {
@@ -413,9 +495,46 @@ func scheduledRuntimeJournal(s Snapshot, invocation runtime.Invocation, task tas
 					return filepath.Join(host.Intent.Launch.Root, "writer.jsonl"), nil
 				}
 			}
+			if correction, ok := scheduledCorrectionForTask(s, task.ID); ok && correction.Invocation.Profile.Role != "reviewer" {
+				expected, err := expectedWriterHostForTask(s, task.ID)
+				if err != nil || expected.Invocation != invocation {
+					return "", errors.Join(errors.New("scheduled writer host binding changed"), err)
+				}
+				return filepath.Join(expected.Launch.Root, "writer.jsonl"), nil
+			}
+			// A scheduler probes a static graph-writer claim before dispatch. At
+			// that point the exact Codex intent has not been journaled yet, so
+			// derive only its expected path from the already validated invocation.
+			// This is a read-only lookup: it does not create the intent or runtime
+			// journal, and the claim must still be an admitted static graph task.
+			if turn == nil && isStaticGraphWriterCohort(s, taskscheduler.Claim{Task: task}) {
+				expected, err := expectedWriterHostForTask(s, task.ID)
+				if err != nil || expected.Invocation != invocation {
+					return "", errors.Join(errors.New("static graph writer host binding changed"), err)
+				}
+				return filepath.Join(expected.Launch.Root, "writer.jsonl"), nil
+			}
 		case taskscheduler.OperationReviewer:
 			if s.ReviewHost != nil && s.ReviewHost.Intent.Invocation.ID == invocation.ID {
 				return filepath.Join(s.ReviewHost.Intent.Launch.Root, "review.jsonl"), nil
+			}
+			if task.ID != "" {
+				if host, ok := s.ScheduledReviewHosts[task.ID]; ok && host.Intent.Invocation.ID == invocation.ID {
+					return filepath.Join(host.Intent.Launch.Root, "review.jsonl"), nil
+				}
+			}
+			if correction, ok := scheduledCorrectionForTask(s, task.ID); ok && correction.Invocation.Profile.Role == "reviewer" {
+				expected, err := expectedScheduledReviewHost(s, task.ID)
+				if err != nil || expected.Intent.Invocation != invocation {
+					return "", errors.Join(errors.New("scheduled review host binding changed"), err)
+				}
+				return filepath.Join(expected.Intent.Launch.Root, "review.jsonl"), nil
+			}
+			if turn == nil {
+				expected, err := expectedReviewHost(s)
+				if err == nil && expected.Invocation == invocation {
+					return filepath.Join(expected.Launch.Root, "review.jsonl"), nil
+				}
 			}
 		}
 		return "", errors.New("scheduled Codex reconciliation lacks exact host intent")
@@ -449,50 +568,163 @@ func scheduledInvocation(task taskscheduler.TaskSpec, turn *taskscheduler.AgentT
 	}
 	if s.Creation.Config.Version != 2 {
 		// V1 is permitted only for static graph explorers or explicitly opted-in
-		// initial implementation writers. V1 TaskPool remains forbidden;
-		// PumpOptions.Workers bounds cohort concurrency instead.
+		// initial implementation writers, plus exact policy-bound correction
+		// successors. V1 TaskPool remains forbidden; PumpOptions.Workers bounds
+		// cohort concurrency instead.
 		v1GraphExplorer := task.Operation == taskscheduler.OperationExplorer && v1StaticGraphExplorerStateAllowed(s) && isStaticGraphExplorerCohort(s, taskscheduler.Claim{Task: task})
-		v1GraphWriter := task.Operation == taskscheduler.OperationWriter && s.State == "IMPLEMENTING" && parallelImplementationEnabled(s) && isStaticGraphWriterCohort(s, taskscheduler.Claim{Task: task})
-		if !(s.Creation.Config.Version == 1 && turn == nil && s.Creation.Execution.GraphEnabled() && s.Creation.Execution.Context == taskContextBoundedV1 &&
-			s.Workspace != nil && s.Candidate != nil && s.Plan != nil && s.Graph != nil && s.Creation.Config.TaskPool == nil && (v1GraphExplorer || v1GraphWriter)) {
+		v1GraphWriter := task.Operation == taskscheduler.OperationWriter && s.State == "IMPLEMENTING" && graphWriterCohortEnabled(s) && isStaticGraphWriterCohort(s, taskscheduler.Claim{Task: task})
+		v1CorrectionTurn := scheduledV1CorrectionTurnAllowed(s, task, turn)
+		if !(s.Creation.Config.Version == 1 && s.Creation.Execution.GraphEnabled() && s.Creation.Execution.Context == taskContextBoundedV1 &&
+			s.Workspace != nil && s.Candidate != nil && s.Plan != nil && s.Graph != nil && s.Creation.Config.TaskPool == nil && ((turn == nil && (v1GraphExplorer || v1GraphWriter)) || v1CorrectionTurn)) {
 			return s, "", runtime.Invocation{}, errors.New("scheduled dispatch requires configuration v2")
 		}
 	}
 	var invocation runtime.Invocation
 	recordedTurnInvocation := false
-	switch task.Operation {
-	case taskscheduler.OperationPlanner:
-		invocation, err = plannerInvocation(s.Creation.Config, s.Creation.Objective)
-	case taskscheduler.OperationExplorer:
-		invocation, err = explorerInvocation(s, task.Input)
-	case taskscheduler.OperationWriter:
-		if parallelImplementationEnabled(s) {
-			if task.ID == "" {
-				err = errors.New("graph writer task ID required")
+	if correction, ok := scheduledCorrectionForTask(s, task.ID); ok {
+		candidateID, candidateErr := s.Candidate.ID()
+		if candidateErr != nil || correction.CandidateID != candidateID || correction.Invocation.Profile.Role != "writer" && correction.Invocation.Profile.Role != "fixer" && correction.Invocation.Profile.Role != "reviewer" {
+			return s, "", runtime.Invocation{}, errors.Join(ErrAutonomousUnsafe, candidateErr)
+		}
+		if correction.Invocation.Profile.Role == "reviewer" && task.Operation != taskscheduler.OperationReviewer || correction.Invocation.Profile.Role != "reviewer" && task.Operation != taskscheduler.OperationWriter {
+			return s, "", runtime.Invocation{}, ErrAutonomousUnsafe
+		}
+		invocation = correction.Invocation
+	} else {
+		switch task.Operation {
+		case taskscheduler.OperationPlanner:
+			invocation, err = plannerInvocationForSnapshot(s)
+		case taskscheduler.OperationExplorer:
+			if recorded, ok := acceptedScheduledExplorerInvocation(s, task, turn); ok {
+				invocation, recordedTurnInvocation = recorded, true
 			} else {
-				invocation, err = writerInvocationForTask(s, task.ID)
+				invocation, err = explorerInvocation(s, task.Input)
 			}
-		} else {
-			invocation, err = writerInvocation(s)
-		}
-	case taskscheduler.OperationReviewer:
-		if s.Review != nil {
-			invocation = s.Review.Invocation
-			recordedTurnInvocation = turn != nil
-			exact, exactErr := runtime.NewInvocation(invocation.Profile, invocation.Input)
-			if exactErr != nil || exact != invocation {
-				err = errors.New("recorded review invocation identity mismatch")
+		case taskscheduler.OperationWriter:
+			if graphWriterCohortEnabled(s) {
+				if task.ID == "" {
+					err = errors.New("graph writer task ID required")
+				} else {
+					invocation, err = writerInvocationForTask(s, task.ID)
+				}
+			} else {
+				invocation, err = writerInvocation(s)
 			}
-		} else {
-			invocation, err = reviewInvocation(s)
+		case taskscheduler.OperationReviewer:
+			if s.Review != nil {
+				invocation = s.Review.Invocation
+				recordedTurnInvocation = turn != nil
+				if exactErr := invocation.Validate(); exactErr != nil {
+					err = errors.New("recorded review invocation identity mismatch")
+				}
+			} else {
+				invocation, err = reviewInvocation(s)
+			}
+		default:
+			err = errors.New("unsupported scheduled operation")
 		}
-	default:
-		err = errors.New("unsupported scheduled operation")
 	}
 	if err == nil && turn != nil && !recordedTurnInvocation {
-		invocation, err = scheduledTurnInvocation(invocation, task.Operation, turn.TurnID)
+		invocation, err = scopedScheduledInvocation(s, invocation, task.Operation, turn, task.InvocationID)
 	}
 	return s, head, invocation, err
+}
+
+func scheduledV1CorrectionTurnAllowed(s Snapshot, task taskscheduler.TaskSpec, turn *taskscheduler.AgentTurnBinding) bool {
+	if turn == nil || s.Creation.Config.Version != 1 || s.Creation.Execution == nil || s.Creation.Execution.SemanticCorrectionVersion != 1 || task.ID == "" || turn.TurnID != task.ID || turn.TurnSequence != 1 {
+		return false
+	}
+	correction, ok := scheduledCorrectionForTask(s, task.ID)
+	if !ok || correction.ScheduledTaskID != task.ID || correction.TaskID == "" && correction.Invocation.Profile.Role != "reviewer" {
+		return false
+	}
+	switch correction.Invocation.Profile.Role {
+	case "writer", "fixer":
+		return task.Operation == taskscheduler.OperationWriter
+	case "reviewer":
+		return task.Operation == taskscheduler.OperationReviewer
+	default:
+		return false
+	}
+}
+
+// scheduledInvocationFromSnapshot derives the same deterministic invocation as
+// scheduledInvocation without reading the controller journal. Replay validators
+// use this form because re-reading a journal while Replay is validating an event
+// would recursively replay that same event.
+func scheduledInvocationFromSnapshot(s Snapshot, task taskscheduler.TaskSpec, turn *taskscheduler.AgentTurnBinding) (runtime.Invocation, error) {
+	if task.RunID != s.RunID || task.ID == "" && turn != nil {
+		return runtime.Invocation{}, errors.New("scheduled snapshot task identity changed")
+	}
+	if s.Creation.Config.Version != 2 {
+		v1GraphExplorer := task.Operation == taskscheduler.OperationExplorer && v1StaticGraphExplorerStateAllowed(s) && isStaticGraphExplorerCohort(s, taskscheduler.Claim{Task: task})
+		v1GraphWriter := task.Operation == taskscheduler.OperationWriter && s.State == "IMPLEMENTING" && graphWriterCohortEnabled(s) && isStaticGraphWriterCohort(s, taskscheduler.Claim{Task: task})
+		v1CorrectionTurn := scheduledV1CorrectionTurnAllowed(s, task, turn)
+		if !(s.Creation.Config.Version == 1 && s.Creation.Execution.GraphEnabled() && s.Creation.Execution.Context == taskContextBoundedV1 &&
+			s.Workspace != nil && s.Candidate != nil && s.Plan != nil && s.Graph != nil && s.Creation.Config.TaskPool == nil && ((turn == nil && (v1GraphExplorer || v1GraphWriter)) || v1CorrectionTurn)) {
+			return runtime.Invocation{}, errors.New("scheduled dispatch requires configuration v2")
+		}
+	}
+	var invocation runtime.Invocation
+	recordedTurnInvocation := false
+	if correction, ok := scheduledCorrectionForTask(s, task.ID); ok {
+		candidateID, candidateErr := s.Candidate.ID()
+		if candidateErr != nil || correction.CandidateID != candidateID || correction.Invocation.Profile.Role != "writer" && correction.Invocation.Profile.Role != "fixer" && correction.Invocation.Profile.Role != "reviewer" {
+			return runtime.Invocation{}, errors.Join(ErrAutonomousUnsafe, candidateErr)
+		}
+		if correction.Invocation.Profile.Role == "reviewer" && task.Operation != taskscheduler.OperationReviewer || correction.Invocation.Profile.Role != "reviewer" && task.Operation != taskscheduler.OperationWriter {
+			return runtime.Invocation{}, ErrAutonomousUnsafe
+		}
+		invocation = correction.Invocation
+	} else {
+		var err error
+		switch task.Operation {
+		case taskscheduler.OperationPlanner:
+			invocation, err = plannerInvocationForSnapshot(s)
+		case taskscheduler.OperationExplorer:
+			if recorded, ok := acceptedScheduledExplorerInvocation(s, task, turn); ok {
+				invocation, recordedTurnInvocation = recorded, true
+			} else {
+				invocation, err = explorerInvocation(s, task.Input)
+			}
+		case taskscheduler.OperationWriter:
+			if graphWriterCohortEnabled(s) {
+				if task.ID == "" {
+					err = errors.New("graph writer task ID required")
+				} else {
+					invocation, err = writerInvocationForTask(s, task.ID)
+				}
+			} else {
+				invocation, err = writerInvocation(s)
+			}
+		case taskscheduler.OperationReviewer:
+			if s.Review != nil {
+				invocation = s.Review.Invocation
+				recordedTurnInvocation = turn != nil
+				if exactErr := invocation.Validate(); exactErr != nil {
+					err = errors.New("recorded review invocation identity mismatch")
+				}
+			} else {
+				invocation, err = reviewInvocation(s)
+			}
+		default:
+			err = errors.New("unsupported scheduled operation")
+		}
+		if err != nil {
+			return runtime.Invocation{}, err
+		}
+	}
+	if turn != nil && !recordedTurnInvocation {
+		var err error
+		invocation, err = scopedScheduledInvocation(s, invocation, task.Operation, turn, task.InvocationID)
+		if err != nil {
+			return runtime.Invocation{}, err
+		}
+	}
+	if invocation.ID == "" || task.InvocationID != invocation.ID {
+		return runtime.Invocation{}, errors.New("scheduled snapshot invocation identity changed")
+	}
+	return invocation, nil
 }
 
 func scheduledTurnInvocation(base runtime.Invocation, operation taskscheduler.Operation, turnID string) (runtime.Invocation, error) {
@@ -508,7 +740,26 @@ func scheduledTurnInvocation(base runtime.Invocation, operation taskscheduler.Op
 	if err != nil {
 		return runtime.Invocation{}, err
 	}
-	return runtime.NewInvocation(base.Profile, string(input))
+	return runtime.NewInvocationWithCodexAutoCompact(base.Profile, string(input), base.CodexAutoCompactOption())
+}
+
+// An admitted observation is bound to its exact original invocation. Later
+// observations can change source-guidance selection for new work; they cannot
+// rewrite this completed turn's input when probing or reconciling its receipt.
+func acceptedScheduledExplorerInvocation(s Snapshot, task taskscheduler.TaskSpec, turn *taskscheduler.AgentTurnBinding) (runtime.Invocation, bool) {
+	if turn == nil || task.Operation != taskscheduler.OperationExplorer || turn.TurnID != task.ID {
+		return runtime.Invocation{}, false
+	}
+	dispatch, ok := s.AgentDispatch[task.InvocationID]
+	if !ok || dispatch.Admission.AgentTurn == nil || *dispatch.Admission.AgentTurn != *turn {
+		return runtime.Invocation{}, false
+	}
+	for _, record := range s.Explorations {
+		if record.Question == task.Input && record.Invocation.ID == task.InvocationID && record.Invocation == dispatch.Admission.Invocation && record.Invocation.Validate() == nil {
+			return record.Invocation, true
+		}
+	}
+	return runtime.Invocation{}, false
 }
 
 func scheduledInvocationFromContext(ctx context.Context, operation taskscheduler.Operation, base runtime.Invocation) (runtime.Invocation, error) {
@@ -531,6 +782,19 @@ func resolveScheduledRecordedInvocation(s Snapshot, base, observed runtime.Invoc
 	if observed == base {
 		return base, nil
 	}
+	for _, correction := range s.RoleCorrections {
+		if correction.ScheduledTaskID == "" || correction.BaseInvocationID != base.ID || correction.Invocation.Profile.Role != base.Profile.Role {
+			continue
+		}
+		operation, err := scheduledOperationForRole(correction.Invocation.Profile.Role)
+		if err != nil {
+			continue
+		}
+		scoped, err := scheduledTurnInvocation(correction.Invocation, operation, correction.ScheduledTaskID)
+		if err == nil && scoped == observed {
+			return scoped, nil
+		}
+	}
 	resolved, err := resolveScheduledInvocationID(s, base, observed.ID)
 	if err != nil || resolved != observed {
 		return runtime.Invocation{}, errors.Join(errors.New("scheduled role invocation substituted"), err)
@@ -550,7 +814,7 @@ func resolveScheduledInvocationID(s Snapshot, base runtime.Invocation, invocatio
 	if err != nil {
 		return runtime.Invocation{}, err
 	}
-	scoped, err := scheduledTurnInvocation(base, operation, dispatch.Admission.AgentTurn.TurnID)
+	scoped, err := scopedScheduledInvocation(s, base, operation, dispatch.Admission.AgentTurn, invocationID)
 	if err != nil || scoped != dispatch.Admission.Invocation {
 		return runtime.Invocation{}, errors.Join(errors.New("scheduled role admission invocation differs"), err)
 	}
@@ -613,9 +877,22 @@ func scheduledEvidence(s Snapshot, head string, invocation runtime.Invocation, t
 		}
 	}
 	complete = complete || task.Operation == taskscheduler.OperationWriter && s.WriterProposal != nil && s.WriterProposal.Invocation.ID == invocation.ID
-	if task.Operation == taskscheduler.OperationWriter && parallelImplementationEnabled(s) {
-		if record, ok := s.GraphWriterResults[task.ID]; ok && record.Writer.Invocation.ID == invocation.ID {
+	if task.Operation == taskscheduler.OperationWriter && graphWriterCohortEnabled(s) {
+		if record, ok := s.GraphWriterResults[task.ID]; ok && graphWriterRecordInvocation(record).ID == invocation.ID {
 			complete = true
+		} else if correction, ok := scheduledCorrectionForTask(s, task.ID); ok &&
+			(correction.Invocation.Profile.Role == "writer" || correction.Invocation.Profile.Role == "fixer") &&
+			correction.TaskID != "" && correction.ScheduledTaskID == task.ID {
+			// Dynamic correction turns are keyed by their scheduled turn ID
+			// while the integrated proposal remains keyed by the original
+			// graph task. Resolve only through the recorded correction and
+			// require the exact scoped invocation plus the exact recorded
+			// proposal invocation. No scan, no completion-only success.
+			if scoped, err := scheduledTurnInvocation(correction.Invocation, taskscheduler.OperationWriter, correction.ScheduledTaskID); err == nil && scoped == invocation {
+				if record, ok := s.GraphWriterResults[correction.TaskID]; ok && graphWriterRecordInvocation(record).ID == invocation.ID {
+					complete = true
+				}
+			}
 		}
 	}
 	complete = complete || task.Operation == taskscheduler.OperationReviewer && s.Review != nil && s.Review.Invocation.ID == invocation.ID
@@ -628,7 +905,7 @@ func scheduledEvidence(s Snapshot, head string, invocation runtime.Invocation, t
 		s.Creation.Config.Version == 1 && s.Creation.Execution.GraphEnabled() {
 		evidence.AdmissionID = invocation.ID
 	}
-	if complete && evidence.AdmissionID == "" && task.Operation == taskscheduler.OperationWriter && parallelImplementationEnabled(s) && s.Creation.Config.Version == 1 {
+	if complete && evidence.AdmissionID == "" && task.Operation == taskscheduler.OperationWriter && graphWriterCohortEnabled(s) && s.Creation.Config.Version == 1 {
 		evidence.AdmissionID = invocation.ID
 	}
 	if complete && evidence.AdmissionID != "" {
@@ -654,7 +931,7 @@ func scheduledAdmissionID(s Snapshot, invocationID string) string {
 		}
 	}
 	if s.PlannerAccess != nil && s.Creation.Config.Planner.Runtime == "fake" {
-		planner, err := plannerInvocation(s.Creation.Config, s.Creation.Objective)
+		planner, err := plannerInvocationForSnapshot(s)
 		if err == nil && planner.ID == invocationID {
 			return s.PlannerAccess.Reservation.InvocationID
 		}

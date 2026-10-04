@@ -236,3 +236,216 @@ func TestDecodeToolTurnRejectsPhaseOnReasoningPart(t *testing.T) {
 		t.Fatal("phase on reasoning part admitted")
 	}
 }
+
+func reasoningFixturePart(id, messageID, text string, start, end int64, metadata map[string]any) map[string]any {
+	part := mergePart(basePart(id, messageID, "reasoning"), map[string]any{
+		"text": text, "time": map[string]any{"start": start, "end": end},
+	})
+	if metadata != nil {
+		part["metadata"] = metadata
+	}
+	return part
+}
+
+func TestDecodeToolTurnPairsMultiSummaryWithSameGenerationCarrier(t *testing.T) {
+	binding, state, transcript := toolTurnFixture(t, 1)
+	toolPart(transcript, 0)["metadata"] = map[string]any{"openai": map[string]any{"itemId": "fc_provider_item_1"}}
+	finalParts := parts(transcript[2])
+	item := "rs_synthetic_summary_item"
+	cipher := "synthetic-encrypted-carrier"
+	summaries := []map[string]any{
+		reasoningFixturePart("part_reasoning_summary_1", "msg_final", "first summary ", 31, 32, map[string]any{"openai": map[string]any{"itemId": item}}),
+		reasoningFixturePart("part_reasoning_summary_2", "msg_final", "second summary ", 32, 33, map[string]any{"openai": map[string]any{"itemId": item}}),
+		reasoningFixturePart("part_reasoning_carrier", "msg_final", "final summary", 33, 34, map[string]any{"openai": map[string]any{"itemId": item, "reasoningEncryptedContent": cipher}}),
+	}
+	transcript[2]["parts"] = append(finalParts[:1], append(summaries, finalParts[1:]...)...)
+
+	observation, err := decodeToolTurn(marshalToolTranscript(t, transcript), binding, "use source_read", state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := observation.Generations[1].Reasoning
+	if len(got) != 1 || got[0].ProviderItemID != ProviderItemID(item) || got[0].EncryptedContent != cipher || got[0].PartID != "part_reasoning_carrier" {
+		t.Fatal("multi-summary was not paired with its same-generation carrier", got)
+	}
+	if want := toolTurnDigest([]byte("first summary second summary final summary")); got[0].TextSHA256 != want {
+		t.Fatal("aggregated reasoning text digest mismatch", got[0].TextSHA256)
+	}
+	if observation.Text != "complete" || observation.Generations[1].TextSHA256 != toolTurnDigest([]byte("complete")) {
+		t.Fatal("final text projection changed while pairing reasoning", observation.Text)
+	}
+	if len(observation.Calls) != 1 || observation.Calls[0].ProviderItemID != "fc_provider_item_1" || len(observation.Calls[0].ContentSHA256) != 64 || len(observation.Calls[0].ArgumentsSHA256) != 64 {
+		t.Fatal("provider tool digest did not survive reasoning pairing", observation.Calls)
+	}
+	if len(observation.TranscriptSHA256) != 64 {
+		t.Fatal("raw transcript digest missing after reasoning pairing", observation)
+	}
+	encoded, err := canonical.Bytes(observation)
+	if err != nil || !strings.Contains(string(encoded), `"encrypted_content":"`+cipher+`"`) || !strings.Contains(string(encoded), `"provider_item_id":"`+item+`"`) {
+		t.Fatal("encrypted carrier identity absent from canonical observation", string(encoded), err)
+	}
+	var roundTrip ToolTurnObservation
+	if err := canonical.Decode(encoded, &roundTrip); err != nil || !reflect.DeepEqual(roundTrip, observation) {
+		t.Fatal("paired reasoning observation did not survive canonical round trip", roundTrip, err)
+	}
+}
+
+func TestDecodeToolTurnSingleCarrierShapeUnchanged(t *testing.T) {
+	binding, state, transcript := toolTurnFixture(t, 1)
+	finalParts := parts(transcript[2])
+	reasoning := reasoningFixturePart("part_reasoning", "msg_final", "private", 31, 32, map[string]any{
+		"openai": map[string]any{"itemId": "rs_provider_item", "reasoningEncryptedContent": "synthetic-encrypted-replay"},
+	})
+	transcript[2]["parts"] = append(finalParts[:1], append([]map[string]any{reasoning}, finalParts[1:]...)...)
+	observation, err := decodeToolTurn(marshalToolTranscript(t, transcript), binding, "use source_read", state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := observation.Generations[1].Reasoning
+	if len(got) != 1 || got[0].PartID != "part_reasoning" || got[0].ProviderItemID != "rs_provider_item" || got[0].EncryptedContent != "synthetic-encrypted-replay" || got[0].TextSHA256 != toolTurnDigest([]byte("private")) {
+		t.Fatal("single-carrier reasoning projection changed", got)
+	}
+}
+
+func TestDecodeToolTurnRejectsUnpairedOrAmbiguousReasoning(t *testing.T) {
+	carrier := func(id, item, cipher string, start, end int64) map[string]any {
+		return reasoningFixturePart(id, "msg_final", "carrier text", start, end, map[string]any{
+			"openai": map[string]any{"itemId": item, "reasoningEncryptedContent": cipher},
+		})
+	}
+	fragment := func(id, item string) map[string]any {
+		return reasoningFixturePart(id, "msg_final", "summary text", 31, 32, map[string]any{
+			"openai": map[string]any{"itemId": item},
+		})
+	}
+	splice := func(finalParts []map[string]any, middle []map[string]any) []map[string]any {
+		return append(finalParts[:1], append(middle, finalParts[1:]...)...)
+	}
+	tests := map[string]func(finalParts []map[string]any) []map[string]any{
+		"mismatched provider item": func(finalParts []map[string]any) []map[string]any {
+			return splice(finalParts, []map[string]any{
+				fragment("part_reasoning_frag", "rs_item_a"),
+				carrier("part_reasoning_carrier", "rs_item_b", "synthetic-encrypted-a", 32, 33),
+			})
+		},
+		"duplicate carriers": func(finalParts []map[string]any) []map[string]any {
+			return splice(finalParts, []map[string]any{
+				carrier("part_reasoning_carrier_1", "rs_item", "synthetic-encrypted-a", 31, 32),
+				carrier("part_reasoning_carrier_2", "rs_item", "synthetic-encrypted-a", 32, 33),
+			})
+		},
+		"contradictory carriers": func(finalParts []map[string]any) []map[string]any {
+			return splice(finalParts, []map[string]any{
+				carrier("part_reasoning_carrier_1", "rs_item", "synthetic-encrypted-a", 31, 32),
+				carrier("part_reasoning_carrier_2", "rs_item", "synthetic-encrypted-b", 32, 33),
+			})
+		},
+		"duplicate part identity": func(finalParts []map[string]any) []map[string]any {
+			return splice(finalParts, []map[string]any{
+				fragment("part_reasoning_dup", "rs_item_a"),
+				fragment("part_reasoning_dup", "rs_item_b"),
+			})
+		},
+	}
+	for name, spliceParts := range tests {
+		t.Run(name, func(t *testing.T) {
+			binding, state, transcript := toolTurnFixture(t, 1)
+			transcript[2]["parts"] = spliceParts(parts(transcript[2]))
+			if _, err := decodeToolTurn(marshalToolTranscript(t, transcript), binding, "use source_read", state); err == nil {
+				t.Fatal("unpaired or ambiguous reasoning admitted")
+			}
+		})
+	}
+}
+
+func TestDecodeToolTurnRejectsCrossGenerationReasoningPair(t *testing.T) {
+	binding, state, transcript := toolTurnFixture(t, 1)
+	intermediateParts := parts(transcript[1])
+	fragment := reasoningFixturePart("part_reasoning_frag", "msg_tools", "summary text", 13, 14, map[string]any{
+		"openai": map[string]any{"itemId": "rs_shared_item"},
+	})
+	transcript[1]["parts"] = append(intermediateParts[:2], append([]map[string]any{fragment}, intermediateParts[2:]...)...)
+	finalParts := parts(transcript[2])
+	carrier := reasoningFixturePart("part_reasoning_carrier", "msg_final", "carrier text", 31, 32, map[string]any{
+		"openai": map[string]any{"itemId": "rs_shared_item", "reasoningEncryptedContent": "synthetic-encrypted-a"},
+	})
+	transcript[2]["parts"] = append(finalParts[:1], append([]map[string]any{carrier}, finalParts[1:]...)...)
+	if _, err := decodeToolTurn(marshalToolTranscript(t, transcript), binding, "use source_read", state); err == nil {
+		t.Fatal("cross-generation reasoning pair admitted")
+	}
+}
+
+func TestDecodeToolTurnRejectsInvalidReasoningMetadataTimingAndBounds(t *testing.T) {
+	tests := map[string]func() map[string]any{
+		"extra metadata domain": func() map[string]any {
+			return reasoningFixturePart("part_reasoning", "msg_final", "private", 31, 32, map[string]any{
+				"openai": map[string]any{"itemId": "rs_item"}, "other": map[string]any{},
+			})
+		},
+		"extra OpenAI key": func() map[string]any {
+			return reasoningFixturePart("part_reasoning", "msg_final", "private", 31, 32, map[string]any{
+				"openai": map[string]any{"itemId": "rs_item", "reasoningEncryptedContent": "synthetic-encrypted-a", "other": true},
+			})
+		},
+		"missing item ID": func() map[string]any {
+			return reasoningFixturePart("part_reasoning", "msg_final", "private", 31, 32, map[string]any{
+				"openai": map[string]any{"reasoningEncryptedContent": "synthetic-encrypted-a"},
+			})
+		},
+		"invalid item ID": func() map[string]any {
+			return reasoningFixturePart("part_reasoning", "msg_final", "private", 31, 32, map[string]any{
+				"openai": map[string]any{"itemId": "rs\nitem"},
+			})
+		},
+		"non-object OpenAI metadata": func() map[string]any {
+			return reasoningFixturePart("part_reasoning", "msg_final", "private", 31, 32, map[string]any{
+				"openai": "rs_item",
+			})
+		},
+		"empty encrypted content": func() map[string]any {
+			return reasoningFixturePart("part_reasoning", "msg_final", "private", 31, 32, map[string]any{
+				"openai": map[string]any{"itemId": "rs_item", "reasoningEncryptedContent": ""},
+			})
+		},
+		"non-printable encrypted content": func() map[string]any {
+			return reasoningFixturePart("part_reasoning", "msg_final", "private", 31, 32, map[string]any{
+				"openai": map[string]any{"itemId": "rs_item", "reasoningEncryptedContent": "synthetic cipher"},
+			})
+		},
+		"oversize encrypted content": func() map[string]any {
+			return reasoningFixturePart("part_reasoning", "msg_final", "private", 31, 32, map[string]any{
+				"openai": map[string]any{"itemId": "rs_item", "reasoningEncryptedContent": strings.Repeat("s", (256<<10)+1)},
+			})
+		},
+		"oversize reasoning text": func() map[string]any {
+			return reasoningFixturePart("part_reasoning", "msg_final", strings.Repeat("s", (256<<10)+1), 31, 32, map[string]any{
+				"openai": map[string]any{"itemId": "rs_item", "reasoningEncryptedContent": "synthetic-encrypted-a"},
+			})
+		},
+		"unfinished part time": func() map[string]any {
+			return reasoningFixturePart("part_reasoning", "msg_final", "private", 32, 31, map[string]any{
+				"openai": map[string]any{"itemId": "rs_item", "reasoningEncryptedContent": "synthetic-encrypted-a"},
+			})
+		},
+		"time outside assistant": func() map[string]any {
+			return reasoningFixturePart("part_reasoning", "msg_final", "private", 41, 42, map[string]any{
+				"openai": map[string]any{"itemId": "rs_item", "reasoningEncryptedContent": "synthetic-encrypted-a"},
+			})
+		},
+		"invalid part identity": func() map[string]any {
+			return reasoningFixturePart("part reasoning", "msg_final", "private", 31, 32, map[string]any{
+				"openai": map[string]any{"itemId": "rs_item", "reasoningEncryptedContent": "synthetic-encrypted-a"},
+			})
+		},
+	}
+	for name, build := range tests {
+		t.Run(name, func(t *testing.T) {
+			binding, state, transcript := toolTurnFixture(t, 1)
+			finalParts := parts(transcript[2])
+			transcript[2]["parts"] = append(finalParts[:1], append([]map[string]any{build()}, finalParts[1:]...)...)
+			if _, err := decodeToolTurn(marshalToolTranscript(t, transcript), binding, "use source_read", state); err == nil {
+				t.Fatal("invalid reasoning part admitted")
+			}
+		})
+	}
+}

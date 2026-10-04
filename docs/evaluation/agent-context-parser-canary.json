@@ -1,0 +1,104 @@
+{
+  "schema": "fabric.agent-context-canary.v1",
+  "status": "NOT_QUALIFIED",
+  "prepared": {
+    "schema": "fabric.context-canary.prepare.v1",
+    "fabric_source": "24aa779b27891b890e6be1df61b37e16b3b3cbc3",
+    "source_commit": "a226ccf3eec4116694f6c25c5ccd19225a542281",
+    "source_tree": "630c24ad37264e902a1532feafff8c219916afb2",
+    "model": "gpt-6-luna",
+    "effort": "high",
+    "max_repairs": 2,
+    "arms": [
+      "disabled",
+      "enabled"
+    ],
+    "heldout_sha256": "afa9213e52bd8c17c15809c264c552a3a4f4469af51d5c1d0a16c5cf9ba579a1",
+    "fixture_files": {
+      "AGENTS.md": "66e01e1a54e0c7cc1046b2ad7098eb970e779cdb66f9e4f8fb8ce061c2e8da20",
+      "decoder/AGENTS.md": "3cda5ad7c25e5b7bfc305b42385336200475cbd5177077275e1206407e0d4cad",
+      "decoder/decoder.go": "cb2d32818a3c48b613c8439429ebab017c514dbb1c0fb67e7ececf8afebe70f5",
+      "decoder/decoder_test.go": "d609b448fdd5cdbbc7963648848b3b4d49d621ce492cb54fc62b49c54a80228a",
+      "go.mod": "008cf0e35b72240f79331205de02586e0891360ffe84dac72568e8c61177b2f1"
+    },
+    "negative_control": "PASS_EXPECTED_MISSING_API",
+    "live_status": "NOT_RUN",
+    "successor_policy": "none in this initial matched experiment; preserve failure/refusal/UNKNOWN",
+    "binary_sha256": "efb76fa5b5d8a12d619b2ea074eb9fb84f022b23156882d35578c9b9fb89e514",
+    "codex_sha256": "1722907aa64401bcc9b34467ef5c2af43f6aef9a5045ef04d11d19dfae4589fb",
+    "config_sha256": {
+      "enabled": "feee1fd15b4adcfa879da580be4c52328dea1cab3a9481199e46b0f0497a5a18",
+      "disabled": "34c4bf8961884a3414ada204d6017954c67cc5e45d2208559943ed0087f7e8cf"
+    }
+  },
+  "arms": [
+    {
+      "treatment": "disabled",
+      "run_id": "e3a33059c2ca56fe72ce09fb84cf86a938081aa2b14d0de1d12f4aa7a57118f9",
+      "controller_state": "REPAIRING",
+      "process_exit": 1,
+      "elapsed_seconds": 684.824673,
+      "accepted": false,
+      "native": "FAIL",
+      "review": "NOT_RUN",
+      "heldout": "NOT_RUN",
+      "repair_attempts": 2,
+      "effect_status": "NO_UNCERTAIN_EFFECT_OBSERVED",
+      "usage": {
+        "input": 552275,
+        "cached_input": 347136,
+        "uncached_input": 205139,
+        "output": 15538,
+        "reasoning_output": 5243,
+        "coverage": "OBSERVED",
+        "runtime_invocations": 7,
+        "completed": 7
+      },
+      "inspect_sha256": "bf8fc5e2f0633cd6852207e0e4a9ab887c8c8f90670c3e25be2cecc67e708af5"
+    },
+    {
+      "treatment": "enabled",
+      "run_id": "3126a4109216629c1ff093d192bb8721e649743ca3e2b96579374aef7ad4cbf9",
+      "controller_state": "PLANNING",
+      "process_exit": 1,
+      "elapsed_seconds": 6.52699,
+      "accepted": false,
+      "native": "NOT_RUN",
+      "review": "NOT_RUN",
+      "heldout": "NOT_RUN",
+      "repair_attempts": 0,
+      "effect_status": "UNRESOLVED",
+      "usage": {
+        "input": null,
+        "cached_input": null,
+        "uncached_input": null,
+        "output": null,
+        "reasoning_output": null,
+        "coverage": "UNAVAILABLE",
+        "runtime_invocations": 1,
+        "completed": 0
+      },
+      "inspect_sha256": "1f595b3cd49462bf79ebf40dfec9cb608073927304b6556ee74c587b361cc141"
+    }
+  ],
+  "source_regression_status": "PASS",
+  "live_correction_status": "NOT_RUN",
+  "provider_calls": null,
+  "monetary_cost": null,
+  "correction_base": "24aa779b27891b890e6be1df61b37e16b3b3cbc3",
+  "correction_file_sha256": {
+    "internal/engineeringplan/agent_context_schema.go": "cdb67069df7d857f11a33336b7dcfaae470e86bf9b25151ac353cfd71fc44d74",
+    "internal/control/agent_context.go": "e3f6165e1360de48aa8532e7ddd010a5af5ed02d146854489dcf56aca95b336c",
+    "internal/control/agent_context_test.go": "71419a46ff0689299c86ae8c976099bab6eeedb37f8e9cc2bcd620f5536f3ddf",
+    "internal/codexrpc/session.go": "f7099c6ef58abd2cce40ed36a74958d284f295a00d48a7a4bd29cf1ea586f155",
+    "internal/codexrpc/planner_schema_test.go": "684469271b9e5e0b504cbd5041b97feac99f39cb710b6e8dbbd3b5591ca9ccd6"
+  },
+  "executed_checks": [
+    "go test ./internal/codexrpc ./internal/engineeringplan ./internal/agentcontext -count=1 -timeout=120s",
+    "go test ./internal/codexrpc ./internal/control ./internal/cli -run TestPlanner.*Schema|TestAgentContext -count=1 -timeout=120s",
+    "go vet ./internal/codexrpc ./internal/engineeringplan ./internal/control",
+    "fixture go test ./... -count=1",
+    "git diff --check"
+  ],
+  "independent_review": "APPROVE: GPT 6 Luna High, schema compatibility and authority boundaries"
+}

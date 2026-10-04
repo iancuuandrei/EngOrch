@@ -115,7 +115,11 @@ func (a *Adapter) handleTool(ctx context.Context, raw json.RawMessage, readLexic
 		if request.Tool == candidatetools.ValidateAnchoredEditsName && (s.Candidate == nil || s.Candidate.AnchorValidationVersion != candidatetools.AnchorValidationVersion || s.Intent == nil || (s.Intent.Invocation.Profile.Role != "writer" && s.Intent.Invocation.Profile.Role != "fixer")) {
 			return nil, errors.New("candidate anchored edit validation is not enabled for this invocation")
 		}
-		content, _, readErr = candidatetools.Execute(ctx, *s.Candidate, request.Tool, request.Arguments)
+		if s.Intent.ToolOutputVersion == ToolOutputVersionUTF8First {
+			content, _, readErr = candidatetools.Execute(ctx, *s.Candidate, request.Tool, request.Arguments)
+		} else {
+			content, _, readErr = candidatetools.ExecuteLegacy(ctx, *s.Candidate, request.Tool, request.Arguments)
+		}
 	case "ri_locate", "ri_definition", "ri_references":
 		content, readErr = semanticRead(ctx, *s.RI, request.Tool, request.Arguments)
 	case "ri_status":
@@ -126,7 +130,11 @@ func (a *Adapter) handleTool(ctx context.Context, raw json.RawMessage, readLexic
 			content, readErr = (ri.Client{Executable: binding.Executable, ExecutableHash: binding.ExecutableSHA256}).Inspect(ctx, binding.Snapshot)
 		}
 	case "source_list", "source_read":
-		content, _, readErr = sourcetools.Execute(ctx, *s.Source, request.Tool, request.Arguments)
+		if s.Intent.ToolOutputVersion == ToolOutputVersionUTF8First {
+			content, _, readErr = sourcetools.Execute(ctx, *s.Source, request.Tool, request.Arguments)
+		} else {
+			content, _, readErr = sourcetools.ExecuteLegacy(ctx, *s.Source, request.Tool, request.Arguments)
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

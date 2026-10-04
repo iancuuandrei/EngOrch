@@ -13,7 +13,7 @@ import (
 func TestExecutionMCPQueueDepthValidatesFallback(t *testing.T) {
 	f := newRuntimeFixture(t)
 	bearer := strings.Repeat("b", 32)
-	for _, depth := range []int{-1, 33, 100} {
+	for _, depth := range []int{-1, 33, 64, 100} {
 		cfg := ExecuteConfig{Intent: f.intent, Paths: f.paths, Broker: f.broker, MCPQueueDepth: depth}
 		if _, err := newExecutionMCP(cfg, bearer); err == nil {
 			t.Fatalf("fallback queue depth %d admitted", depth)
@@ -24,6 +24,14 @@ func TestExecutionMCPQueueDepthValidatesFallback(t *testing.T) {
 		if _, err := newExecutionMCP(cfg, bearer); err != nil {
 			t.Fatalf("fallback queue depth %d rejected: %v", depth, err)
 		}
+	}
+	queued, wait, err := contextmcp.QueuePolicyForCallBudget(contextmcp.InvocationToolCallBudget, contextmcp.ContextCallTimeout)
+	if err != nil || queued != 63 || wait != 63*contextmcp.ContextCallTimeout {
+		t.Fatal("full invocation call budget did not map to exact queue policy", queued, wait, err)
+	}
+	cfg := ExecuteConfig{Intent: f.intent, Paths: f.paths, Broker: f.broker, MCPQueueDepth: queued, MCPQueueWait: wait}
+	if _, err := newExecutionMCP(cfg, bearer); err != nil {
+		t.Fatal("deadline-bound full-budget queue rejected", err)
 	}
 }
 

@@ -45,6 +45,9 @@ func writerExplorationContext(s Snapshot) (*explorationContext, error) {
 		if err := canonical.Decode([]byte(record.Result.Output), &observation); err != nil {
 			return nil, err
 		}
+		// Retention notes belong only to the producing explorer. Other roles
+		// receive the bounded engineering handoff, never its scratch state.
+		observation.WorkingContextUpdate = nil
 		question, summary := diagnosticPrefix(record.Question), diagnosticPrefix(observation.Summary)
 		shortened := question != record.Question || summary != observation.Summary
 		observation.Summary = summary

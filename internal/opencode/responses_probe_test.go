@@ -3,7 +3,6 @@ package opencode
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -533,13 +532,12 @@ func TestPinnedOpenCodeResponsesSourceReadToolLoopProbe(t *testing.T) {
 	if err != nil || contextState.Pending != nil || contextState.Calls != 1 || len(contextState.Responses) != 1 || !contextState.Responses[0].Success {
 		t.Fatal("durable context response mismatch", contextState, err)
 	}
-	var chunk repository.SourceChunk
+	var chunk sourcetools.ReadResult
 	if err := canonical.Decode(contextState.Responses[0].Content, &chunk); err != nil {
 		t.Fatal(err)
 	}
-	content, err := base64.StdEncoding.DecodeString(chunk.ContentBase64)
-	if err != nil || string(content) != committed || chunk.Commit != source.Commit || chunk.RepositoryID == "" {
-		t.Fatal("source_read did not return exact committed bytes", string(content), chunk, err)
+	if chunk.ContentBase64 != "" || chunk.ContentUTF8 == nil || *chunk.ContentUTF8 != committed || chunk.Commit != source.Commit || chunk.RepositoryID == "" {
+		t.Fatal("source_read did not return exact committed bytes", chunk)
 	}
 	events, err := journal.Read(contextJournal)
 	if err != nil || len(events) != 3 || events[1].Kind != "context.request" || events[2].Kind != "context.response" {

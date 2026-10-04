@@ -4,6 +4,15 @@ $parseTokens = $null
 $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($runner, [ref]$parseTokens, [ref]$parseErrors)
 if ($parseErrors.Count -ne 0) { throw 'Evaluation runner does not parse.' }
+$initArgsBuilder = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-NativeInitArgs' }, $true)
+$writerContractBuilder = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-WriterContractRequest' }, $true)
+$fixerBindingBuilder = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-FixerAccessRunnerBinding' }, $true)
+$modelPolicyBindingBuilder = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-ModelPolicyRunnerBinding' }, $true)
+if ($null -eq $initArgsBuilder -or $null -eq $writerContractBuilder -or $null -eq $fixerBindingBuilder -or $null -eq $modelPolicyBindingBuilder) { throw 'Native init writer-contract selectors are missing.' }
+. ([scriptblock]::Create($writerContractBuilder.Extent.Text))
+. ([scriptblock]::Create($fixerBindingBuilder.Extent.Text))
+. ([scriptblock]::Create($modelPolicyBindingBuilder.Extent.Text))
+. ([scriptblock]::Create($initArgsBuilder.Extent.Text))
 $builder = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-NativeGoArgs' }, $true)
 if ($null -eq $builder) { throw 'Native task policy builder missing.' }
 . ([scriptblock]::Create($builder.Extent.Text))
@@ -33,6 +42,17 @@ $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
 $entry = @($manifest.repositories | Where-Object id -eq 'go-humanize-feature-performance')
 if ($entry.Count -ne 1 -or $entry[0].check -ne 'humanize-feature-performance') {
     throw 'Combined humanize manifest entry/check mapping is missing or ambiguous.'
+}
+$topologyFixturePath = Join-Path $PSScriptRoot '..\topology\humanize-feature-performance\fixture.json'
+$topologyFixture = Get-Content -Raw -LiteralPath $topologyFixturePath | ConvertFrom-Json
+if ($topologyFixture.manifest_task -ne $entry[0].id -or
+    $topologyFixture.review_impact_context_requested -ne $true -or
+    $topologyFixture.planner_context -cne 'go-contract-context-v1' -or
+    $topologyFixture.review_impact_context_version_required -ne 1 -or
+    $topologyFixture.candidate_facts_cache_requested -ne $true -or
+    $topologyFixture.candidate_facts_cache_version_required -ne 1 -or
+    $topologyFixture.current_product_gate -cne 'not_qualified_until_a_fresh_matched_pair_is_prepared_and_accepted') {
+    throw 'Humanize topology fixture is not bound to the supported opt-in reviewer-impact runner treatment.'
 }
 $sources = @(Get-HeldoutSources $entry[0].check)
 if ($sources.Count -ne 3 -or
@@ -72,4 +92,13 @@ $expectedHeldoutArgs = @('go', 'test', '-run=^TestFabricV1Heldout$', '-count=1',
 if (($heldoutArgs | ConvertTo-Json -Compress) -cne ($expectedHeldoutArgs | ConvertTo-Json -Compress)) {
     throw 'Combined humanize held-out argv differs from the exact runner-selected invocation.'
 }
-Write-Output 'PASS: native argv policy composes both unchanged humanize oracles as separate files under one exact-selector wrapper; legacy task mappings remain intact. No provider calls.'
+$v3Contract = Get-WriterContractRequest $false $true 'Native'
+$v3InitArgs = @(Get-NativeInitArgs 'D:\task\repo' 'C:\tools\codex.exe' 'gpt-6-luna' 'high' $false '' '' '' $true)
+if ($v3Contract -cne 'anchored-edits-v3' -or $v3InitArgs[-1] -cne '--strict-writer-edits') {
+    throw 'Strict writer contract init selection is not explicit and versioned.'
+}
+$nativeArgsAfterWriterSelection = Get-NativeGoArgs $entry[0]
+if (($nativeArgsAfterWriterSelection.Argv | ConvertTo-Json -Compress) -cne ($entry[0].native_argv | ConvertTo-Json -Compress)) {
+    throw 'Writer contract selection changed the pinned native verification argv.'
+}
+Write-Output 'PASS: native argv policy composes both unchanged humanize oracles under one exact-selector wrapper; strict writer-contract init selection does not change native verification; legacy task mappings remain intact. No provider calls.'

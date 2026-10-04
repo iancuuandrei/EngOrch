@@ -2,7 +2,6 @@ package contextbroker
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -14,6 +13,7 @@ import (
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/journal"
 	"harness.local/engorch/internal/repository"
+	"harness.local/engorch/internal/sourcetools"
 	"harness.local/engorch/internal/testsupport"
 	"harness.local/engorch/internal/worktree"
 )
@@ -34,13 +34,12 @@ func TestSourceBrokerPersistsExactRequestAndResponse(t *testing.T) {
 	if err != nil || !response.Success {
 		t.Fatal(response, err)
 	}
-	var chunk repository.SourceChunk
+	var chunk sourcetools.ReadResult
 	if err := canonical.Decode(response.Content, &chunk); err != nil {
 		t.Fatal(err)
 	}
-	content, err := base64.StdEncoding.DecodeString(chunk.ContentBase64)
-	if err != nil || string(content) != "committed" || chunk.Commit != source.Commit {
-		t.Fatal(string(content), chunk, err)
+	if chunk.ContentBase64 != "" || chunk.ContentUTF8 == nil || *chunk.ContentUTF8 != "committed" || chunk.Commit != source.Commit {
+		t.Fatal(chunk)
 	}
 	events, err := journal.Read(path)
 	if err != nil || len(events) != 3 || events[0].Kind != boundEvent || events[1].Kind != requestEvent || events[2].Kind != responseEvent {
@@ -101,9 +100,72 @@ func TestCandidateBrokerSnapshotsBindingAndCatalog(t *testing.T) {
 	if err != nil || !response.Success {
 		t.Fatal(response, err)
 	}
-	var chunk worktree.SourceChunk
+	var chunk candidatetools.ReadResult
 	if err := canonical.Decode(response.Content, &chunk); err != nil || chunk.ContentUTF8 == nil || *chunk.ContentUTF8 != "candidate" {
 		t.Fatal(chunk, err)
+	}
+}
+
+func TestLegacyCatalogBindingReplaysAndKeepsV1ReadShape(t *testing.T) {
+	source := contextSourceFixture(t)
+	workspace, candidate := testsupport.CandidateWorkspace(t, source, strings.Repeat("b", 64), map[string][]byte{"source.txt": []byte("candidate")})
+	candidateBinding := candidatetools.Binding{Workspace: workspace, Candidate: candidate}
+	legacyID, err := catalogID(legacyCatalogFor(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := Binding{Version: 1, InvocationID: strings.Repeat("c", 64), Source: source, Candidate: &candidateBinding, CatalogID: legacyID, Limits: fixtureLimits()}
+	path := filepath.Join(t.TempDir(), "legacy-context.jsonl")
+	broker, err := Open(path, binding)
+	if err != nil {
+		t.Fatal("legacy broker binding did not open", err)
+	}
+	catalog := broker.Catalog()
+	if len(catalog) != 4 || !strings.Contains(catalog[1].Description, "always content_base64") || !strings.Contains(catalog[3].Description, "binary/UTF-8 views") {
+		t.Fatal("legacy broker did not serve its bound v1 catalog", catalog)
+	}
+	for _, request := range []struct {
+		call string
+		tool string
+		want string
+	}{
+		{"legacy-source", "source_read", "committed"},
+		{"legacy-candidate", "candidate_read", "candidate"},
+	} {
+		response, callErr := broker.Call(context.Background(), request.call, request.tool, json.RawMessage(`{"path":"source.txt","offset":0,"limit":32}`))
+		if callErr != nil || !response.Success {
+			t.Fatal("legacy tool call failed", request.tool, response, callErr)
+		}
+		if request.tool == "source_read" {
+			var chunk repository.SourceChunk
+			if decodeErr := canonical.Decode(response.Content, &chunk); decodeErr != nil || chunk.ContentBase64 == "" || chunk.ContentUTF8 == nil || *chunk.ContentUTF8 != request.want {
+				t.Fatal("legacy source result shape changed", chunk, decodeErr)
+			}
+		} else {
+			var chunk worktree.SourceChunk
+			if decodeErr := canonical.Decode(response.Content, &chunk); decodeErr != nil || chunk.ContentBase64 == "" || chunk.ContentUTF8 == nil || *chunk.ContentUTF8 != request.want {
+				t.Fatal("legacy candidate result shape changed", chunk, decodeErr)
+			}
+		}
+	}
+	if err := broker.Close(); err != nil {
+		t.Fatal(err)
+	}
+	state, err := Inspect(path)
+	if err != nil || state.Binding == nil || state.Binding.CatalogID != legacyID || len(state.Responses) != 2 {
+		t.Fatal("legacy journal did not inspect", state, err)
+	}
+	firstContent := append(json.RawMessage(nil), state.Responses[0].Content...)
+	reopened, err := Open(path, binding)
+	if err != nil {
+		t.Fatal("legacy journal did not reopen", err)
+	}
+	if len(reopened.Catalog()) != 4 || !strings.Contains(reopened.Catalog()[1].Description, "always content_base64") {
+		t.Fatal("reopened legacy broker changed its catalog")
+	}
+	replayed, err := Inspect(path)
+	if err != nil || len(replayed.Responses) != 2 || string(replayed.Responses[0].Content) != string(firstContent) {
+		t.Fatal("legacy response bytes changed on inspect", replayed, err)
 	}
 }
 

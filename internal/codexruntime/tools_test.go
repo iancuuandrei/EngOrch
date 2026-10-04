@@ -2,7 +2,6 @@ package codexruntime
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -11,8 +10,10 @@ import (
 
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/codexrpc"
+	"harness.local/engorch/internal/journal"
 	"harness.local/engorch/internal/repository"
 	"harness.local/engorch/internal/runtime"
+	"harness.local/engorch/internal/sourcetools"
 )
 
 func sourceAdapter(t *testing.T) *Adapter {
@@ -44,7 +45,7 @@ func sourceAdapter(t *testing.T) *Adapter {
 		kind    string
 		payload any
 	}{
-		{"runtime.intent", Intent{i, root}},
+		{"runtime.intent", Intent{Invocation: i, Directory: root, ToolOutputVersion: 1}},
 		{"runtime.source", source},
 		{"runtime.thread", codexrpc.ThreadSettings{ThreadID: "thread-1", Model: i.Profile.Model, Provider: i.Profile.Provider, Effort: &effort, Directory: root, Approval: "never", Sandbox: "readOnly"}},
 		{"runtime.turn-intent", map[string]any{"invocation_id": i.ID}},
@@ -56,7 +57,7 @@ func sourceAdapter(t *testing.T) *Adapter {
 	return a
 }
 
-func TestSourceToolsVisibleCatalogUnchanged(t *testing.T) {
+func TestSourceToolsCatalogDescribesUTF8FirstOutput(t *testing.T) {
 	adapter := &Adapter{Source: &repository.Identity{}}
 	got, err := canonical.Bytes(adapter.SourceTools())
 	if err != nil {
@@ -67,13 +68,75 @@ func TestSourceToolsVisibleCatalogUnchanged(t *testing.T) {
 	}
 	want, err := canonical.Bytes([]any{
 		map[string]any{"type": "function", "deferLoading": false, "name": "source_list", "description": "List paths from the fixed source commit. limit must be 1 to 128; use after empty string initially. Follow next_after until null; includes symlinks/submodules as explicit kinds. No relevance filtering.", "inputSchema": objectSchema(map[string]any{"after": map[string]any{"type": "string"}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 128}}, []string{"after", "limit"})},
-		map[string]any{"type": "function", "deferLoading": false, "name": "source_read", "description": "Read exact regular-file bytes from the fixed source commit. limit must be 1 to 32768 bytes. Returns content_utf8 when valid UTF-8 and always content_base64, with chunk hash. Follow next_offset until null. Working tree changes do not affect this source.", "inputSchema": objectSchema(map[string]any{"path": map[string]any{"type": "string"}, "offset": map[string]any{"type": "integer", "minimum": 0}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 32768}}, []string{"path", "offset", "limit"})},
+		map[string]any{"type": "function", "deferLoading": false, "name": "source_read", "description": "Read exact regular-file bytes from the fixed source commit. limit must be 1 to 32768 bytes. For valid UTF-8 pages, content_utf8 contains the bytes and content_base64 is omitted; binary pages include content_base64 and null content_utf8. chunk_hash binds returned bytes. Follow next_offset until null. Working tree changes do not affect this source.", "inputSchema": objectSchema(map[string]any{"path": map[string]any{"type": "string"}, "offset": map[string]any{"type": "integer", "minimum": 0}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 32768}}, []string{"path", "offset", "limit"})},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(got) != string(want) {
 		t.Fatalf("provider-visible source catalog changed\n got: %s\nwant: %s", got, want)
+	}
+}
+
+func TestLegacyRuntimeIntentRetainsV1ReadResultShape(t *testing.T) {
+	a := sourceAdapter(t)
+	state, err := Inspect(a.JournalPath)
+	if err != nil || state.Intent == nil || state.Source == nil || state.Thread == nil {
+		t.Fatal("runtime fixture incomplete", state, err)
+	}
+	events, err := journal.Read(a.JournalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyPath := filepath.Join(t.TempDir(), "legacy-runtime.jsonl")
+	for _, event := range events {
+		payload := event.Payload
+		if event.Kind == "runtime.intent" {
+			payload, err = canonical.Bytes(Intent{Invocation: state.Intent.Invocation, Directory: state.Intent.Directory})
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := appendEvent(legacyPath, event.Kind, payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a.JournalPath = legacyPath
+	request, err := canonical.Bytes(ToolRequest{Arguments: json.RawMessage(`{"path":"source.txt","offset":0,"limit":32}`), CallID: "legacy-read", ThreadID: state.Thread.ThreadID, TurnID: "turn-1", Tool: sourcetools.ReadName})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, err := a.HandleTool(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		ContentItems []struct {
+			Text string `json:"text"`
+		} `json:"contentItems"`
+	}
+	if err := json.Unmarshal(wire, &result); err != nil || len(result.ContentItems) != 1 {
+		t.Fatal("legacy tool response envelope invalid", string(wire), err)
+	}
+	var chunk repository.SourceChunk
+	if err := canonical.Decode([]byte(result.ContentItems[0].Text), &chunk); err != nil || chunk.ContentBase64 == "" || chunk.ContentUTF8 == nil || *chunk.ContentUTF8 != "committed" {
+		t.Fatal("legacy runtime output shape changed", chunk, err)
+	}
+	replayed, err := Inspect(legacyPath)
+	if err != nil || replayed.Intent == nil || replayed.Intent.ToolOutputVersion != 0 || len(replayed.ToolResponses) != 1 || replayed.ToolResponses[0].Content != result.ContentItems[0].Text {
+		t.Fatal("legacy runtime journal did not preserve exact response", replayed, err)
+	}
+}
+
+func TestRuntimeIntentRejectsUnknownToolOutputVersion(t *testing.T) {
+	a := sourceAdapter(t)
+	state, err := Inspect(a.JournalPath)
+	if err != nil || state.Intent == nil {
+		t.Fatal("runtime fixture incomplete", state, err)
+	}
+	path := filepath.Join(t.TempDir(), "unknown-tool-output-version.jsonl")
+	if err := appendEvent(path, "runtime.intent", Intent{Invocation: state.Intent.Invocation, Directory: state.Intent.Directory, ToolOutputVersion: 2}); err == nil {
+		t.Fatal("unknown tool output version accepted")
 	}
 }
 
@@ -140,13 +203,12 @@ func TestSourceBrokerImmutableReadAndScope(t *testing.T) {
 	if !wire.Success || len(wire.ContentItems) != 1 {
 		t.Fatal(string(response))
 	}
-	var chunk repository.SourceChunk
+	var chunk sourcetools.ReadResult
 	if e := canonical.Decode([]byte(wire.ContentItems[0].Text), &chunk); e != nil {
 		t.Fatal(e)
 	}
-	data, e := base64.StdEncoding.DecodeString(chunk.ContentBase64)
-	if e != nil || string(data) != "committed" {
-		t.Fatal(string(data), e)
+	if chunk.ContentBase64 != "" || chunk.ContentUTF8 == nil || *chunk.ContentUTF8 != "committed" {
+		t.Fatal(chunk)
 	}
 	s, e := Inspect(a.JournalPath)
 	if e != nil || s.PendingTool != nil || len(s.ToolResponses) != 1 || s.ToolResponses[0].Content != wire.ContentItems[0].Text {

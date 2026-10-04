@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,6 +37,7 @@ import (
 	"harness.local/engorch/internal/providertransport"
 	"harness.local/engorch/internal/repository"
 	"harness.local/engorch/internal/runtime"
+	"harness.local/engorch/internal/sourcetools"
 	"harness.local/engorch/internal/taskpool"
 	"harness.local/engorch/internal/taskscheduler"
 	"harness.local/engorch/internal/toolreceipts"
@@ -383,7 +383,7 @@ func testPinnedOpenCodeScheduledExplorerCompositeTools(t *testing.T, parallel bo
 	}
 	acceptedHeadBeforeRecovery := acceptedEventsBeforeRecovery[len(acceptedEventsBeforeRecovery)-1].Hash
 	expectedIntent := scheduledOpenCodeRuntimeIntent(t, controller, prepared.turn.Task.InvocationID, runtimePath)
-	if parallel && (expectedIntent.ToolReceipts.QueuePolicy != toolreceipts.QueuePolicySerialFIFO || expectedIntent.ToolReceipts.MaxQueuedCalls != 32) {
+	if parallel && (expectedIntent.ToolReceipts.QueuePolicy != toolreceipts.QueuePolicySerialFIFOWithDeadlines || expectedIntent.ToolReceipts.MaxQueuedCalls != 63 || expectedIntent.ToolReceipts.Version != 3) {
 		t.Fatal("parallel composite admission queue identity changed", expectedIntent.ToolReceipts)
 	}
 	verify := scheduledOpenCodeCompositeVerifier(t, controllerPath, schedulerPath, runtimePath, controller, prepared.turn)
@@ -411,13 +411,12 @@ func testPinnedOpenCodeScheduledExplorerCompositeTools(t *testing.T, parallel bo
 	if brokerErr != nil || receiptsErr != nil || broker.Binding == nil || broker.Calls != 1 || len(broker.Responses) != 1 || !broker.Closed || len(receipts.Calls) != 2 || owners[toolreceipts.OwnerContext] != 1 || owners[toolreceipts.OwnerAgent] != 1 || tools["source_read"] != 1 || tools["list_agents"] != 1 {
 		t.Fatal("composite backend journals differ", brokerErr, receiptsErr, broker, receipts, owners, tools)
 	}
-	var chunk repository.SourceChunk
+	var chunk sourcetools.ReadResult
 	if err := canonical.Decode(broker.Responses[0].Content, &chunk); err != nil {
 		t.Fatal(err)
 	}
-	content, decodeErr := base64.StdEncoding.DecodeString(chunk.ContentBase64)
-	if decodeErr != nil || string(content) != "base\n" || chunk.Commit != prepared.snapshot.Creation.Repository.Commit {
-		t.Fatal("composite source backend differs", string(content), chunk, decodeErr)
+	if chunk.ContentBase64 != "" || chunk.ContentUTF8 == nil || *chunk.ContentUTF8 != "base\n" || chunk.Commit != prepared.snapshot.Creation.Repository.Commit {
+		t.Fatal("composite source backend differs", chunk)
 	}
 	receiptBytes, err := os.ReadFile(runtimePath + ".tool-receipts")
 	if err != nil || bytes.Contains(receiptBytes, []byte("file.txt")) || bytes.Contains(receiptBytes, []byte(`{"limit":8}`)) {
@@ -569,7 +568,7 @@ func testPinnedOpenCodeScheduledExplorerInterruptStopsOwnedRuntime(t *testing.T,
 		verify := scheduledOpenCodeCompositeVerifier(t, controllerPath, schedulerPath, runtimePath, controller, turn)
 		runtimeState, runtimeErr := opencoderuntime.InspectComposite(runtimePath, intent, verify)
 		receipts, receiptsErr := toolreceipts.Inspect(runtimePath + ".tool-receipts")
-		if runtimeErr != nil || runtimeState.Bound == nil || runtimeState.Bound.Version != 2 || runtimeState.Bound.Composite == nil || intent.ToolReceipts.QueuePolicy != toolreceipts.QueuePolicySerialFIFO || intent.ToolReceipts.MaxQueuedCalls != 32 || receiptsErr != nil || receipts.Binding == nil || receipts.Binding.QueuePolicy != toolreceipts.QueuePolicySerialFIFO || receipts.Binding.MaxQueuedCalls != 32 || len(receipts.Calls) != 0 {
+		if runtimeErr != nil || runtimeState.Bound == nil || runtimeState.Bound.Version != 2 || runtimeState.Bound.Composite == nil || intent.ToolReceipts.QueuePolicy != toolreceipts.QueuePolicySerialFIFOWithDeadlines || intent.ToolReceipts.MaxQueuedCalls != 63 || intent.ToolReceipts.Version != 3 || receiptsErr != nil || receipts.Binding == nil || receipts.Binding.QueuePolicy != toolreceipts.QueuePolicySerialFIFOWithDeadlines || receipts.Binding.MaxQueuedCalls != 63 || receipts.Binding.Version != 3 || len(receipts.Calls) != 0 {
 			t.Fatal("composite interrupt did not bind the unused serial FIFO recorder before provider dispatch", runtimeErr, runtimeState.Bound, receiptsErr, receipts)
 		}
 	}
@@ -625,7 +624,7 @@ func testPinnedOpenCodeScheduledExplorerInterruptStopsOwnedRuntime(t *testing.T,
 		}
 	} else {
 		receipts, receiptsErr := toolreceipts.Inspect(runtimePath + ".tool-receipts")
-		if receiptsErr != nil || receipts.Binding == nil || receipts.Binding.QueuePolicy != toolreceipts.QueuePolicySerialFIFO || receipts.Binding.MaxQueuedCalls != 32 || len(receipts.Calls) != 0 {
+		if receiptsErr != nil || receipts.Binding == nil || receipts.Binding.QueuePolicy != toolreceipts.QueuePolicySerialFIFOWithDeadlines || receipts.Binding.MaxQueuedCalls != 63 || receipts.Binding.Version != 3 || len(receipts.Calls) != 0 {
 			t.Fatal("composite interrupt changed its unused durable recorder", receiptsErr, receipts)
 		}
 	}
@@ -1109,13 +1108,12 @@ func TestPinnedOpenCodeScheduledExplorerMultiTurn(t *testing.T) {
 		if inspectErr != nil || gatewayErr != nil || brokerErr != nil || headErr != nil || gatewayHeadErr != nil || runtimeState.Intent == nil || runtimeState.Result == nil || runtimeState.Intent.Invocation.ID != turn.Task.InvocationID || receipt.InvocationID != turn.Task.InvocationID || receipt.RuntimeJournalHead != runtimeHead || receipt.GatewayJournalHead != gatewayHead || runtimeState.Result.GatewayHead != gatewayHead || len(gatewayState.Calls) != 2 || !gatewayState.Finished || gatewayState.Exhausted || brokerState.Calls != 1 || len(brokerState.Responses) != 1 || !brokerState.Closed {
 			t.Fatal("per-turn runtime receipt is incomplete", turn.TurnSequence, inspectErr, gatewayErr, brokerErr, headErr, gatewayHeadErr, receipt, runtimeState, gatewayState, brokerState)
 		}
-		var chunk repository.SourceChunk
+		var chunk sourcetools.ReadResult
 		if err := canonical.Decode(brokerState.Responses[0].Content, &chunk); err != nil {
 			t.Fatal(err)
 		}
-		content, decodeErr := base64.StdEncoding.DecodeString(chunk.ContentBase64)
-		if decodeErr != nil || string(content) != "base\n" || chunk.Commit != snapshot.Creation.Repository.Commit {
-			t.Fatal("turn source receipt differs from committed bytes", turn.TurnSequence, string(content), chunk, decodeErr)
+		if chunk.ContentBase64 != "" || chunk.ContentUTF8 == nil || *chunk.ContentUTF8 != "base\n" || chunk.Commit != snapshot.Creation.Repository.Commit {
+			t.Fatal("turn source receipt differs from committed bytes", turn.TurnSequence, chunk)
 		}
 		if runtimeHeads[runtimeHead] || gatewayHeads[gatewayHead] {
 			t.Fatal("turn journals share a terminal head", turn.TurnSequence, runtimeHead, gatewayHead)

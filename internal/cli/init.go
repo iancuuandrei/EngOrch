@@ -13,7 +13,9 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/config"
+	"harness.local/engorch/internal/modelpolicy"
 	"harness.local/engorch/internal/repository"
 	"harness.local/engorch/internal/runtime"
 	"harness.local/engorch/internal/writercontract"
@@ -29,14 +31,67 @@ func initCommand(ctx context.Context, root string, args []string, out io.Writer)
 	writerEffort := flags.String("writer-effort", "", "writer reasoning effort; defaults to --effort")
 	reviewerModel := flags.String("reviewer-model", "", "reviewer model; defaults to --model")
 	reviewerEffort := flags.String("reviewer-effort", "", "reviewer reasoning effort; defaults to --effort")
+	fixerModel := flags.String("fixer-model", "", "independent fixer model; defaults to --model when either fixer override is supplied")
+	fixerEffort := flags.String("fixer-effort", "", "independent fixer reasoning effort; defaults to --effort when either fixer override is supplied")
+	accessConfigPath := flags.String("access-config", "", "strict JSON config.Access policy required when either fixer override is supplied")
+	modelPolicyPath := flags.String("model-policy", "", "bounded strict JSON model policy embedded in configuration; requires a fixer override and access config")
 	auth := flags.String("auth-source", "", "existing Codex auth.json")
 	state := flags.String("state-root", "", "private runtime state directory")
 	validateWriterEdits := flags.Bool("validate-writer-edits", false, "enable same-turn validation for anchored writer edits")
+	strictWriterEdits := flags.Bool("strict-writer-edits", false, "enable strict same-turn validation and reject no-op anchored writer entries")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("init accepts flags only")
+	}
+	if *validateWriterEdits && *strictWriterEdits {
+		return errors.New("--validate-writer-edits and --strict-writer-edits are mutually exclusive")
+	}
+	fixerProfileRequested := false
+	fixerModelProvided, fixerEffortProvided, accessConfigProvided := false, false, false
+	modelPolicyProvided := false
+	flags.Visit(func(selected *flag.Flag) {
+		switch selected.Name {
+		case "fixer-model":
+			fixerProfileRequested = true
+			fixerModelProvided = true
+		case "fixer-effort":
+			fixerProfileRequested = true
+			fixerEffortProvided = true
+		case "access-config":
+			accessConfigProvided = true
+		case "model-policy":
+			modelPolicyProvided = true
+		}
+	})
+	if fixerProfileRequested != accessConfigProvided || (*accessConfigPath == "") != !accessConfigProvided {
+		return errors.New("fixer-model or fixer-effort requires exactly one --access-config PATH; --access-config is only valid with a fixer override")
+	}
+	if fixerModelProvided && strings.TrimSpace(*fixerModel) == "" {
+		return errors.New("fixer-model must not be empty")
+	}
+	if fixerEffortProvided && strings.TrimSpace(*fixerEffort) == "" {
+		return errors.New("fixer-effort must not be empty")
+	}
+	if modelPolicyProvided && (!fixerProfileRequested || strings.TrimSpace(*modelPolicyPath) == "") {
+		return errors.New("model-policy requires a nonempty path, a fixer override and access config")
+	}
+	var explicitModelPolicy *modelpolicy.Policy
+	if modelPolicyProvided {
+		var err error
+		explicitModelPolicy, err = readInitModelPolicy(*modelPolicyPath)
+		if err != nil {
+			return err
+		}
+	}
+	var explicitAccess *config.Access
+	if accessConfigProvided {
+		policy, err := readInitAccessConfig(*accessConfigPath)
+		if err != nil {
+			return err
+		}
+		explicitAccess = &policy
 	}
 	content := []byte(config.Example)
 	runtimeName := "fake"
@@ -108,6 +163,8 @@ func initCommand(ctx context.Context, root string, args []string, out io.Writer)
 				overrideModel, overrideEffort = *writerModel, *writerEffort
 			case "reviewer":
 				overrideModel, overrideEffort = *reviewerModel, *reviewerEffort
+			case "fixer":
+				overrideModel, overrideEffort = *fixerModel, *fixerEffort
 			}
 			if overrideModel != "" {
 				selectedModel = overrideModel
@@ -121,6 +178,9 @@ func initCommand(ctx context.Context, root string, args []string, out io.Writer)
 		if *validateWriterEdits {
 			writerContract = writercontract.ContractAnchoredEditsV2
 		}
+		if *strictWriterEdits {
+			writerContract = writercontract.ContractAnchoredEditsV3
+		}
 		cfg := config.Config{
 			Version: 1, Repository: filepath.Base(root), BaseBranch: "HEAD",
 			WriterContract: writerContract, PlannerContract: "plan-v1", ExplorerContract: "json-v2",
@@ -128,8 +188,22 @@ func initCommand(ctx context.Context, root string, args []string, out io.Writer)
 			Codex:        &config.Codex{Executable: *binary, ExecutableHash: hex.EncodeToString(h.Sum(nil)), StateRoot: *state, AuthSource: *auth},
 			Verification: []config.Check{{Name: "unit", Argv: []string{"go", "test", "./..."}, TimeoutSeconds: 120}},
 		}
+		if fixerProfileRequested {
+			cfg.Version = 2
+			cfg.Fixer = profile("fixer")
+			cfg.Access = explicitAccess
+		}
+		cfg.ModelPolicy = explicitModelPolicy
 		if err := cfg.Validate(); err != nil {
+			if fixerProfileRequested {
+				return fmt.Errorf("fixer init requires an access config admitting every configured role and budget: %w", err)
+			}
 			return err
+		}
+		if fixerProfileRequested {
+			if _, err := cfg.AccessPolicy(strings.Repeat("0", 64)); err != nil {
+				return fmt.Errorf("fixer route admission validation failed: %w", err)
+			}
 		}
 		content, err = toml.Marshal(cfg)
 		if err != nil {
@@ -156,4 +230,18 @@ func initCommand(ctx context.Context, root string, args []string, out io.Writer)
 		return err
 	}
 	return output(out, map[string]string{"status": "CREATED", "configuration": "harness.toml", "runtime": runtimeName, "next": "ignore .harness/ and harness.toml; edit verification checks for your project; run doctor"})
+}
+
+const initAccessConfigMaxBytes = 32 << 10
+
+func readInitAccessConfig(path string) (config.Access, error) {
+	var policy config.Access
+	raw, err := readRegularPolicyJSON(path, initAccessConfigMaxBytes, "access config", "32 KiB")
+	if err != nil {
+		return policy, err
+	}
+	if err := canonical.Decode(raw, &policy); err != nil {
+		return config.Access{}, fmt.Errorf("invalid access config JSON: %w", err)
+	}
+	return policy, nil
 }

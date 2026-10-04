@@ -2,10 +2,14 @@
 
 Generated from `internal/cli`; do not edit by hand.
 
-Use `harness [--root PATH] COMMAND`. Output is canonical JSON except help, aggregated run-snapshot JSON, and `inspect --export-jsonl`.
+Use `fabric [--root PATH] COMMAND`; `harness` remains a compatibility executable.
+Output is canonical JSON except help, aggregated run-snapshot JSON, and `inspect --export-jsonl`.
 
 | Command | Arguments | Behavior |
 | --- | --- | --- |
+| `evidence-feedback` | `RUN REQUEST_JSON [--schedule SCHEDULE_ID]` | Reprice advisory evidence resources from receipt-matched typed tokens without mutating run state. |
+| `evidence-acquire` | `RUN REQUEST_JSON` | Record a finite JEV decision and acquire only selected bounded explorer source context; never dispatch a model. |
+| `calibrate-models` | `CALIBRATION_JSON` | Compare bounded matched task-policy outcomes; report conservative model selection without dispatch. |
 | `version` | `` | Report the build version, commit and build date. |
 | `agent-interrupt` | `RUN SCHEDULE_ID TURN_ID ACTOR NONCE` | Request interruption of one exact scheduled turn; delivery does not prove runtime teardown or resolve UNKNOWN effects. |
 | `agent-spawn` | `RUN SCHEDULE_ID REQUEST_JSON` | Queue a read-only explorer child using controller-derived invocation and authority. |
@@ -40,7 +44,7 @@ Use `harness [--root PATH] COMMAND`. Output is canonical JSON except help, aggre
 | `recover-push-lease` | `RUN PREVIEW_JSON INTENT_ID ACTOR [TOKEN_ENV]` | Adopt a quiescent push lease, reconcile remote state and release it. |
 | `push` | `RUN PREVIEW_JSON INTENT_ID ACTOR [TOKEN_ENV]` | Perform one exactly authorized push and record remote readback. |
 | `commit` | `RUN PREVIEW_JSON INTENT_ID ACTOR` | Execute one exactly authorized local commit and record observed object/ref/index outcome. |
-| `usage` | `RUN` | Inspect controller admissions and journaled Codex context usage, checking admitted receipt heads. |
+| `usage` | `RUN [--schedule SCHEDULE_ID]` | Inspect controller admissions with journaled Codex and OpenCode invocation usage from replay-validated receipts; pending OpenCode work stays UNKNOWN and money stays unknown. Pass --schedule SCHEDULE_ID to bind composite explorer turns to one exact schedule. |
 | `runtime-usage` | `JOURNAL` | Report journal-bound context bytes, tool calls and observed provider usage without exposing content. |
 | `prepare-review` | `RUN` | Inspect the explicit reviewer invocation for the verified candidate. |
 | `prepare-explorer` | `RUN QUESTION` | Inspect a read-only exploration invocation for the current candidate. |
@@ -57,25 +61,39 @@ Use `harness [--root PATH] COMMAND`. Output is canonical JSON except help, aggre
 | `ri changed` | `EXE EXE_SHA256 BEFORE_SNAPSHOT BEFORE_ID BEFORE_COMMIT AFTER_SNAPSHOT AFTER_ID AFTER_COMMIT [LIMIT [CURSOR]]` | Compare exact snapshot input declarations for two full commits; supply LIMIT for bounded pages. |
 | `ri related` | `EXE EXE_SHA256 SNAPSHOT SNAPSHOT_ID NODE RELATION DIRECTION PRODUCER LIMIT [CURSOR]` | Page explicit graph relationships without relevance ranking or implicit relation expansion. |
 | `ri locate` | `EXE EXE_SHA256 SNAPSHOT SNAPSHOT_ID FILE OFFSET PRODUCER LIMIT [CURSOR]` | Locate overlapping source observations at an exact byte offset without semantic ranking. |
-| `ri search` | `EXE EXE_SHA256 REF_JSON [--fixed|--regex] [--case-insensitive] [--limit N] [--after CURSOR_JSON] [--overlay-run RUN] PATTERN` | Search verified committed source bytes using an admitted lexical disk index. |
+| `ri search` | `EXE EXE_SHA256 REF_JSON [--fixed\|--regex] [--case-insensitive] [--limit N] [--after CURSOR_JSON] [--overlay-run RUN] PATTERN` | Search verified committed source bytes using an admitted lexical disk index. |
+| `ri modules` | `` | Emit a bounded partial inventory of committed go.mod, go.work and vendor metadata for this configured repository; dirty files are ignored and no Go command is run. |
+| `ri facts` | `EXE EXE_SHA256 PATH [CACHE_DIR]` | Extract bounded partial Go syntax facts from the exact committed file; optional cache is a local derived optimization. |
+| `ri graph` | `EXE EXE_SHA256 SPEC_JSON [CACHE_DIR]` | Build a partial Go graph from an explicit bounded corpus of committed files and package/generator metadata; an optional source-bound module_inventory derives package ownership; no generators are executed. |
+| `ri query` | `EXE EXE_SHA256 SPEC_JSON QUERY_JSON [CACHE_DIR]` | Return bounded partial graph-backed Go symbols, imports, calls, tests, generators, module ownership, paths or impact; calls remain UNRESOLVED and semantic references/implementations are unsupported. |
+| `ri rank` | `EXE EXE_SHA256 SPEC_JSON QUERY_JSON [CACHE_DIR]` | Rank committed Go files by exact objective terms and observed package degree; return bounded advisory component and provenance evidence without changing planner policy. |
+| `ri semantic` | `EXE EXE_SHA256 SNAPSHOT SNAPSHOT_ID QUERY_JSON [CURSOR]` | Page producer-bound direct references or explicit IMPLEMENTS edges from an admitted semantic snapshot; preserve directional coverage and absence evidence. |
+| `ri candidate-query` | `RUN EXE EXE_SHA256 BASE_SPEC_JSON QUERY_JSON [CACHE_DIR]` | Query a confirmed run candidate using a committed module-backed base graph and bounded candidate overlay; output is candidate-bound and PARTIAL. |
+| `ri context` | `EXE EXE_SHA256 SPEC_JSON OBJECTIVE [CACHE_DIR]` | Compile a bounded task context from the same explicit committed Go corpus and partial graph; sensitive paths are rejected before reading. |
+| `ri topology` | `EXE EXE_SHA256 SPEC_JSON CHANGED_PATHS_JSON MAX_GROUP_FILES [CACHE_DIR]` | Query advisory Go package topology, observed impact, explicit generator coupling and bounded review groups from a committed partial graph. |
 | `ri prepare-lexical` | `RUN EXE EXE_SHA256 STAGE_ROOT BATCH_BYTES BATCH_FILES` | Observe committed files and preview an exact lexical indexing intent. |
 | `ri lexical` | `RUN PREVIEW_JSON INTENT_ID ACTOR` | Execute one authorized and journaled lexical indexing attempt. |
 | `ri lexical-ref` | `RUN` | Reverify confirmed lexical staging and emit its search reference. |
 | `ri prepare-overlay` | `RUN STAGE_ROOT` | Prepare an exact lexical overlay from the admitted candidate. |
 | `ri overlay` | `RUN PREVIEW_JSON INTENT_ID ACTOR` | Materialize one authorized and journaled lexical overlay. |
 | `ri overlay-ref` | `RUN` | Reverify and export the confirmed overlay for the current candidate. |
-| `ri definition|references` | `EXE EXE_SHA256 SNAPSHOT SNAPSHOT_ID SYMBOL PRODUCER LIMIT [CURSOR]` | Page direct semantic occurrences; relationship expansion and absence inference are not performed. |
+| `ri definition\|references` | `EXE EXE_SHA256 SNAPSHOT SNAPSHOT_ID SYMBOL PRODUCER LIMIT [CURSOR]` | Page direct semantic occurrences; relationship expansion and absence inference are not performed. |
 | `ri path` | `EXE EXE_SHA256 SNAPSHOT SNAPSHOT_ID FROM TO RELATION DIRECTION PRODUCER MAX_DEPTH MAX_EDGES` | Find a bounded observed graph path; exhaustion does not prove absence. |
-| `ri` | `status|coverage|deps|rdeps EXE EXE_SHA256 SNAPSHOT SNAPSHOT_ID ...` | Query a committed-source snapshot. Coverage adds NODE RELATION DIRECTION; deps/rdeps add NODE PRODUCER LIMIT [CURSOR] for direct dependency edges. |
+| `ri` | `status\|coverage\|deps\|rdeps EXE EXE_SHA256 SNAPSHOT SNAPSHOT_ID ...` | Query a committed-source snapshot. Coverage adds NODE RELATION DIRECTION; deps/rdeps add NODE PRODUCER LIMIT [CURSOR] for direct dependency edges. |
 | `init` | `[--codex EXE --model MODEL [--effort EFFORT] [--writer-model MODEL] [--writer-effort EFFORT] [--reviewer-model MODEL] [--reviewer-effort EFFORT] [--auth-source PATH] [--state-root PATH] [--validate-writer-edits]]` | Create a fake configuration or a complete Codex role configuration without overwriting an existing file; validate-writer-edits opts into same-turn anchored edit validation. |
-| `doctor` | `` | Validate configuration and committed Git identity; dispatch no runtime. |
+| `doctor` | `` | Validate configuration and committed Git identity; report configured roles, verification readiness and memory observation without runtime dispatch. |
 | `diff` | `[RUN]` | Show the current isolated candidate diff, including non-ignored untracked files with coverage metadata, without applying or dispatching work. |
+| `observe-format` | `RUN MANIFEST_JSON CACHE_DIR` | Record a bounded local Go formatting artifact for one confirmed candidate; this never satisfies verification, review, repair or READY. |
 | `plan` | `OBJECTIVE or --file PATH` | Create a plan from exact objective text or a bounded UTF-8 file using the explicitly configured runtime and access profile. |
 | `status` | `` | List validated local run IDs, workflow/lifecycle states and plan IDs without input or evidence bodies. |
 | `inspect` | `[RUN] [--export-jsonl]` | Replay one run and show its bound inputs and state, or export its validated canonical event history. |
+| `diagnose` | `RUN [--anchor [--previous REPORT_JSON] \| --closure \| --spectrum SPECTRUM_JSON]` | Project repair findings and admitted scope; optionally validate current bytes, relocate prior code hints, inspect closure receipts or rank supplied per-test Go coverage, without dispatch or retry authority. |
+| `repair-context` | `RUN SPECTRUM_JSON [--task TASK_ID]` | Admit bounded untrusted coverage localization before freezing a ready repair writer context; no dispatch, retry or closure authority. |
+| `evidence-value` | `RUN REQUEST_JSON or RUN --template` | Evaluate a bounded snapshot-bound finite evidence model and known resource costs; recommend or stop without dispatch, retry or acceptance authority. |
+| `checkpoint` | `RUN` | Emit a payload-free checkpoint with exact source/candidate/graph identity, completed tasks, gate status, uncertainty counts and a bounded acceptance conclusion. |
 | `resume` | `[RUN] [ACTOR NONCE] or --autonomous [RUN]` | Resume planning, explicitly reopen a settled pause with ACTOR and NONCE, or continue one bounded autonomous run without resending uncertain work. |
 | `approve` | `RUN PLAN ACTOR` | Approve one exact plan with an explicit human actor. |
-| `run` | `RUN or --autonomous [--prepare-only] [--max-repairs N] [--max-parallel N] [--parallel-writers] OBJECTIVE or --file PATH` | Create or validate an approved run's isolated writer worktree, or create and advance a bounded autonomous coding run; parallel-writers opts into up to two independent initial implementation tasks; prepare-only returns after graph and workspace confirmation. |
+| `run` | `RUN or --autonomous [--prepare-only \| --inspect-plan] [--agent-context=true\|false] [--dynamic-explorers] [--working-context] [--repair-intelligence] [--context-selector rrf-coverage-v1] [--max-repairs N] [--max-parallel N] [--parallel-writers \| --isolated-writers --isolation-policy PATH \| --isolated-writer-waves --isolation-policy PATH \| --isolated-writer-staged --isolation-policy PATH [--cohort-selector lexicographic-v1\|coupling-aware-v1\|observed-coupling-v1]] [--evidence-policy PATH] [--planner-context source-bounded-v1\|go-source-context-v1\|go-source-context-v2\|go-contract-context-v1\|go-contract-context-v2\|go-contract-context-v3] [--planner-context-ri-executable PATH --planner-context-ri-executable-sha256 SHA256] [--planner-context-parse-cache] [--planner-ppr] [--prompt-recipe cache-prefix-v1] OBJECTIVE or --file PATH` | Create or validate an approved run's isolated writer worktree, or create and advance a bounded autonomous coding run; pinned Go planner contexts require an explicit absolute parser path and lowercase SHA-256; planner-context-parse-cache is a versioned local RI optimization for supported Go contexts; planner-ppr opts go-source-context-v2 planning into bounded Personalized PageRank hints over the admitted graph (requires pinned RI); contract-context-v3 adds bounded source-bound generator ownership evidence without executing generators or widening write scope; parallel-writers opts into up to two independent initial implementation tasks; isolated-writers requires a versioned resource policy and creates a resource-bounded initial cohort in separate worktrees; isolated-writer-waves requires the same policy and runs up to eight initial implementations in serial resource-bounded waves with one parent aggregate; isolated-writer-staged requires the same policy and runs dependent hub-to-leaf staged cohorts each forked from its exact parent candidate with one aggregate per stage; cohort-selector lexicographic-v1 opts staged runs into the exact finite lexicographic wave optimum over the same hard gates, and coupling-aware-v1 opts staged runs into the typed C1-C4 optimum with the C4 hard gate under plan-graph-v9 (absent preserves the frozen greedy derivation; rejected for every other writer mode); isolated modes and parallel-writers are exclusive; evidence-policy opts a new serial graph run into one automatic finite source acquisition before the initial writer and is frozen at creation; prompt-recipe opts into cache-prefix-v1 request ordering; repair-intelligence opts new runs into bounded structured fixer evidence from recorded task context; context-selector opts bounded task context into experimental rrf-coverage-v1 ranking (empty preserves legacy selection); agent-context binds committed scope-aware instructions and role-selected skills (enabled for new runs); dynamic-explorers opts into dynamic Codex explorer execution; working-context enables that executor plus experimental bounded editable notes (both disabled by default); prepare-only returns after graph and workspace confirmation; inspect-plan omits the objective and reports effective capabilities and resource estimates without creating a run or dispatching. |
 | `reconcile` | `RUN` | Observe unknown local commit, RI import/publication, workspace or file effects without retrying writes. |
 | `ri prepare-import` | `RUN PLAN_JSON` | Validate an import plan and return its exact effect approval target. |
 | `ri import` | `RUN PLAN_JSON INTENT_ID ACTOR` | Execute an exactly authorized, journaled local SCIP import. |
@@ -90,7 +108,7 @@ Use `harness [--root PATH] COMMAND`. Output is canonical JSON except help, aggre
 | `prepare-recovery` | `RUN` | Preview recognized partial writes as a fresh recovery approval target. |
 | `recover-files` | `RUN PREVIEW_JSON INTENT_ID ACTOR` | Explicitly approve cleanup and completion of recognized partial writes. |
 
-`harness help` shows commands; `harness reference` regenerates this file.
+`fabric help` shows commands; `fabric reference` regenerates this file.
 Errors exit 1; success exits 0. Workspaces and exact approved file proposals are
 implemented, with journaled verification and Codex planning. GitHub effects follow.
 `reconcile` observes UNKNOWN workspace/file state without retrying writes.

@@ -4,14 +4,73 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/config"
 	"harness.local/engorch/internal/control"
 	"harness.local/engorch/internal/hostenvironment"
+	"harness.local/engorch/internal/memoryadmission"
 	"harness.local/engorch/internal/repository"
 )
+
+func TestDoctorMemoryObservationDoesNotGrantAdmission(t *testing.T) {
+	for _, observation := range []memoryadmission.Observation{
+		{Status: memoryadmission.ObservationUnavailable, Reason: "unavailable"},
+		{Status: memoryadmission.ObservationObserved, Source: memoryadmission.SourceWindowsGlobal, AvailableMiB: 4096, TotalMiB: 8192},
+	} {
+		resources := doctorMemoryResources(observation)
+		if resources["live_memory_pressure"] != observation.Status || resources["memory_admission"] != "NOT_ADMITTED" || resources["worker_memory_usage"] != "NOT_MEASURED" {
+			t.Fatal("doctor upgraded memory observation to admission or worker measurement", resources)
+		}
+	}
+}
+
+func TestInspectPlanPreservesStateAndRejectsParserSubstitution(t *testing.T) {
+	root := autonomousCLIFixture(t)
+	raw := mustExecuteCLI(t, root, "run", "--autonomous", "--inspect-plan")
+	var report map[string]any
+	if err := json.Unmarshal(raw, &report); err != nil || report["runtime_dispatch"] != "NOT_RUN" {
+		t.Fatalf("invalid read-only report: %s %v", raw, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".harness")); !os.IsNotExist(err) {
+		t.Fatalf("inspection created run state: %v", err)
+	}
+	parser := filepath.Join(t.TempDir(), "parser.exe")
+	if err := os.WriteFile(parser, []byte("not-the-pinned-parser"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	err := Execute(context.Background(), []string{"run", "--autonomous", "--inspect-plan", "--planner-context", "go-contract-context-v3", "--planner-context-ri-executable", parser, "--planner-context-ri-executable-sha256", strings.Repeat("a", 64)}, root, &out)
+	if err == nil || out.Len() != 0 {
+		t.Fatal("inspection accepted substituted parser", err)
+	}
+}
+
+func TestDoctorExecutionPlanShowsUnavailableChecksWithoutEffects(t *testing.T) {
+	root := t.TempDir()
+	identity := repository.Identity{Version: 1, Name: "fixture", Root: root, CommonDir: root, ObjectFormat: "sha1", Commit: strings.Repeat("a", 40), Tree: strings.Repeat("b", 40)}
+	cfg, err := config.Parse([]byte(config.Example))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Verification = []config.Check{{Name: "missing", Argv: []string{"fabric-doctor-missing-check-93752"}, TimeoutSeconds: 10}, {Name: "available", Argv: []string{"git", "--version"}, TimeoutSeconds: 10}}
+	plan, err := doctorExecutionPlan(identity, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks := plan["verification_checks"].([]map[string]string)
+	if checks[0]["readiness"] != "UNAVAILABLE" || checks[1]["readiness"] != "AVAILABLE_NOT_RUN" || plan["provider_qualification"] != "NOT_RUN" {
+		t.Fatalf("doctor upgraded readiness to executed evidence: %+v", plan)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("doctor created state: %v %v", entries, err)
+	}
+}
 
 func TestCreationUsesConfiguredHostPolicy(t *testing.T) {
 	policy := control.DefaultHostPolicy()

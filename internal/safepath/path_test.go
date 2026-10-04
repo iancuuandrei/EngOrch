@@ -1,8 +1,10 @@
 package safepath
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -57,5 +59,37 @@ func TestSymlinkEscapeWhenPermitted(t *testing.T) {
 	defer r.Close()
 	if err := Check(r, "link/file", true); err == nil {
 		t.Fatal("link traversal admitted")
+	}
+}
+
+func TestEnsureDirectoryConcurrentCreatorsRevalidateExistingDirectory(t *testing.T) {
+	root := t.TempDir()
+	const rounds = 16
+	const callers = 32
+	for round := 0; round < rounds; round++ {
+		name := fmt.Sprintf("round-%d/nested", round)
+		start := make(chan struct{})
+		errs := make(chan error, callers)
+		var group sync.WaitGroup
+		for caller := 0; caller < callers; caller++ {
+			group.Add(1)
+			go func() {
+				defer group.Done()
+				<-start
+				errs <- EnsureDirectory(root, name)
+			}()
+		}
+		close(start)
+		group.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatalf("concurrent directory creation failed: %v", err)
+			}
+		}
+		info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil || !info.IsDir() {
+			t.Fatalf("concurrent directory was not created as a directory: info=%v err=%v", info, err)
+		}
 	}
 }

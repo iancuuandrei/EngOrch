@@ -1,0 +1,49 @@
+{
+  "schema": "fabric-muse-go-humanize-acceptance.v1",
+  "observed_utc": "2026-10-04T12:09:31.694794+00:00",
+  "run_id": "d8aa29c9c6fcb8ea26480806f11a1b5891377faaaccb3ce898b43bcde54e6019",
+  "status": "PASS",
+  "state": "READY",
+  "task": "go-humanize",
+  "base_commit": "a1b4e66b9a6d890e9e15e7091cf16c8032367d6e",
+  "fabric_base_source": "272395dcddda4d945e40408e9078d63c5dcf3fc9",
+  "fabric_dirty_custom_build": true,
+  "fabric_binary_sha256": "6d8374337999cf3ee0096804a138dc26b5dc733b888df726818cd9cab07669ee",
+  "config_sha256": "3f91f6c0f439f13804ffac8c9a5f9e43115996db36c7a5fe3c51e8e14e34b5a4",
+  "candidate_id": "26475286232442f9eac6ef93bc46892e92a300f99ff3fd0ce5a2c5810a7b5146",
+  "files_hash": "4d004b4977c11d1fd1e125858a034733304892e50f9223ebd5a4d287e8ba6f3b",
+  "roles_model": "muse-spark-1.3-contributor",
+  "observed_models": [
+    "muse-spark-1.3-contributor"
+  ],
+  "runtime": "opencode-http",
+  "endpoint": "https://opencode.ai/zen/go/v1/responses",
+  "provider_calls": 8,
+  "provider_receipts": 8,
+  "role_calls": {
+    "planner": 1,
+    "reviewer": 3,
+    "writer": 4
+  },
+  "usage": {
+    "input_tokens": 244969,
+    "cache_read_tokens": 144392,
+    "output_tokens": 20923,
+    "reasoning_tokens": 18387
+  },
+  "uncached_input_tokens": 100577,
+  "cost_micro_usd": null,
+  "native": "PASS",
+  "review": "APPROVE",
+  "review_findings": 0,
+  "heldout": "PASS",
+  "heldout_fixture_sha256": "8402e2584a029fcca0a1751be2445d476947ae4e773a2e6a81b0ece058a480ff",
+  "controller_events_sha256": "1f4e91b8c0109c29aeb46ee00169f863af8ff19f38704252b2fcf9e983fec0ec",
+  "all_agent_observations": [
+    "succeeded",
+    "succeeded",
+    "succeeded"
+  ],
+  "no_prior_effect_resend": true,
+  "qualification_scope": "one bounded public coding task; not general model, fixed-six or release qualification; later source additions not covered by this binary"
+}

@@ -1,8 +1,16 @@
-# EngOrch Codex integration
+# Fabric Codex integration
 
 This local plugin packages a thin Agent Skill around the existing harness CLI.
 It does not embed Codex internals, implement orchestration, install a runtime or
 grant approval. The same harness binary remains usable from a shell or CI.
+
+The product executable is `fabric`; `harness` is a compatibility name and this
+integration retains its existing directory identity. For current autonomous
+engineering, RI/context, isolated writers, caches, model allocation and
+checkpoint capabilities, see the
+[capability guide](../../../docs/guides/features.md) and
+[source-build workflow](../../../docs/guides/autonomous-task.md). Product CLI
+qualification does not establish plugin installation or Codex UI qualification.
 
 The current skill supports planning, inspection, exact plan approval, recovery,
 and durable pause/resume/cancel requests through implemented CLI commands.

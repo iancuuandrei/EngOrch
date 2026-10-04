@@ -12,10 +12,16 @@ import (
 	"harness.local/engorch/internal/runtime"
 )
 
+// ToolOutputVersionUTF8First selects the compact read-page representation for
+// threads started with the current source/candidate tool descriptions.
+const ToolOutputVersionUTF8First = 1
+
 // Intent binds the invocation and workspace before any provider thread creation.
 type Intent struct {
 	Invocation runtime.Invocation `json:"invocation"`
 	Directory  string             `json:"directory"`
+	// Omitted is the v1 legacy result shape, preserving already-started threads.
+	ToolOutputVersion int `json:"tool_output_version,omitempty"`
 }
 
 // State is derived exclusively from validated durable events.
@@ -39,6 +45,12 @@ type State struct {
 	UsageFailure   string              `json:"usage_failure,omitempty"`
 	usageTracker   *codexusage.Tracker
 
+	Compaction            *CompactionSummary `json:"compaction,omitempty"`
+	compactionItems       map[string]*compactionItemState
+	compactionEvents      int
+	compactionUnknown     bool
+	compactionUnknownTurn string
+
 	NotificationStreamComplete bool                       `json:"notification_stream_complete,omitempty"`
 	TerminalResponse           *TerminalResponseTelemetry `json:"terminal_response,omitempty"`
 	RouteEvidence              *RouteEvidence             `json:"route_evidence,omitempty"`
@@ -57,10 +69,12 @@ type State struct {
 	TurnID                     string                     `json:"turn_id"`
 	TurnStatus                 string                     `json:"turn_status"`
 	Result                     *runtime.Result            `json:"result"`
-	RouteResumePending         bool                       `json:"route_resume_pending,omitempty"`
-	RouteResumes               int                        `json:"route_resumes,omitempty"`
-	RouteObserved              *codexrpc.ThreadSettings   `json:"route_observed,omitempty"`
-	RouteFailure               string                     `json:"route_failure,omitempty"`
+	// SemanticResult retains completed output independently of accounting admission.
+	SemanticResult     *runtime.Result          `json:"semantic_result,omitempty"`
+	RouteResumePending bool                     `json:"route_resume_pending,omitempty"`
+	RouteResumes       int                      `json:"route_resumes,omitempty"`
+	RouteObserved      *codexrpc.ThreadSettings `json:"route_observed,omitempty"`
+	RouteFailure       string                   `json:"route_failure,omitempty"`
 }
 
 // RouteFailureEvidence retains the classification and any actual response.
@@ -72,8 +86,29 @@ type RouteFailureEvidence struct {
 
 // TurnResult binds admitted output to the recorded provider turn.
 type TurnResult struct {
-	TurnID string         `json:"turn_id"`
-	Result runtime.Result `json:"result"`
+	TurnID                string         `json:"turn_id"`
+	Result                runtime.Result `json:"result"`
+	CompactionUnavailable bool           `json:"compaction_unavailable,omitempty"`
+}
+
+const degradedResultVersion = 1
+
+// SemanticTurnResult can mark diagnostic compaction capture as unavailable
+// without changing the retained provider output or accounting fields.
+type SemanticTurnResult struct {
+	TurnID                string         `json:"turn_id"`
+	Result                runtime.Result `json:"result"`
+	CompactionUnavailable bool           `json:"compaction_unavailable,omitempty"`
+}
+
+// DegradedTurnResult admits an identity-valid semantic result when optional
+// usage metadata is unavailable. It never authorizes missing required usage.
+type DegradedTurnResult struct {
+	Version               int            `json:"version"`
+	TurnID                string         `json:"turn_id"`
+	Result                runtime.Result `json:"result"`
+	UsageReason           string         `json:"usage_reason"`
+	CompactionUnavailable bool           `json:"compaction_unavailable,omitempty"`
 }
 
 // TurnStatus preserves observed provider lifecycle separately from output admission.
@@ -88,6 +123,10 @@ func replay(events []journal.Event) (State, error) {
 		switch e.Kind {
 		case "runtime.usage-baseline", "runtime.usage-start", "runtime.usage-raw", "runtime.usage-normalized", "runtime.usage-blocked", "runtime.usage-interrupt-intent":
 			if err := s.usageEvent(e.Kind, e.Payload); err != nil {
+				return s, err
+			}
+		case "runtime.compaction-item", "runtime.compaction-unknown":
+			if err := s.compactionEvent(e.Kind, e.Payload); err != nil {
 				return s, err
 			}
 		case "runtime.stream-terminal":
@@ -182,12 +221,14 @@ func replay(events []journal.Event) (State, error) {
 			if err := canonical.Decode(e.Payload, &intent); err != nil {
 				return s, err
 			}
-			i, err := runtime.NewInvocation(intent.Invocation.Profile, intent.Invocation.Input)
-			if err != nil {
+			if err := intent.Invocation.Validate(); err != nil {
 				return s, err
 			}
-			if intent.Invocation.Version != 1 || i.ID != intent.Invocation.ID || i.Profile.Runtime != "codex-app-server" || !filepath.IsAbs(intent.Directory) {
+			if intent.Invocation.Version != 1 || intent.Invocation.Profile.Runtime != "codex-app-server" || !filepath.IsAbs(intent.Directory) {
 				return s, errors.New("invalid runtime intent")
+			}
+			if intent.ToolOutputVersion != 0 && intent.ToolOutputVersion != ToolOutputVersionUTF8First {
+				return s, errors.New("unsupported runtime tool output version")
 			}
 			s.Intent = &intent
 		case "runtime.thread":
@@ -198,7 +239,7 @@ func replay(events []journal.Event) (State, error) {
 			if err := canonical.Decode(e.Payload, &thread); err != nil {
 				return s, err
 			}
-			if err := thread.Validate(s.Intent.Invocation.Profile, s.Intent.Directory); err != nil {
+			if err := thread.ValidateInvocation(s.Intent.Invocation, s.Intent.Directory); err != nil {
 				return s, err
 			}
 			s.Thread = &thread
@@ -235,6 +276,16 @@ func replay(events []journal.Event) (State, error) {
 			if s.ToolTurnID != "" && s.ToolTurnID != turn.ID {
 				return s, errors.New("tool request turn differs from dispatch receipt")
 			}
+			for _, item := range s.compactionItems {
+				if item.turnID != turn.ID {
+					// Notifications may arrive before turn/start's response. Preserve
+					// the metadata, but make a response mismatch explicitly unknown.
+					s.compactionUnknown = true
+				}
+			}
+			if s.compactionUnknownTurn != "" && s.compactionUnknownTurn != turn.ID {
+				s.compactionUnknown = true
+			}
 			s.TurnID = turn.ID
 		case "runtime.turn-status":
 			if s.TurnID == "" || s.Result != nil || s.PendingTool != nil {
@@ -256,12 +307,27 @@ func replay(events []journal.Event) (State, error) {
 				return s, errors.New("terminal provider state changed")
 			}
 			s.TurnStatus = observed.Status
-		case "runtime.result":
-			if s.TurnID == "" || s.Result != nil || s.RouteResumePending || s.RouteFailure != "" || s.UsagePending != nil || s.UsageFailure != "" {
+		case "runtime.result", "runtime.semantic-result", "runtime.result-degraded":
+			semanticOnly := e.Kind == "runtime.semantic-result"
+			degraded := e.Kind == "runtime.result-degraded"
+			if s.TurnID == "" || s.Result != nil || s.RouteResumePending || s.RouteFailure != "" ||
+				semanticOnly && s.SemanticResult != nil || !semanticOnly && !degraded && (s.UsagePending != nil || s.UsageFailure != "") {
 				return s, errors.New("runtime result transition rejected")
 			}
 			var receipt TurnResult
-			if err := canonical.Decode(e.Payload, &receipt); err != nil {
+			var semanticReceipt SemanticTurnResult
+			var degradedReceipt DegradedTurnResult
+			if semanticOnly {
+				if err := canonical.Decode(e.Payload, &semanticReceipt); err != nil {
+					return s, err
+				}
+				receipt = TurnResult{TurnID: semanticReceipt.TurnID, Result: semanticReceipt.Result}
+			} else if degraded {
+				if err := canonical.Decode(e.Payload, &degradedReceipt); err != nil {
+					return s, err
+				}
+				receipt = TurnResult{TurnID: degradedReceipt.TurnID, Result: degradedReceipt.Result}
+			} else if err := canonical.Decode(e.Payload, &receipt); err != nil {
 				return s, err
 			}
 			if receipt.TurnID != s.TurnID || s.TurnStatus != "completed" {
@@ -277,8 +343,56 @@ func replay(events []journal.Event) (State, error) {
 			if (result.ObservedEffort == nil) != (s.Thread.Effort == nil) || result.ObservedEffort != nil && *result.ObservedEffort != *s.Thread.Effort {
 				return s, errors.New("result effort observation substituted")
 			}
+			if semanticOnly {
+				if result.Usage.Accounting != nil || result.Usage.InputTokens != nil || result.Usage.OutputTokens != nil || result.Usage.CostMinorUnits != nil {
+					return s, errors.New("semantic retention cannot claim accounting")
+				}
+				s.SemanticResult = &result
+				if semanticReceipt.CompactionUnavailable {
+					s.compactionUnknown = true
+					s.compactionUnknownTurn = s.TurnID
+				}
+				continue
+			}
+			if degraded {
+				if degradedReceipt.Version != degradedResultVersion || s.UsagePolicy == nil || s.UsagePolicy.Version != 1 || s.UsagePolicy.Required || s.UsageFailure == "BUDGET_EXHAUSTED" ||
+					(degradedReceipt.UsageReason != "USAGE_UNAVAILABLE" && degradedReceipt.UsageReason != "USAGE_OBSERVATION_UNAVAILABLE") ||
+					result.Usage.Accounting != nil || result.Usage.InputTokens != nil || result.Usage.OutputTokens != nil || result.Usage.CostMinorUnits != nil ||
+					(s.UsagePending == nil && s.UsageFailure == "" && degradedReceipt.UsageReason != "USAGE_OBSERVATION_UNAVAILABLE") ||
+					(s.UsagePending != nil && degradedReceipt.UsageReason != "USAGE_UNAVAILABLE") ||
+					(s.UsageFailure != "" && degradedReceipt.UsageReason != "USAGE_UNAVAILABLE") {
+					return s, errors.New("degraded result lacks an optional usage failure binding")
+				}
+				if degradedReceipt.UsageReason == "USAGE_OBSERVATION_UNAVAILABLE" {
+					s.UsageReceipt = nil
+				}
+				if err := s.validateUsageResult(result); err != nil {
+					return s, err
+				}
+				if err := validateSemanticResultMatch(s.SemanticResult, result); err != nil {
+					return s, err
+				}
+				s.Result = &result
+				if degradedReceipt.CompactionUnavailable {
+					s.compactionUnknown = true
+					s.compactionUnknownTurn = s.TurnID
+				}
+				if s.UsageFailure == "" && s.UsagePending == nil {
+					s.UsageFailure = "USAGE_OBSERVATION_UNAVAILABLE"
+				}
+				continue
+			}
 			if err := s.validateUsageResult(result); err != nil {
 				return s, err
+			}
+			if s.SemanticResult != nil {
+				if err := validateSemanticResultMatch(s.SemanticResult, result); err != nil {
+					return s, err
+				}
+			}
+			if receipt.CompactionUnavailable {
+				s.compactionUnknown = true
+				s.compactionUnknownTurn = s.TurnID
 			}
 			s.Result = &result
 		default:
@@ -310,7 +424,25 @@ func replay(events []journal.Event) (State, error) {
 			s.ExecutionOutcome = s.TurnStatus
 		}
 	}
+	s.finalizeCompactionSummary()
 	return s, nil
+}
+
+func validateSemanticResultMatch(retained *runtime.Result, result runtime.Result) error {
+	if retained == nil {
+		return errors.New("degraded result lacks retained semantic output")
+	}
+	semantic := result
+	semantic.Usage = retained.Usage
+	retainedID, err := canonical.Hash("runtime.semantic-result.v1", *retained)
+	if err != nil {
+		return err
+	}
+	acceptedID, err := canonical.Hash("runtime.semantic-result.v1", semantic)
+	if err != nil || acceptedID != retainedID {
+		return errors.New("accepted result differs from retained semantic output")
+	}
+	return nil
 }
 
 // Inspect validates the runtime journal before returning continuation handles.

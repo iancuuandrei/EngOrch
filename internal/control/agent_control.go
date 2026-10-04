@@ -21,7 +21,7 @@ func SpawnExplorerAgent(ctx context.Context, controllerPath, schedulerPath, pare
 	if err != nil {
 		return agenttree.Node{}, taskscheduler.DynamicTask{}, err
 	}
-	_, task, contextHash, err := prepareExplorerAgentTurn(ctx, controllerPath, question, turnID)
+	_, task, contextHash, err := prepareExplorerAgentTurn(ctx, controllerPath, question, turnID, "")
 	if err != nil {
 		return agenttree.Node{}, taskscheduler.DynamicTask{}, err
 	}
@@ -53,7 +53,7 @@ func FollowUpExplorerAgent(ctx context.Context, controllerPath, schedulerPath st
 	if err != nil {
 		return agentcontrol.MessageRecord{}, taskscheduler.DynamicTask{}, err
 	}
-	_, task, _, err := prepareExplorerAgentTurn(ctx, controllerPath, question, turnID)
+	_, task, _, err := prepareExplorerAgentTurn(ctx, controllerPath, question, turnID, request.ToAgentID)
 	if err != nil {
 		return agentcontrol.MessageRecord{}, taskscheduler.DynamicTask{}, err
 	}
@@ -64,7 +64,7 @@ func FollowUpExplorerAgent(ctx context.Context, controllerPath, schedulerPath st
 	return service.FollowUpTurn(ctx, request, task)
 }
 
-func prepareExplorerAgentTurn(ctx context.Context, controllerPath, question, turnID string) (Snapshot, taskscheduler.TaskSpec, string, error) {
+func prepareExplorerAgentTurn(ctx context.Context, controllerPath, question, turnID, agentID string) (Snapshot, taskscheduler.TaskSpec, string, error) {
 	if ctx == nil || ctx.Err() != nil {
 		if ctx == nil {
 			return Snapshot{}, taskscheduler.TaskSpec{}, "", errors.New("agent scheduling context required")
@@ -81,6 +81,15 @@ func prepareExplorerAgentTurn(ctx context.Context, controllerPath, question, tur
 	if err := requireCurrentHostAdmission(ctx, snapshot); err != nil {
 		return Snapshot{}, taskscheduler.TaskSpec{}, "", err
 	}
+	if managedExplorerDispatchEnabled(snapshot) {
+		if err := maybeAdmitTaskContext(ctx, controllerPath, "explorer", question); err != nil {
+			return Snapshot{}, taskscheduler.TaskSpec{}, "", err
+		}
+		snapshot, err = Inspect(controllerPath)
+		if err != nil {
+			return Snapshot{}, taskscheduler.TaskSpec{}, "", err
+		}
+	}
 	task, err := PrepareDynamicScheduledTask(controllerPath, taskscheduler.OperationExplorer, question, turnID)
 	if err != nil {
 		return Snapshot{}, taskscheduler.TaskSpec{}, "", err
@@ -89,10 +98,11 @@ func prepareExplorerAgentTurn(ctx context.Context, controllerPath, question, tur
 	if err != nil {
 		return Snapshot{}, taskscheduler.TaskSpec{}, "", err
 	}
-	invocation, err := scheduledTurnInvocation(base, taskscheduler.OperationExplorer, turnID)
-	if err != nil || invocation.ID != task.InvocationID {
+	invocation, err := scopedExplorerContextInvocation(snapshot, base, turnID, agentID, "")
+	if err != nil {
 		return Snapshot{}, taskscheduler.TaskSpec{}, "", errors.Join(errors.New("explorer turn invocation changed"), err)
 	}
+	task.InvocationID = invocation.ID
 	contextHash, err := access.InputID(invocation.Input)
 	if err != nil {
 		return Snapshot{}, taskscheduler.TaskSpec{}, "", err

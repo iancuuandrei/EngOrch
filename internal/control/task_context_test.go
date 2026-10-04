@@ -34,7 +34,11 @@ func boundedTaskCreation(t *testing.T, maxRepairs int) Creation {
 
 func boundedTaskFixture(t *testing.T, files map[string]string) (string, Snapshot) {
 	t.Helper()
-	c := boundedTaskCreation(t, 2)
+	return boundedTaskFixtureWithCreation(t, boundedTaskCreation(t, 2), files)
+}
+
+func boundedTaskFixtureWithCreation(t *testing.T, c Creation, files map[string]string) (string, Snapshot) {
+	t.Helper()
 	root := c.Repository.Root
 	git := func(args ...string) {
 		t.Helper()
@@ -67,7 +71,12 @@ func boundedTaskFixture(t *testing.T, files map[string]string) (string, Snapshot
 	if err := Append(p, "planning.started", struct{}{}); err != nil {
 		t.Fatal(err)
 	}
-	inv, err := plannerInvocation(c.Config, c.Objective)
+	var inv runtime.Invocation
+	if c.Execution != nil && c.Execution.PromptRecipe != "" {
+		inv, err = plannerInvocationWithContextAndRecipe(c.Config, c.Objective, nil, c.Execution)
+	} else {
+		inv, err = plannerInvocation(c.Config, c.Objective)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +100,62 @@ func boundedTaskFixture(t *testing.T, files map[string]string) (string, Snapshot
 		t.Fatal(err)
 	}
 	return p, s
+}
+
+func TestTaskContextAdmissionOmitsProtectedWorkflowWithPromptRecipe(t *testing.T) {
+	c := boundedTaskCreation(t, 2)
+	c.Execution.PromptRecipe = promptRecipeCachePrefixV1
+	p, s := boundedTaskFixtureWithCreation(t, c, map[string]string{
+		".github/workflows/ci.yml": "name: ci\n",
+		"internal/example.go":      "package example\n\nfunc Value() int { return 7 }\n",
+	})
+
+	record, err := AdmitTaskContext(context.Background(), p, "writer", s.Creation.Objective)
+	if err != nil {
+		t.Fatalf("bounded writer context admission failed: %v", err)
+	}
+	candidateID, err := s.Candidate.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Role != "writer" || record.CandidateID != candidateID || record.ManifestID == "" || record.QueryHash != taskContextQueryHash(s.Creation.Objective) {
+		t.Fatalf("writer context binding is incomplete: %#v", record)
+	}
+	foundGo := false
+	foundWorkflowOmission := false
+	for _, selected := range record.Manifest.Selected {
+		if selected.Path == "internal/example.go" && strings.Contains(selected.Content, "func Value") {
+			foundGo = true
+		}
+		if selected.Path == ".github/workflows/ci.yml" {
+			t.Fatal("protected workflow content was selected")
+		}
+	}
+	for _, omission := range record.Manifest.Omissions {
+		if omission.Path == ".github/workflows/ci.yml" && omission.Reason == "unreadable" {
+			foundWorkflowOmission = true
+		}
+	}
+	if !foundGo || !foundWorkflowOmission {
+		t.Fatalf("expected eligible Go source and explicit workflow omission: selected=%#v omissions=%#v", record.Manifest.Selected, record.Manifest.Omissions)
+	}
+
+	invocation, err := PrepareWriterInvocation(p)
+	if err != nil {
+		t.Fatalf("writer invocation did not reuse admitted context: %v", err)
+	}
+	input := taskContextInputOf(t, invocation)
+	encoded, err := json.Marshal(input["task_context"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bound TaskContextRecord
+	if err := canonical.Decode(encoded, &bound); err != nil {
+		t.Fatalf("writer task context is not canonical: %v", err)
+	}
+	if bound.QueryHash != record.QueryHash || bound.ManifestID != record.ManifestID {
+		t.Fatal("cache-prefix writer invocation did not preserve its exact query and manifest binding")
+	}
 }
 
 func taskContextInputOf(t *testing.T, inv runtime.Invocation) map[string]any {

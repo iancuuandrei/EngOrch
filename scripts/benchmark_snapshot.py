@@ -32,7 +32,9 @@ def main():
         args.request = args.request.resolve(strict=True)
         request_hash = hashlib.sha256(args.request.read_bytes()).hexdigest()
         command.append(str(args.request))
-    stdout, stderr, process_ns, peak_memory = sample_command(command, root, timeout=300)
+    process_resources = {}
+    stdout, stderr, process_ns, peak_memory = sample_command(
+        command, root, timeout=300, resource_metrics=process_resources)
     if stderr or len(stdout) > 1 << 20:
         raise ValueError("unexpected snapshot benchmark output")
     datasets = json.loads(stdout)
@@ -58,6 +60,9 @@ def main():
                       "request_sha256": request_hash,
                       "whole_process_ns": process_ns,
                       "whole_process_peak_memory_bytes": peak_memory,
+                      "process_resources": process_resources or None,
+                      "resource_scope": "measured process only; excludes child processes",
+                      "io_metric": "Windows process I/O accounting includes non-disk I/O",
                       "memory_scope": "Windows peak working set across all datasets, warmups and phases; null elsewhere",
                       "limitations": ["compiler metadata is host rustc, not embedded build attestation",
                                       "five samples do not establish tail latency",

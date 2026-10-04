@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -459,7 +460,7 @@ func TestExactRepairRestartBoundaryVerifiesBeforeNewSlot(t *testing.T) {
 	verifiesBefore := countJournalKind(t, path, "verification.planned")
 	repairsBefore := countJournalKind(t, path, "autonomous.repair-started")
 	_, err = RunAutonomous(context.Background(), path)
-	if err == nil || !strings.Contains(err.Error(), "repair bound") {
+	if !errors.Is(err, ErrAutonomousRepairBudget) {
 		t.Fatalf("expected exhausted repair bound after verifying repair, got %v", err)
 	}
 	if countJournalKind(t, path, "verification.planned") != verifiesBefore+1 {
@@ -477,7 +478,7 @@ func TestExhaustedRepairBudgetReturnsBoundWithoutNewSlot(t *testing.T) {
 	}
 	before := countJournalKind(t, path, "autonomous.repair-started")
 	_, err := RunAutonomous(context.Background(), path)
-	if err == nil || !strings.Contains(err.Error(), "repair bound") {
+	if !errors.Is(err, ErrAutonomousRepairBudget) {
 		t.Fatalf("expected repair bound, got %v", err)
 	}
 	if countJournalKind(t, path, "autonomous.repair-started") != before {
@@ -518,7 +519,7 @@ func TestRepairNoProgressIsRejected(t *testing.T) {
 	}
 	before := countJournalKind(t, path, "autonomous.repair-started")
 	_, err = RunAutonomous(context.Background(), path)
-	if err == nil || !strings.Contains(err.Error(), "no candidate progress") {
+	if !errors.Is(err, ErrAutonomousNoProgress) {
 		t.Fatalf("expected no-progress rejection, got %v", err)
 	}
 	if countJournalKind(t, path, "autonomous.repair-started") != before {
@@ -621,7 +622,7 @@ func TestPendingVerificationAndUnknownGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 	observedBefore := countJournalKind(t, path, "verification.observed")
-	if _, err := RunAutonomous(context.Background(), path); err == nil || !strings.Contains(strings.ToLower(err.Error()), "pending") {
+	if _, err := RunAutonomous(context.Background(), path); err == nil || !errors.Is(err, ErrAutonomousReconciliation) {
 		t.Fatalf("pending verification resent: %v", err)
 	}
 	if countJournalKind(t, path, "verification.observed") != observedBefore {
@@ -682,7 +683,7 @@ func TestContextCancellationStopsPromptly(t *testing.T) {
 		t.Fatal(err)
 	}
 	headBefore := eventsBefore[len(eventsBefore)-1].Hash
-	if _, err := RunAutonomous(ctx, path); err == nil || !(strings.Contains(strings.ToLower(err.Error()), "cancel") || strings.Contains(strings.ToLower(err.Error()), "context")) {
+	if _, err := RunAutonomous(ctx, path); err == nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled context not honored: %v", err)
 	}
 	eventsAfter, err := journal.Read(path)

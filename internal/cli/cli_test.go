@@ -104,6 +104,29 @@ func TestLocalPlanApprovalAndResume(t *testing.T) {
 	if !bytes.Equal(exported, run("inspect", s.RunID, "--export-jsonl")) {
 		t.Fatal("read-only export changed history")
 	}
+	var diagnosis control.RepairDiagnosis
+	if err := json.Unmarshal(run("diagnose", s.RunID), &diagnosis); err != nil {
+		t.Fatal(err)
+	}
+	if diagnosis.RunID != s.RunID || diagnosis.Authority != "advisory_only" || len(diagnosis.Findings) != 0 {
+		t.Fatal("planning run acquired invented findings", diagnosis)
+	}
+	if !bytes.Equal(exported, run("inspect", s.RunID, "--export-jsonl")) {
+		t.Fatal("diagnosis appended controller events")
+	}
+	if err := json.Unmarshal(run("diagnose", s.RunID, "--anchor"), &diagnosis); err != nil || diagnosis.AnchoringStatus != "unavailable" {
+		t.Fatal("missing workspace erased the base diagnosis", err)
+	}
+	if !bytes.Equal(exported, run("inspect", s.RunID, "--export-jsonl")) {
+		t.Fatal("anchored diagnosis appended controller events")
+	}
+	var closure control.RepairClosureReport
+	if err := json.Unmarshal(run("diagnose", s.RunID, "--closure"), &closure); err != nil || closure.RunID != s.RunID || closure.Accepted || len(closure.Findings) != 0 {
+		t.Fatal("planning run acquired invented closure", err)
+	}
+	if !bytes.Equal(exported, run("inspect", s.RunID, "--export-jsonl")) {
+		t.Fatal("closure inspection appended controller events")
+	}
 	var paused control.Snapshot
 	if err := json.Unmarshal(run("pause", s.RunID, "fixture-human", "pause-1"), &paused); err != nil || paused.Lifecycle.Status != control.LifecyclePauseRequested {
 		t.Fatal("pause request missing", err)
@@ -144,6 +167,8 @@ func TestLocalPlanApprovalAndResume(t *testing.T) {
 	if workspace.WorkspaceOutcome != "CONFIRMED" || workspace.Workspace == nil {
 		t.Fatal("workspace not admitted")
 	}
+	checkRepairSpectrumCLI(t, workspace, run)
+	checkEvidenceValueCLI(t, workspace, run)
 	changesPath := filepath.Join(root, "changes.json")
 	if err := os.WriteFile(changesPath, []byte(`[{"path":"added.txt","before_hash":null,"content_base64":"aGVsbG8K","executable":false}]`), 0600); err != nil {
 		t.Fatal(err)
@@ -373,5 +398,16 @@ func TestReferenceIsCurrent(t *testing.T) {
 	}
 	if string(b) != Reference() {
 		t.Fatal("regenerate CLI reference with harness reference")
+	}
+}
+
+func TestCheckpointCommandIsRegistered(t *testing.T) {
+	var out bytes.Buffer
+	err := Execute(context.Background(), []string{"checkpoint"}, t.TempDir(), &out)
+	if err == nil || err.Error() != "checkpoint requires one run ID" {
+		t.Fatalf("checkpoint command was not routed to its handler: %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("invalid checkpoint invocation emitted output: %s", out.String())
 	}
 }

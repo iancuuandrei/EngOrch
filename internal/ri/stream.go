@@ -18,14 +18,15 @@ import (
 // Stream owns one pinned RI process. Calls are sequential; transport failures
 // terminate the session and are never retried. Close must be called by its owner.
 type Stream struct {
-	gate    chan struct{}
-	cancel  context.CancelFunc
-	input   io.WriteCloser
-	output  io.ReadCloser
-	command *exec.Cmd
-	done    chan struct{}
-	once    sync.Once
-	next    uint32
+	gate         chan struct{}
+	cancel       context.CancelFunc
+	input        io.WriteCloser
+	output       io.ReadCloser
+	command      *exec.Cmd
+	done         chan struct{}
+	once         sync.Once
+	next         uint32
+	producerHash string
 }
 
 // OpenStream starts a pinned process with an empty inherited environment except
@@ -64,7 +65,7 @@ func (c Client) OpenStream(ctx context.Context) (*Stream, error) {
 		cancel()
 		return nil, err
 	}
-	s := &Stream{gate: make(chan struct{}, 1), cancel: cancel, input: input, output: output, command: command, done: make(chan struct{}), next: 1}
+	s := &Stream{gate: make(chan struct{}, 1), cancel: cancel, input: input, output: output, command: command, done: make(chan struct{}), next: 1, producerHash: c.ExecutableHash}
 	go func() { _ = command.Wait(); close(s.done) }()
 	return s, nil
 }

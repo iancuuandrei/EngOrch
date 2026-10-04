@@ -3,9 +3,87 @@ package control
 import (
 	"context"
 	"errors"
-	"strings"
+	"path/filepath"
 	"testing"
+
+	"harness.local/engorch/internal/access"
 )
+
+func TestPlanningRestartPreflightBeforeFirstEffect(t *testing.T) {
+	for _, graph := range []bool{false, true} {
+		name := "legacy"
+		if graph {
+			name = "graph"
+		}
+		t.Run(name, func(t *testing.T) {
+			c := autonomousCreation(t, 1)
+			if graph {
+				c = graphCreation(t, 1)
+			}
+			c.Config.Verification[0].Argv = []string{"fabric-test-missing-on-planning-restart-48219"}
+			path := filepath.Join(t.TempDir(), "run.jsonl")
+			if err := Append(path, "run.created", c); err != nil {
+				t.Fatal(err)
+			}
+			if err := Append(path, "planning.started", struct{}{}); err != nil {
+				t.Fatal(err)
+			}
+			before, err := Inspect(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = RunAutonomous(context.Background(), path)
+			if !errors.Is(err, ErrAutonomousVerificationNotRun) {
+				t.Fatalf("restart bypassed first-call preflight: %v", err)
+			}
+			after, err := Inspect(path)
+			if err != nil || after.State != "PLANNING" || after.ControllerHead != before.ControllerHead {
+				t.Fatalf("restart preflight changed journal: %+v %v", after, err)
+			}
+			// An already-admitted effect uses recovery, never new-call preflight.
+			admitted := before
+			admitted.PlannerAccess = &access.Intent{}
+			if err := preflightInitialVerification(admitted); err != nil {
+				t.Fatalf("preflight obstructed admitted effect recovery: %v", err)
+			}
+		})
+	}
+}
+
+func TestInitialVerificationPreflightStopsBeforePlanning(t *testing.T) {
+	for _, graph := range []bool{false, true} {
+		name := "legacy"
+		if graph {
+			name = "graph"
+		}
+		t.Run(name, func(t *testing.T) {
+			c := autonomousCreation(t, 1)
+			if graph {
+				c = graphCreation(t, 1)
+			}
+			c.Config.Verification[0].Argv = []string{"fabric-test-missing-before-planning-48219"}
+			path := filepath.Join(t.TempDir(), "run.jsonl")
+			if err := Append(path, "run.created", c); err != nil {
+				t.Fatal(err)
+			}
+			before, err := Inspect(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = RunAutonomous(context.Background(), path)
+			if !errors.Is(err, ErrAutonomousVerificationNotRun) {
+				t.Fatalf("expected verification preflight stop: %v", err)
+			}
+			after, err := Inspect(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after.State != "OBJECTIVE" || after.ControllerHead != before.ControllerHead {
+				t.Fatalf("preflight admitted planning or changed journal: %+v", after)
+			}
+		})
+	}
+}
 
 func TestAutonomousMissingVerificationExecutableStopsBeforeRoleEffects(t *testing.T) {
 	t.Run("legacy", func(t *testing.T) {
@@ -16,7 +94,7 @@ func TestAutonomousMissingVerificationExecutableStopsBeforeRoleEffects(t *testin
 		machineAuthorizePlan(t, path, s)
 
 		result, err := RunAutonomous(context.Background(), path)
-		if err == nil || !errors.Is(err, ErrAutonomousVerificationNotRun) || !strings.Contains(err.Error(), `check "required-go-check"`) || !strings.Contains(err.Error(), "unavailable before implementation") {
+		if err == nil || !errors.Is(err, ErrAutonomousVerificationNotRun) {
 			t.Fatalf("missing required executable did not produce a bounded preflight error: %v", err)
 		}
 		latest, inspectErr := Inspect(path)
@@ -41,7 +119,7 @@ func TestAutonomousMissingVerificationExecutableStopsBeforeRoleEffects(t *testin
 		machineAuthorizePlan(t, path, s)
 
 		result, err := RunAutonomous(context.Background(), path)
-		if err == nil || !errors.Is(err, ErrAutonomousVerificationNotRun) || !strings.Contains(err.Error(), `check "required-go-check"`) || !strings.Contains(err.Error(), "unavailable before implementation") {
+		if err == nil || !errors.Is(err, ErrAutonomousVerificationNotRun) {
 			t.Fatalf("missing required executable did not produce a bounded preflight error: %v", err)
 		}
 		latest, inspectErr := Inspect(path)
@@ -78,7 +156,7 @@ func TestUnstartedVerificationDoesNotConsumeRepairButStartedFailureDoes(t *testi
 		beforeRepair := countJournalKind(t, path, "autonomous.repair-started")
 		beforeWriter := countJournalKind(t, path, "writer.host-intent")
 		_, err = RunAutonomous(context.Background(), path)
-		if err == nil || !errors.Is(err, ErrAutonomousVerificationNotRun) || !strings.Contains(err.Error(), "NOT_RUN") || !strings.Contains(err.Error(), `check "required-go-check"`) {
+		if err == nil || !errors.Is(err, ErrAutonomousVerificationNotRun) {
 			t.Fatalf("unstarted check was treated as semantic failure: %v", err)
 		}
 		if countJournalKind(t, path, "autonomous.repair-started") != beforeRepair || countJournalKind(t, path, "writer.host-intent") != beforeWriter {

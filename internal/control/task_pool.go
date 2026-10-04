@@ -142,9 +142,12 @@ func settleProviderDispatchTaskPool(controllerPath string, c config.Config, runI
 	if err != nil {
 		return err
 	}
-	selected, err := ResolveProviderRouting(c, runID, invocation.Profile.Role, inputHash, 1, invocation.Profile)
+	selected, err := resolveProviderRouting(c, runID, invocation.Profile.Role, inputHash, 1, int64(len(invocation.Input)), receipt.RoutingDecision, invocation.Profile)
 	if err != nil || selected.Intent.Reservation.InvocationID != receipt.AccessInvocationID {
 		return errors.Join(errors.New("task pool settlement route changed"), err)
+	}
+	if !sameCanonical(selected.Intent.RoutingDecision, receipt.RoutingDecision) {
+		return errors.New("task pool settlement routing evidence changed")
 	}
 	return settleProviderTaskPool(controllerPath, c, runID, selected.Intent, receipt)
 }

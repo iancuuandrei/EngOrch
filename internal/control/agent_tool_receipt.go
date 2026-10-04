@@ -242,7 +242,7 @@ func (v *agentToolReceiptVerifier) verifySpawn(arguments, raw json.RawMessage, c
 	node, nodeOK := agentNodeByID(tree, output.AgentID)
 	dynamic, dynamicOK := scheduledDynamicTurn(scheduled, output.TurnID)
 	base, invocationErr := explorerInvocation(controller, args.Question)
-	invocation, scopeErr := scheduledTurnInvocation(base, taskscheduler.OperationExplorer, turnID)
+	invocation, scopeErr := scopedExplorerContextInvocation(controller, base, turnID, "", dynamic.Task.InvocationID)
 	contextHash, contextErr := access.InputID(invocation.Input)
 	wantNodeID, nodeIDErr := agentToolNodeID(controller.RunID, v.binding.Node.AgentID, args.Name, "explorer", agenttree.AuthorityReadOnly, invocation.ID, contextHash)
 	if err != nil || invocationErr != nil || scopeErr != nil || contextErr != nil || nodeIDErr != nil || output.AgentID != wantNodeID || output.ParentAgentID != v.binding.Node.AgentID || output.TurnID != turnID || output.TaskID != turnID || !nodeOK || node.ParentAgentID != v.binding.Node.AgentID || node.Name != args.Name || node.Role != "explorer" || node.Authority != agenttree.AuthorityReadOnly || node.InvocationID != invocation.ID || node.ContextSHA256 != contextHash || !dynamicOK || dynamic.AgentID != node.AgentID || dynamic.ParentAgentID != v.binding.Node.AgentID || dynamic.TurnSequence != output.TurnSequence || dynamic.Task.ID != turnID || dynamic.Task.RunID != controller.RunID || dynamic.Task.Operation != taskscheduler.OperationExplorer || dynamic.Task.Input != args.Question || dynamic.Task.InvocationID != invocation.ID || dynamic.Task.ControllerPath != v.controllerPath {
@@ -324,7 +324,7 @@ func (v *agentToolReceiptVerifier) verifyFollowUp(arguments, raw json.RawMessage
 	turnID, err := agentcontrol.ExplorerFollowUpTurnID(controller.RunID, request)
 	dynamic, ok := scheduledDynamicTurn(scheduled, output.TurnID)
 	base, invocationErr := explorerInvocation(controller, args.Body)
-	invocation, scopeErr := scheduledTurnInvocation(base, taskscheduler.OperationExplorer, turnID)
+	invocation, scopeErr := scopedExplorerContextInvocation(controller, base, turnID, args.AgentID, dynamic.Task.InvocationID)
 	if err != nil || invocationErr != nil || scopeErr != nil || output.TurnID != turnID || output.TaskID != turnID || !ok || dynamic.AgentID != args.AgentID || dynamic.ParentAgentID != v.binding.Node.AgentID || dynamic.TurnSequence != output.TurnSequence || dynamic.Task.ID != turnID || dynamic.Task.RunID != controller.RunID || dynamic.Task.ControllerPath != v.controllerPath || dynamic.Task.Operation != taskscheduler.OperationExplorer || dynamic.Task.Input != args.Body || dynamic.Task.InvocationID != invocation.ID {
 		return errors.Join(errors.New("follow-up scheduled evidence differs"), err, invocationErr, scopeErr)
 	}

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+	"time"
 
 	"harness.local/engorch/internal/contextbroker"
 	"harness.local/engorch/internal/contextmcp"
@@ -22,6 +23,10 @@ func TestProviderCompositeRequiresScheduleAndRecoveryCannotCallTools(t *testing.
 
 func TestProviderCompositeRecoveryPreservesLegacyZeroQueue(t *testing.T) {
 	testProviderCompositeRecoveryQueue(t, 0)
+}
+
+func TestProviderCompositeRecoveryPreservesV2QueueBinding(t *testing.T) {
+	testProviderCompositeRecoveryQueue(t, 32)
 }
 
 func testProviderCompositeRecoveryQueue(t *testing.T, recordedQueue int) {
@@ -45,7 +50,7 @@ func testProviderCompositeRecoveryQueue(t *testing.T, recordedQueue int) {
 		t.Fatal(err)
 	}
 	ctx = withScheduledAgentTurn(ctx, claim.AgentTurn)
-	binding, err := contextbroker.NewBinding(invocation.ID, snapshot.Creation.Repository, nil, contextbroker.Limits{MaxCalls: 4, MaxRequestBytes: 4096, MaxResponseBytes: contextmcp.MaxContentBytes, MaxTotalResponseBytes: 1 << 20})
+	binding, err := contextbroker.NewBinding(invocation.ID, snapshot.Creation.Repository, nil, contextbroker.Limits{MaxCalls: contextmcp.InvocationToolCallBudget, MaxRequestBytes: 4096, MaxResponseBytes: contextmcp.MaxContentBytes, MaxTotalResponseBytes: 1 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +68,7 @@ func testProviderCompositeRecoveryQueue(t *testing.T, recordedQueue int) {
 	if err != nil || config == nil || receipts == nil || verify == nil {
 		t.Fatal("exact caller rejected", err)
 	}
-	if config.MaxQueuedCalls != compositeToolQueueLimit || receipts.MaxQueuedCalls != compositeToolQueueLimit || receipts.QueuePolicy != "serial-fifo-v1" || receipts.Version != 2 {
+	if config.MaxQueuedCalls != compositeToolQueueLimit || receipts.MaxQueuedCalls != compositeToolQueueLimit || receipts.QueuePolicy != "serial-fifo-v2" || receipts.Version != 3 || receipts.QueueWaitMillis != int64(compositeToolQueueLimit)*int64(contextmcp.RecorderOwnedBridgeCallTimeout/time.Millisecond) || receipts.CallbackTimeoutMillis != int64(contextmcp.RecorderOwnedBridgeCallTimeout/time.Millisecond) {
 		t.Fatal("fresh composite queue is not durably bound")
 	}
 	if recordedQueue == 0 {
@@ -72,6 +77,12 @@ func testProviderCompositeRecoveryQueue(t *testing.T, recordedQueue int) {
 			t.Fatal(err)
 		}
 		receipts = &legacy
+	} else if recordedQueue == 32 {
+		legacyQueue, err := contextmcp.PrepareRecorderBindingWithQueue(broker, invocation.ID, config.CallerBindingSHA256, config.AgentProjection, recordedQueue)
+		if err != nil {
+			t.Fatal(err)
+		}
+		receipts = &legacyQueue
 	}
 	names := make([]string, len(receipts.Tools))
 	for i, tool := range receipts.Tools {
@@ -94,7 +105,7 @@ func testProviderCompositeRecoveryQueue(t *testing.T, recordedQueue int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recovered.MaxQueuedCalls != recordedQueue || recoveredBinding.BindingID != receipts.BindingID {
+	if recovered.MaxQueuedCalls != recordedQueue || recovered.QueueWaitTimeout != time.Duration(receipts.QueueWaitMillis)*time.Millisecond || recovered.CallbackTimeout != time.Duration(receipts.CallbackTimeoutMillis)*time.Millisecond || recoveredBinding.BindingID != receipts.BindingID {
 		t.Fatal("recovery changed recorded queue policy")
 	}
 	if _, err := recovered.AgentProjection.Call(ctx, toolbridge.Call{RequestID: []byte(`1`), Tool: "list_agents", Arguments: []byte(`{}`)}); !errors.Is(err, opencoderuntime.ErrRecoveryRequired) {

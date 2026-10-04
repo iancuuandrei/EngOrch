@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
+	"time"
 
 	"harness.local/engorch/internal/contextbroker"
 	"harness.local/engorch/internal/toolbridge"
@@ -33,6 +34,11 @@ func NewOwned(broker *contextbroker.Broker, bearer string, observe toolbridge.Ob
 // serial FIFO waiting queue. The served catalog and owner proof are identical
 // to NewOwned; only simultaneous-call transport admission changes.
 func NewOwnedWithQueue(broker *contextbroker.Broker, bearer string, observe toolbridge.ObserveFunc, maxQueuedCalls int) (*OwnedServer, error) {
+	return NewOwnedWithQueueDeadlines(broker, bearer, observe, maxQueuedCalls, 0, ContextCallTimeout)
+}
+
+// NewOwnedWithQueueDeadlines is the owned form of NewWithQueueDeadlines.
+func NewOwnedWithQueueDeadlines(broker *contextbroker.Broker, bearer string, observe toolbridge.ObserveFunc, maxQueuedCalls int, queueWaitTimeout, callTimeout time.Duration) (*OwnedServer, error) {
 	if broker == nil {
 		return nil, errors.New("durable context broker required")
 	}
@@ -40,7 +46,7 @@ func NewOwnedWithQueue(broker *contextbroker.Broker, bearer string, observe tool
 	if err != nil {
 		return nil, err
 	}
-	server, err := NewWithQueue(broker, bearer, observe, maxQueuedCalls)
+	server, err := NewWithQueueDeadlines(broker, bearer, observe, maxQueuedCalls, queueWaitTimeout, callTimeout)
 	if err != nil {
 		return nil, err
 	}

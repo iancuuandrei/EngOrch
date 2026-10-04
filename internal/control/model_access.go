@@ -7,6 +7,9 @@ import (
 	"harness.local/engorch/internal/runtime"
 )
 
+// ErrUsageQualification denies new calls whose enforced accounting is unqualified.
+var ErrUsageQualification = errors.New("Codex usage accounting requires qualification")
+
 // codexRuntimeUsagePolicy projects the immutable, role-scoped access
 // reservation into a Codex adapter. UsageQualified is operator preflight
 // evidence recorded in configuration; it is not an automatic capability proof.
@@ -26,8 +29,8 @@ func codexRuntimeUsagePolicy(s Snapshot, role string) (budget int64, requireLive
 	if c.RequireLiveUsage && budget <= 0 && !unlimited {
 		return 0, false, false, false, errors.New("strict Codex live usage requires an authorized token reservation")
 	}
-	if c.RequireLiveUsage && !c.UsageQualified {
-		return 0, false, false, false, errors.New("strict Codex live usage requires operator qualification")
+	if (c.RequireLiveUsage || budget > 0) && !c.UsageQualified {
+		return 0, false, false, false, ErrUsageQualification
 	}
 	return budget, c.RequireLiveUsage, c.UsageQualified, unlimited, nil
 }
@@ -36,12 +39,12 @@ func codexRuntimeUsagePolicy(s Snapshot, role string) (budget int64, requireLive
 // exact runtime invocation. It is pure derivation: callers must separately
 // persist the intent before dispatch and record a terminal receipt afterward.
 func deriveModelAccessIntent(s Snapshot, invocation runtime.Invocation, attempt int) (access.Intent, error) {
-	exact, err := runtime.NewInvocation(invocation.Profile, invocation.Input)
-	if err != nil {
+	if err := invocation.Validate(); err != nil {
 		return access.Intent{}, err
 	}
-	if invocation != exact {
-		return access.Intent{}, errors.New("runtime invocation identity mismatch")
+	routingDecision, err := modelRoutingDecisionForInvocation(s, invocation)
+	if err != nil {
+		return access.Intent{}, err
 	}
 
 	configured, err := s.Creation.Config.Route(invocation.Profile.Role)
@@ -107,11 +110,12 @@ func deriveModelAccessIntent(s Snapshot, invocation runtime.Invocation, attempt 
 		return access.Intent{}, err
 	}
 	intent := access.Intent{
-		Attempt:     attempt,
-		PolicyID:    policyID,
-		InputHash:   inputID,
-		Route:       selected,
-		ModelChoice: modelChoice,
+		Attempt:         attempt,
+		PolicyID:        policyID,
+		InputHash:       inputID,
+		Route:           selected,
+		ModelChoice:     modelChoice,
+		RoutingDecision: routingDecision,
 		Reservation: access.Reservation{
 			Tokens:          limit.Tokens,
 			UnlimitedTokens: limit.UnlimitedTokens,

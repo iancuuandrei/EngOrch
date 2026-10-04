@@ -2,6 +2,12 @@
 
 Standalone Go helper (package main) for Fabric v1 evaluation acceptance.
 
+The separate v1.0.25 Sol High cohort used this candidate-bound path for seven
+accepted tasks. A blocked or unreviewed candidate remains ineligible; the
+godotenv failure was not copied or counted as accepted. See the
+[current evaluation status](../README.md) and
+[capability guide](../../../docs/guides/features.md).
+
 - Inputs: `--snapshot <bounded candidate-copy projection JSON> --expected-candidate <64hex reviewed digest> --destination <fresh absolute external path>`.
 - Decodes the runner's strict six-field projection (`run_id`, `state`, `workspace`, `candidate`, `verification`, and explicit `review`, including `null`) through `canonical.Decode`, then maps those values into the existing control snapshot validation path. It requires `Candidate.ID() == expected == verification.plan.candidate_id`, READY state, non-pending full-PASS observations, exact workspace binding, and review approval when present. The runner retains the complete inspect snapshot separately for evidence and gates.
 - Holds `worktree.AcquireRead(snapshot.Workspace.Request)` across `Capture`, copy, and final fingerprint; requires actual `Candidate == snapshot.Candidate` before and after; never substitutes another workspace or run.

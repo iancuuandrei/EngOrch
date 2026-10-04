@@ -29,9 +29,13 @@ func RunWriter(ctx context.Context, path string) (WriterRecord, error) {
 	if err := requireCurrentHostAdmission(ctx, s); err != nil {
 		return WriterRecord{}, err
 	}
+	isolatedInitial, err := isolatedInitialWriterForTask(s, graphWriterTaskFromContext(ctx))
+	if err != nil {
+		return WriterRecord{}, err
+	}
 	taskID := graphWriterTaskFromContext(ctx)
-	if taskID != "" && !parallelImplementationEnabled(s) {
-		return WriterRecord{}, errors.New("graph task-bound writer requires the parallel implementation policy")
+	if taskID != "" && !parallelImplementationEnabled(s) && !isolatedImplementationEnabled(s) {
+		return WriterRecord{}, errors.New("graph task-bound writer requires an implementation policy")
 	}
 	if taskID != "" {
 		deactivate := markGraphWriterActive(path, taskID)
@@ -54,7 +58,11 @@ func RunWriter(ctx context.Context, path string) (WriterRecord, error) {
 				return WriterRecord{}, err
 			}
 		}
-		if err := maybeAdmitTaskContext(ctx, path, writerTaskRole(s), question); err != nil {
+		if isolatedInitial {
+			if err := maybeAdmitIsolatedWriterTaskContext(ctx, path, taskID, question); err != nil {
+				return WriterRecord{}, err
+			}
+		} else if err := maybeAdmitTaskContext(ctx, path, writerTaskRole(s), question); err != nil {
 			return WriterRecord{}, err
 		}
 		s, err = Inspect(path)
@@ -64,8 +72,17 @@ func RunWriter(ctx context.Context, path string) (WriterRecord, error) {
 		if err := requireCurrentHostAdmission(ctx, s); err != nil {
 			return WriterRecord{}, err
 		}
+		isolatedInitial, err = isolatedInitialWriterForTask(s, taskID)
+		if err != nil {
+			return WriterRecord{}, err
+		}
 	}
-	invocation, err := writerInvocationForTask(s, taskID)
+	var invocation runtime.Invocation
+	if correction, ok := scheduledRoleCorrectionFromContext(ctx); ok && correction.TaskID == taskID {
+		invocation = correction.Invocation
+	} else {
+		invocation, err = writerInvocationForTask(s, taskID)
+	}
 	if err != nil {
 		return WriterRecord{}, err
 	}
@@ -76,6 +93,9 @@ func RunWriter(ctx context.Context, path string) (WriterRecord, error) {
 	if err := requireExecutableRoleRuntime(invocation.Profile); err != nil {
 		return WriterRecord{}, err
 	}
+	if err := requireModelAccessAdmissionAvailable(s, invocation); err != nil {
+		return WriterRecord{}, err
+	}
 	if taskID == "" && s.WriterProposal != nil && s.WriterProposal.Invocation == invocation {
 		return WriterRecord{}, errors.New("writer proposal already recorded; inspect its provenance rather than dispatch again")
 	}
@@ -83,18 +103,53 @@ func RunWriter(ctx context.Context, path string) (WriterRecord, error) {
 		if _, exists := s.GraphWriterResults[taskID]; exists {
 			return WriterRecord{}, errors.New("graph writer proposal already recorded; inspect its provenance rather than dispatch again")
 		}
-		if invocation.Profile.Runtime != "codex-app-server" {
+		if isolatedInitial {
+			if invocation.Profile.Runtime != "codex-app-server" && invocation.Profile.Runtime != "opencode-http" {
+				return WriterRecord{}, errors.New("isolated graph writers require the Codex app-server or OpenCode runtime")
+			}
+		} else if invocation.Profile.Runtime != "codex-app-server" {
 			return WriterRecord{}, errors.New("parallel graph writers currently require the Codex app-server runtime")
 		}
 	}
 	if invocation.Profile.Runtime == "opencode-http" {
-		result, err := executeOpenCodeRole(ctx, path, s, invocation, "")
+		if taskID == "" {
+			result, err := executeOpenCodeRole(ctx, path, s, invocation, "")
+			if err != nil {
+				return WriterRecord{}, err
+			}
+			return RecordWriterProposal(ctx, path, invocation, result)
+		}
+		if !isolatedInitial {
+			return WriterRecord{}, errors.New("parallel graph writers currently require the Codex app-server runtime")
+		}
+		question, err := graphWriterTaskQuestion(s, taskID)
 		if err != nil {
 			return WriterRecord{}, err
 		}
-		return RecordWriterProposal(ctx, path, invocation, result)
+		binding, err := isolatedWriterBindingForSnapshot(s, taskID)
+		if err != nil {
+			return WriterRecord{}, err
+		}
+		startedAt := time.Now().UTC()
+		result, err := executeIsolatedOpenCodeWriter(ctx, path, taskID, invocation, binding, question)
+		if err != nil {
+			return WriterRecord{}, err
+		}
+		endedAt := time.Now().UTC()
+		proposal, err := prepareIsolatedGraphWriterProposal(ctx, path, taskID, invocation, result)
+		if err != nil {
+			return WriterRecord{}, err
+		}
+		if err := recordIsolatedGraphWriterProposal(path, proposal, observedGraphWriterDispatchTiming(startedAt, endedAt)); err != nil {
+			return WriterRecord{}, err
+		}
+		return WriterRecord{Invocation: invocation, Result: result}, nil
 	}
-	expected, err := expectedWriterHostForTask(s, taskID)
+	hostTaskID := taskID
+	if correction, ok := scheduledRoleCorrectionFromContext(ctx); ok && correction.TaskID == taskID && correction.ScheduledTaskID != "" {
+		hostTaskID = correction.ScheduledTaskID
+	}
+	expected, err := expectedWriterHostForTask(s, hostTaskID)
 	if err != nil {
 		return WriterRecord{}, err
 	}
@@ -113,6 +168,16 @@ func RunWriter(ctx context.Context, path string) (WriterRecord, error) {
 		return RecordWriterProposal(ctx, path, expected.Invocation, result)
 	}
 	endedAt := time.Now().UTC()
+	if isolatedInitial {
+		proposal, err := prepareIsolatedGraphWriterProposal(ctx, path, taskID, expected.Invocation, result)
+		if err != nil {
+			return WriterRecord{}, err
+		}
+		if err := recordIsolatedGraphWriterProposal(path, proposal, observedGraphWriterDispatchTiming(startedAt, endedAt)); err != nil {
+			return WriterRecord{}, err
+		}
+		return WriterRecord{Invocation: expected.Invocation, Result: result}, nil
+	}
 	record, err := prepareGraphWriterFiles(ctx, path, taskID, expected.Invocation, result)
 	if err != nil {
 		return WriterRecord{}, err
@@ -128,14 +193,35 @@ func executeWriter(ctx context.Context, path string, s Snapshot, expected Writer
 }
 
 func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected WriterHostIntent, taskID string) (result runtime.Result, err error) {
+	hostTaskID := taskID
+	if correction, ok := scheduledRoleCorrectionFromContext(ctx); ok && correction.TaskID == taskID && correction.ScheduledTaskID != "" {
+		hostTaskID = correction.ScheduledTaskID
+	}
+	var isolated *isolatedWriterBinding
+	workspace := s.Workspace
+	useIsolated, err := isolatedInitialWriterForTask(s, taskID)
+	if err != nil {
+		return result, err
+	}
+	if useIsolated {
+		binding, bindingErr := isolatedWriterBindingForSnapshot(s, taskID)
+		if bindingErr != nil {
+			return result, bindingErr
+		}
+		isolated = &binding
+		workspace = &binding.Workspace
+	}
+	if workspace == nil {
+		return result, errors.New("writer workspace unavailable")
+	}
 	var lease controllerCandidateLease
 	if taskID == "" {
-		lease, err = worktree.Acquire(s.Workspace.Request)
+		lease, err = worktree.Acquire(workspace.Request)
 	} else {
 		// Opt-in graph writer turns operate against a frozen read-only candidate.
 		// Multiple independent proposals may therefore share candidate reads;
 		// their single aggregate file effect is applied only after all turns end.
-		lease, err = worktree.AcquireRead(s.Workspace.Request)
+		lease, err = worktree.AcquireRead(workspace.Request)
 	}
 	if err != nil {
 		return result, err
@@ -145,8 +231,18 @@ func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected
 	if err != nil {
 		return result, err
 	}
-	s = graphWriterProjectedSnapshot(s, taskID)
-	current, err := expectedWriterHostForTask(s, taskID)
+	s = graphWriterProjectedSnapshotWithHost(s, taskID, hostTaskID)
+	currentIsolated, modeErr := isolatedInitialWriterForTask(s, taskID)
+	if modeErr != nil || currentIsolated != (isolated != nil) {
+		return result, errors.Join(errors.New("writer isolation mode changed before dispatch"), modeErr)
+	}
+	if isolated != nil {
+		currentBinding, bindingErr := isolatedWriterBindingForSnapshot(s, taskID)
+		if bindingErr != nil || !sameCanonical(currentBinding, *isolated) {
+			return result, errors.Join(errors.New("isolated writer binding changed before dispatch"), bindingErr)
+		}
+	}
+	current, err := expectedWriterHostForTask(s, hostTaskID)
 	if err != nil {
 		return result, err
 	}
@@ -164,12 +260,12 @@ func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected
 	}
 	var runtimeRI *codexruntime.RIBinding
 	var runtimeLexical *codexruntime.LexicalBinding
-	lexical, err := roleLexical(s)
+	lexical, err := writerLexicalContext(s, isolated != nil)
 	if err != nil {
 		return result, err
 	}
 	if lexical != nil {
-		binding, err := selectRuntimeLexicalLeased(ctx, path, lexical.Scope == "candidate", *s.Workspace)
+		binding, err := selectRuntimeLexicalLeased(ctx, path, lexical.Scope == "candidate", *workspace)
 		if err != nil {
 			return result, err
 		}
@@ -202,22 +298,33 @@ func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected
 		}
 		runtimeRI = &binding
 	}
-	before, err := observeCandidate(ctx, path, s)
-	if err != nil {
-		return result, err
-	}
-	if s.Candidate == nil || before != *s.Candidate {
-		return result, errors.New("writer base candidate mismatch")
+	var before worktree.Candidate
+	if isolated != nil {
+		before, _, err = worktree.Capture(ctx, *workspace)
+		if err != nil || before != isolated.Candidate {
+			return result, errors.Join(errors.New("isolated writer child candidate mismatch"), err)
+		}
+	} else {
+		before, err = observeCandidate(ctx, path, s)
+		if err != nil {
+			return result, err
+		}
+		if s.Candidate == nil || before != *s.Candidate {
+			return result, errors.New("writer base candidate mismatch")
+		}
 	}
 	if s.WriterHost == nil || s.WriterHost.Intent != expected {
-		if err := appendWriterHostTransition(path, taskID, "writer.host-intent", expected); err != nil {
+		if _, _, _, _, policyErr := codexRuntimeUsagePolicy(s, expected.Invocation.Profile.Role); policyErr != nil {
+			return result, policyErr
+		}
+		if err := appendWriterHostTransition(path, hostTaskID, "writer.host-intent", expected); err != nil {
 			return result, err
 		}
 		s, err = Inspect(path)
 		if err != nil {
 			return result, err
 		}
-		s = graphWriterProjectedSnapshot(s, taskID)
+		s = graphWriterProjectedSnapshotWithHost(s, taskID, hostTaskID)
 	}
 	l := expected.Launch
 	if !s.WriterHost.Ready {
@@ -242,7 +349,7 @@ func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected
 		if err := l.Validate(); err != nil {
 			return result, err
 		}
-		if err := appendWriterHostTransition(path, taskID, "writer.host-ready", expected); err != nil {
+		if err := appendWriterHostTransition(path, hostTaskID, "writer.host-ready", expected); err != nil {
 			return result, err
 		}
 	}
@@ -251,30 +358,47 @@ func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected
 	if readErr != nil && !os.IsNotExist(readErr) {
 		return result, readErr
 	}
+	semanticUsagePending := false
+	if readErr == nil && state.SemanticResult != nil && state.Result == nil {
+		if s.Creation.Config.Version != 2 {
+			return result, errors.New("retained semantic output lacks required usage accounting support")
+		}
+		_, result, _, err = observeSemanticUsagePending(ctx, path, runtimePath, expected.Invocation, "harness.writer-result.v1")
+		if err != nil {
+			return runtime.Result{}, errors.Join(codexruntime.ErrUsageReconciliation, err)
+		}
+		semanticUsagePending = true
+	}
 	if readErr == nil && s.Creation.Config.Version == 2 && state.Result == nil && (state.TurnStatus == "failed" || state.TurnStatus == "interrupted") {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 		_, _, terminalErr := completeModelAccess(cleanupCtx, path, runtimePath, expected.Invocation, "harness.writer-result.v1")
 		cancel()
 		return result, errors.Join(errors.New("writer runtime is terminal without a result"), terminalErr)
 	}
-	if readErr != nil || state.Result == nil {
+	if readErr != nil || state.Result == nil && !semanticUsagePending {
 		usageBudget, requireLiveUsage, usageQualified, unlimitedTokens, policyErr := codexRuntimeUsagePolicy(s, expected.Invocation.Profile.Role)
 		if policyErr != nil {
 			return result, policyErr
 		}
-		candidateBinding := &codexruntime.CandidateBinding{Workspace: *s.Workspace, Candidate: before}
-		if s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV2 && (expected.Invocation.Profile.Role == "writer" || expected.Invocation.Profile.Role == "fixer") {
+		candidateBinding := &codexruntime.CandidateBinding{Workspace: *workspace, Candidate: before}
+		if (s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV2 || s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV3) && (expected.Invocation.Profile.Role == "writer" || expected.Invocation.Profile.Role == "fixer") {
 			candidateBinding.AnchorValidationVersion = candidatetools.AnchorValidationVersion
 		}
-		a := &codexruntime.Adapter{JournalPath: runtimePath, Directory: filepath.Join(l.Root, "workspace"), Source: &s.Creation.Repository, Candidate: candidateBinding, RI: runtimeRI, Lexical: runtimeLexical, UsageBudget: usageBudget, RequireLiveUsage: requireLiveUsage, UsageQualified: usageQualified, UnlimitedTokens: unlimitedTokens}
+		directory := filepath.Join(l.Root, "workspace")
+		threadDirectory := ""
+		if isolated != nil {
+			directory = workspace.Request.Path
+			threadDirectory = directory
+		}
+		a := &codexruntime.Adapter{JournalPath: runtimePath, Directory: directory, Source: &s.Creation.Repository, Candidate: candidateBinding, RI: runtimeRI, Lexical: runtimeLexical, UsageBudget: usageBudget, RequireLiveUsage: requireLiveUsage, UsageQualified: usageQualified, UnlimitedTokens: unlimitedTokens}
 		tools := codexruntime.NewToolSession(ctx, a)
 		defer tools.Close()
-		h, err := startCodexRoleHost(ctx, l, s.Creation.Config.Codex, expected.Invocation.Profile, a.SourceToolsForInvocation(expected.Invocation), tools.HandleTool)
+		h, err := startCodexRoleHostAtThreadDirectory(ctx, l, s.Creation.Config.Codex, expected.Invocation.Profile, a.SourceToolsForInvocation(expected.Invocation), tools.HandleTool, threadDirectory)
 		if err != nil {
 			return result, err
 		}
 		defer func() { err = errors.Join(err, h.Close()) }()
-		if err := appendWriterHostTransition(path, taskID, "writer.host-observed", h.Receipt); err != nil {
+		if err := appendWriterHostTransition(path, hostTaskID, "writer.host-observed", h.Receipt); err != nil {
 			return result, err
 		}
 		if err := h.LoginChatGPT(ctx, s.Creation.Config.Codex.AuthSource); err != nil {
@@ -297,6 +421,18 @@ func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected
 			_, err = a.Resume(ctx, expected.Invocation.ID)
 		}
 		if err != nil {
+			if errors.Is(err, codexruntime.ErrUsageReconciliation) && s.Creation.Config.Version == 2 {
+				_, retained, _, pendingErr := observeSemanticUsagePending(ctx, path, runtimePath, expected.Invocation, "harness.writer-result.v1")
+				if pendingErr == nil {
+					result = retained
+					semanticUsagePending = true
+					err = nil
+				} else {
+					return runtime.Result{}, errors.Join(err, pendingErr)
+				}
+			}
+		}
+		if err != nil {
 			if s.Creation.Config.Version == 2 {
 				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 				_, _, terminalErr := completeModelAccess(cleanupCtx, path, runtimePath, expected.Invocation, "harness.writer-result.v1")
@@ -314,17 +450,21 @@ func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected
 	if err != nil {
 		return result, err
 	}
-	latest = graphWriterProjectedSnapshot(latest, taskID)
+	latest = graphWriterProjectedSnapshotWithHost(latest, taskID, hostTaskID)
 	if latest.WriterHost == nil || latest.WriterHost.Intent != expected || !latest.WriterHost.Ready || latest.WriterHost.Receipt == nil {
 		return result, errors.New("writer host observation missing")
 	}
-	if state.Intent == nil || state.Intent.Invocation != expected.Invocation || state.Intent.Directory != filepath.Join(l.Root, "workspace") || state.Result == nil || state.Thread == nil || state.TurnStatus != "completed" || state.Source == nil || *state.Source != s.Creation.Repository {
+	directory := filepath.Join(l.Root, "workspace")
+	if isolated != nil {
+		directory = workspace.Request.Path
+	}
+	if state.Intent == nil || state.Intent.Invocation != expected.Invocation || state.Intent.Directory != directory || (state.Result == nil && !semanticUsagePending) || state.Thread == nil || state.TurnStatus != "completed" || state.Source == nil || *state.Source != s.Creation.Repository {
 		return result, errors.New("writer runtime evidence incomplete or substituted")
 	}
 	if (state.RI == nil) != (runtimeRI == nil) || (runtimeRI != nil && *state.RI != *runtimeRI) {
 		return result, errors.New("writer runtime RI binding mismatch")
 	}
-	if state.Candidate == nil || state.Candidate.Workspace != *s.Workspace || state.Candidate.Candidate != before {
+	if state.Candidate == nil || state.Candidate.Workspace != *workspace || state.Candidate.Candidate != before {
 		return result, errors.New("writer runtime candidate mismatch")
 	}
 	candidateID, err := before.ID()
@@ -334,41 +474,64 @@ func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected
 	if err := validateRoleLexicalState(s, runtimeLexical, state, candidateID); err != nil {
 		return result, err
 	}
-	if err := state.Thread.Validate(expected.Invocation.Profile, filepath.Join(l.Root, "workspace")); err != nil {
+	if err := state.Thread.Validate(expected.Invocation.Profile, directory); err != nil {
 		return result, err
 	}
-	if err := runtime.ValidateResult(expected.Invocation, *state.Result, true); err != nil {
+	resultValue := state.Result
+	if semanticUsagePending {
+		resultValue = &result
+		if state.SemanticResult == nil || *state.SemanticResult != result {
+			return runtime.Result{}, errors.New("retained writer semantic result changed")
+		}
+	}
+	if resultValue == nil {
+		return runtime.Result{}, errors.New("writer runtime result missing")
+	}
+	if err := runtime.ValidateResult(expected.Invocation, *resultValue, true); err != nil {
 		return result, err
 	}
-	after, err := observeCandidate(ctx, path, s)
+	var after worktree.Candidate
+	if isolated != nil {
+		after, _, err = worktree.Capture(ctx, *workspace)
+		if err != nil || after != before {
+			return result, errors.Join(errors.New("isolated writer child changed during execution"), err)
+		} else {
+			latestBinding, bindingErr := isolatedWriterBindingForSnapshot(latest, taskID)
+			if bindingErr != nil || !sameCanonical(latestBinding, *isolated) {
+				return result, errors.Join(errors.New("isolated writer receipt changed during execution"), bindingErr)
+			}
+		}
+	} else {
+		after, err = observeCandidate(ctx, path, s)
+		if err != nil {
+			return result, err
+		}
+		if after != before {
+			return result, errors.New("writer source changed during execution")
+		}
+	}
+	hash, err := canonical.Hash("harness.writer-result.v1", *resultValue)
 	if err != nil {
 		return result, err
 	}
-	if after != before {
-		return result, errors.New("writer source changed during execution")
-	}
-	hash, err := canonical.Hash("harness.writer-result.v1", *state.Result)
-	if err != nil {
-		return result, err
-	}
-	if s.Creation.Config.Version == 2 {
+	if s.Creation.Config.Version == 2 && !semanticUsagePending {
 		var terminal ModelAccessTerminal
 		latest, terminal, err = completeModelAccess(ctx, path, runtimePath, expected.Invocation, "harness.writer-result.v1")
 		if err != nil {
 			return result, err
 		}
-		latest = graphWriterProjectedSnapshot(latest, taskID)
+		latest = graphWriterProjectedSnapshotWithHost(latest, taskID, hostTaskID)
 		if terminal.Receipt.Status != "completed" || terminal.RuntimeJournalHead != head || terminal.Receipt.OutputHash != hash {
 			return result, errors.New("writer result differs from terminal model access receipt")
 		}
 	}
-	receipt := WriterRuntimeReceipt{expected.Invocation.ID, state.Thread.ThreadID, state.TurnID, head, hash}
+	receipt := WriterRuntimeReceipt{InvocationID: expected.Invocation.ID, ThreadID: state.Thread.ThreadID, TurnID: state.TurnID, JournalHead: head, ResultHash: hash, UsagePending: semanticUsagePending}
 	if latest.WriterHost.RuntimeReceipt == nil {
-		if err := appendWriterHostTransition(path, taskID, "writer.runtime-observed", receipt); err != nil {
+		if err := appendWriterHostTransition(path, hostTaskID, "writer.runtime-observed", receipt); err != nil {
 			return result, err
 		}
 	} else if *latest.WriterHost.RuntimeReceipt != receipt {
 		return result, errors.New("writer runtime journal no longer matches recorded receipt")
 	}
-	return *state.Result, nil
+	return *resultValue, nil
 }

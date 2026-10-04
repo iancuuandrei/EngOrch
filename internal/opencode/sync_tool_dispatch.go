@@ -83,7 +83,13 @@ func appendSynchronousToolDispatch(path, kind string, payload any, broker contex
 // identities before one synchronous POST. It independently validates the final
 // response and a full transcript against the post-call broker journal. Errors
 // are unresolved and must never trigger an automatic resubmission.
-func (c *Client) SubmitSynchronousToolTurn(ctx context.Context, path, brokerPath string, intent SynchronousToolDispatchIntent) (ToolTurnObservation, error) {
+func (c *Client) SubmitSynchronousToolTurn(ctx context.Context, path, brokerPath string, intent SynchronousToolDispatchIntent) (result ToolTurnObservation, failure error) {
+	stage := "preflight"
+	defer func() {
+		if failure != nil {
+			failure = dispatchFailure(stage, failure)
+		}
+	}()
 	if err := requireSynchronousContext(ctx, c); err != nil {
 		return ToolTurnObservation{}, err
 	}
@@ -94,6 +100,7 @@ func (c *Client) SubmitSynchronousToolTurn(ctx context.Context, path, brokerPath
 	if err := validateSynchronousToolIntent(intent, broker, true); err != nil {
 		return ToolTurnObservation{}, err
 	}
+	stage = "intent_record"
 	if err := appendSynchronousToolDispatch(path, "opencode.sync-tool-intent", intent, broker); err != nil {
 		return ToolTurnObservation{}, err
 	}
@@ -101,10 +108,12 @@ func (c *Client) SubmitSynchronousToolTurn(ctx context.Context, path, brokerPath
 	if err != nil {
 		return ToolTurnObservation{}, err
 	}
+	stage = "message_post"
 	response, err := c.request(ctx, http.MethodPost, "/session/"+intent.Dispatch.Binding.SessionID+"/message", body)
 	if err != nil {
 		return ToolTurnObservation{}, err
 	}
+	stage = "response_decode"
 	var returned synchronousResponseObservation
 	if intent.Dispatch.StructuredOutput != nil {
 		returned, err = decodeSynchronousResponseWithStructuredOutput(response, intent.Dispatch.Binding, *intent.Dispatch.StructuredOutput)
@@ -116,6 +125,7 @@ func (c *Client) SubmitSynchronousToolTurn(ctx context.Context, path, brokerPath
 	if err != nil {
 		return ToolTurnObservation{}, err
 	}
+	stage = "broker_validation"
 	broker, err = contextbroker.Inspect(brokerPath)
 	if err != nil {
 		return ToolTurnObservation{}, err
@@ -123,10 +133,12 @@ func (c *Client) SubmitSynchronousToolTurn(ctx context.Context, path, brokerPath
 	if err := validateSynchronousToolIntent(intent, broker, false); err != nil {
 		return ToolTurnObservation{}, err
 	}
+	stage = "transcript_read"
 	transcript, err := c.read(ctx, "/session/"+intent.Dispatch.Binding.SessionID+"/message")
 	if err != nil {
 		return ToolTurnObservation{}, err
 	}
+	stage = "transcript_decode"
 	var observation ToolTurnObservation
 	if intent.Dispatch.StructuredOutput != nil {
 		observation, err = decodeToolTurnWithStructuredOutputAndRuntimeMetadata(transcript, intent.Dispatch.Binding, intent.Dispatch.Text, broker, intent.Dispatch.StructuredOutput, intent.RuntimeMetadata)
@@ -136,9 +148,11 @@ func (c *Client) SubmitSynchronousToolTurn(ctx context.Context, path, brokerPath
 	if err != nil {
 		return ToolTurnObservation{}, err
 	}
+	stage = "response_transcript_match"
 	if !synchronousResponseMatchesToolObservation(returned, observation) {
 		return ToolTurnObservation{}, errors.New("synchronous tool response and transcript differ")
 	}
+	stage = "evidence_record"
 	record := synchronousToolRecord{
 		Response: string(response), Transcript: string(transcript),
 		BrokerBindingID: observation.BrokerBindingID, BrokerCatalogID: intent.BrokerCatalogID,

@@ -14,6 +14,9 @@ import (
 
 const maxJournal = 64 << 20
 
+// ErrLockUnavailable identifies failure to acquire the exclusive journal lock.
+var ErrLockUnavailable = errors.New("journal lock unavailable")
+
 // Event is one integrity-bound record. Payload semantics belong to the controller.
 type Event struct {
 	Version  int             `json:"version"`
@@ -82,7 +85,7 @@ func Replay(data []byte) ([]Event, error) {
 func lock(path string) (func() error, error) {
 	f, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
-		return nil, fmt.Errorf("journal lock: %w", err)
+		return nil, fmt.Errorf("journal lock: %w", errors.Join(ErrLockUnavailable, err))
 	}
 	if err = f.Close(); err != nil {
 		return nil, err

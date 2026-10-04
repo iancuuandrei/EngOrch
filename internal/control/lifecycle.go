@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -112,7 +113,10 @@ func lifecycleStatus(s Snapshot) string {
 // admitLifecycleEvent under the journal lock.
 func RequireDispatchAllowed(s Snapshot) error {
 	if status := lifecycleStatus(s); status != LifecycleActive {
-		return fmt.Errorf("run lifecycle %s blocks new dispatch", status)
+		if status == LifecyclePaused || status == LifecyclePauseRequested {
+			return fmt.Errorf("%w: run lifecycle %s blocks new dispatch", ErrAutonomousPause, status)
+		}
+		return fmt.Errorf("%w: run lifecycle %s blocks new dispatch", context.Canceled, status)
 	}
 	return nil
 }
@@ -151,14 +155,14 @@ func lifecycleControlEvent(kind string) bool {
 
 func lifecycleReconciliationEvent(kind string) bool {
 	switch kind {
-	case "model.access-receipt", "candidate.index-observed",
+	case "model.access-receipt", "model.access-semantic-pending", "candidate.index-observed",
 		"agent.dispatch-observed",
 		"planning.host-ready", "planning.host-observed", "planning.runtime-observed", "planning.provider-observed", "plan.recorded",
 		"explorer.host-ready", "explorer.host-observed", "explorer.runtime-observed", "explorer.recorded",
 		"writer.host-ready", "writer.host-observed", "writer.runtime-observed", "writer.proposed",
 		"graph.writer.host-ready", "graph.writer.host-observed", "graph.writer.runtime-observed", "graph.writer.proposed",
 		"review.host-ready", "review.host-observed", "review.runtime-observed", "review.recorded",
-		"role.provider-observed", "workspace.confirmed", "files.observed",
+		"role.provider-observed", "workspace.confirmed", "graph.isolate-confirmed", "files.observed",
 		"verification.observed", "verification.closed",
 		"commit.observed", "commit.lease-observed",
 		"push.observed", "push.lease-observed",
@@ -311,6 +315,11 @@ func lifecycleUnresolved(s Snapshot) []string {
 	}
 	if s.WorkspaceOutcome == "UNKNOWN" {
 		result = append(result, "workspace")
+	}
+	for taskID, isolation := range s.GraphIsolations {
+		if isolation.Outcome == "UNKNOWN" {
+			result = append(result, "graph-isolation:"+taskID)
+		}
 	}
 	if s.FileOutcome == "UNKNOWN" {
 		result = append(result, "files")

@@ -60,16 +60,50 @@ type Usage struct {
 	CostMinorUnits *int64              `json:"cost_minor_units"`
 }
 
+const (
+	// CodexAutoCompactVersion identifies the thread-start option schema.
+	CodexAutoCompactVersion = 1
+	// MaxCodexAutoCompactTokenLimit bounds configuration input; it is not a
+	// claim about any model's context window.
+	MaxCodexAutoCompactTokenLimit = int64(10_000_000)
+)
+
+// CodexAutoCompactOptions is a versioned per-thread Codex config override.
+// The upper bound limits untrusted/configuration input; it does not describe
+// any model's supported context window.
+type CodexAutoCompactOptions struct {
+	Version    int   `json:"version"`
+	TokenLimit int64 `json:"token_limit"`
+}
+
+// Validate admits only an explicit positive threshold within the bounded
+// configuration range.
+func (o CodexAutoCompactOptions) Validate() error {
+	if o.Version != CodexAutoCompactVersion || o.TokenLimit <= 0 || o.TokenLimit > MaxCodexAutoCompactTokenLimit {
+		return errors.New("invalid Codex auto-compaction options")
+	}
+	return nil
+}
+
 // Invocation binds exact text and requested routing. ID must match its contents.
 type Invocation struct {
-	Version int     `json:"version"`
-	ID      string  `json:"id"`
-	Profile Profile `json:"profile"`
-	Input   string  `json:"input"`
+	Version                    int     `json:"version"`
+	ID                         string  `json:"id"`
+	Profile                    Profile `json:"profile"`
+	Input                      string  `json:"input"`
+	CodexAutoCompactVersion    int     `json:"codex_auto_compact_version,omitempty"`
+	CodexAutoCompactTokenLimit int64   `json:"codex_auto_compact_token_limit,omitempty"`
 }
 
 // NewInvocation constructs an immutable content identity after validation.
 func NewInvocation(p Profile, input string) (Invocation, error) {
+	return NewInvocationWithCodexAutoCompact(p, input, nil)
+}
+
+// NewInvocationWithCodexAutoCompact binds an optional exact Codex thread
+// threshold into the invocation identity. A nil option preserves the legacy
+// identity payload and ID.
+func NewInvocationWithCodexAutoCompact(p Profile, input string, autoCompact *CodexAutoCompactOptions) (Invocation, error) {
 	i := Invocation{Version: 1, Profile: p, Input: input}
 	if err := p.Validate(); err != nil {
 		return i, err
@@ -77,13 +111,47 @@ func NewInvocation(p Profile, input string) (Invocation, error) {
 	if strings.TrimSpace(input) == "" || len(input) > 256<<10 {
 		return i, errors.New("input size invalid")
 	}
+	if autoCompact != nil {
+		if p.Runtime != "codex-app-server" {
+			return i, errors.New("Codex auto-compaction requires the Codex app-server runtime")
+		}
+		if err := autoCompact.Validate(); err != nil {
+			return i, err
+		}
+		i.CodexAutoCompactVersion = autoCompact.Version
+		i.CodexAutoCompactTokenLimit = autoCompact.TokenLimit
+	}
 	id, err := canonical.Hash("harness.invocation.v1", struct {
-		Version int     `json:"version"`
-		Profile Profile `json:"profile"`
-		Input   string  `json:"input"`
-	}{1, p, input})
+		Version          int                      `json:"version"`
+		Profile          Profile                  `json:"profile"`
+		Input            string                   `json:"input"`
+		CodexAutoCompact *CodexAutoCompactOptions `json:"codex_auto_compact,omitempty"`
+	}{1, p, input, autoCompact})
 	i.ID = id
 	return i, err
+}
+
+// Validate checks the invocation's content identity, including any optional
+// runtime-specific thread option.
+func (i Invocation) Validate() error {
+	option := i.CodexAutoCompactOption()
+	expected, err := NewInvocationWithCodexAutoCompact(i.Profile, i.Input, option)
+	if err != nil {
+		return err
+	}
+	if i.Version != 1 || i.ID != expected.ID {
+		return errors.New("runtime invocation identity mismatch")
+	}
+	return nil
+}
+
+// CodexAutoCompactOption returns the immutable optional thread setting in a
+// pointer form for APIs that accept an optional options object.
+func (i Invocation) CodexAutoCompactOption() *CodexAutoCompactOptions {
+	if i.CodexAutoCompactVersion == 0 && i.CodexAutoCompactTokenLimit == 0 {
+		return nil
+	}
+	return &CodexAutoCompactOptions{Version: i.CodexAutoCompactVersion, TokenLimit: i.CodexAutoCompactTokenLimit}
 }
 
 // Result retains exact invocation/profile identity and optional model observation.
@@ -101,11 +169,10 @@ type Result struct {
 // ValidateResult rejects substitution and identity drift. requireObserved is
 // selected by admitted runtime capabilities, never by an untrusted result.
 func ValidateResult(i Invocation, r Result, requireObserved bool) error {
-	expected, err := NewInvocation(i.Profile, i.Input)
-	if err != nil {
+	if err := i.Validate(); err != nil {
 		return err
 	}
-	if i.Version != 1 || i.ID != expected.ID || r.Version != 1 || r.InvocationID != i.ID || r.Requested != i.Profile {
+	if r.Version != 1 || r.InvocationID != i.ID || r.Requested != i.Profile {
 		return errors.New("runtime identity mismatch")
 	}
 	if r.ObservedModel == nil {

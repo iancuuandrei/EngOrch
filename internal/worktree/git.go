@@ -31,7 +31,7 @@ func (b *capture) Write(p []byte) (int, error) {
 }
 
 func command(ctx context.Context, root string, args ...string) *exec.Cmd {
-	argv := []string{"--no-optional-locks", "-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "core.splitIndex=false", "-C", root}
+	argv := []string{"--no-optional-locks", "-c", "core.longpaths=true", "-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "core.splitIndex=false", "-C", root}
 	argv = append(argv, args...)
 	c := gitexec.CommandContext(ctx, argv...)
 	c.WaitDelay = time.Second

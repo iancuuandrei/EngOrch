@@ -18,6 +18,9 @@ type Exploration struct {
 	CandidateID string   `json:"candidate_id"`
 	Summary     string   `json:"summary"`
 	Paths       []string `json:"paths"`
+	// WorkingContextUpdate is optional non-authoritative reasoning retention.
+	// Malformed updates never replace a valid projection or grant authority.
+	WorkingContextUpdate json.RawMessage `json:"working_context_update,omitempty"`
 }
 
 // ExplorerRecord preserves the exact question, invocation and untrusted result.
@@ -62,18 +65,29 @@ func explorerInvocation(s Snapshot, question string) (runtime.Invocation, error)
 		}
 		instruction += " candidate_id MUST exactly match the supplied candidate_id. summary MUST be a single nonempty string, never an object or array. paths MUST be an array of sorted unique relative-path strings."
 	}
-	input, err := canonical.Bytes(struct {
-		OutputSchema json.RawMessage     `json:"output_schema,omitempty"`
-		Instruction  string              `json:"instruction"`
-		RunID        string              `json:"run_id"`
-		PlanID       string              `json:"plan_id"`
-		CandidateID  string              `json:"candidate_id"`
-		Objective    string              `json:"objective"`
-		Question     string              `json:"question"`
-		RI           *roleRIContext      `json:"ri,omitempty"`
-		Lexical      *roleLexicalContext `json:"lexical,omitempty"`
-		TaskContext  *TaskContextRecord  `json:"task_context,omitempty"`
-	}{schema, instruction, s.RunID, s.PlanID, candidateID, s.Creation.Objective, question, intelligence, lexical, taskCtx})
+	instruction = promptRecipeInstruction(s.Creation.Execution, "explorer", s.Creation.Config.ExplorerContract, instruction)
+	scopeReplan, err := scopeReplanDesignContextForQuestion(s, question)
+	if err != nil {
+		return runtime.Invocation{}, err
+	}
+	cohortScopeReplan, err := scopeReplanCohortDesignContextForQuestion(s, question)
+	if err != nil {
+		return runtime.Invocation{}, err
+	}
+	input, err := agentContextPromptBytes(s, "explorer", agentContextTaskForQuestion(s, question), struct {
+		OutputSchema      json.RawMessage                 `json:"output_schema,omitempty"`
+		Instruction       string                          `json:"instruction"`
+		RunID             string                          `json:"run_id"`
+		PlanID            string                          `json:"plan_id"`
+		CandidateID       string                          `json:"candidate_id"`
+		Objective         string                          `json:"objective"`
+		Question          string                          `json:"question"`
+		RI                *roleRIContext                  `json:"ri,omitempty"`
+		Lexical           *roleLexicalContext             `json:"lexical,omitempty"`
+		TaskContext       *TaskContextRecord              `json:"task_context,omitempty"`
+		ScopeReplan       *ScopeReplanDesignContext       `json:"scope_replan,omitempty"`
+		CohortScopeReplan *ScopeReplanCohortDesignContext `json:"cohort_scope_replan,omitempty"`
+	}{schema, instruction, s.RunID, s.PlanID, candidateID, s.Creation.Objective, question, intelligence, lexical, taskCtx, scopeReplan, cohortScopeReplan})
 	if err != nil {
 		return runtime.Invocation{}, err
 	}
@@ -81,7 +95,7 @@ func explorerInvocation(s Snapshot, question string) (runtime.Invocation, error)
 	if err != nil {
 		return runtime.Invocation{}, err
 	}
-	return runtime.NewInvocation(profile, string(input))
+	return runtime.NewInvocationWithCodexAutoCompact(profile, string(input), codexAutoCompactForExecution(s.Creation.Execution, profile))
 }
 
 // PrepareExplorerInvocation binds a read-only question to the configured role and candidate.
@@ -104,7 +118,7 @@ func replayExplorer(s *Snapshot, record ExplorerRecord) error {
 	}
 	if i.Profile.Runtime == "codex-app-server" {
 		host, ok := explorerRunForInvocation(*s, i.ID)
-		if !ok || host.Intent.Invocation != i || host.RuntimeReceipt == nil {
+		if !ok || host.Intent.Invocation != i || host.RuntimeReceipt == nil || host.RuntimeReceipt.FailureCode != "" {
 			return errors.New("explorer runtime receipt required")
 		}
 		hash, err := canonical.Hash("harness.explorer-result.v1", record.Result)
@@ -129,6 +143,12 @@ func replayExplorer(s *Snapshot, record ExplorerRecord) error {
 	var observation Exploration
 	if err := canonical.Decode([]byte(record.Result.Output), &observation); err != nil {
 		return err
+	}
+	if len(observation.WorkingContextUpdate) != 0 {
+		var envelope workingContextTurnEnvelope
+		if !workingContextEnabled(*s) || json.Unmarshal([]byte(i.Input), &envelope) != nil || envelope.ContextVersion != 1 {
+			return errors.New("working context update was not requested")
+		}
 	}
 	candidateID, err := s.Candidate.ID()
 	if err != nil {

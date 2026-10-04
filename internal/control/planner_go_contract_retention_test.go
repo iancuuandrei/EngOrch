@@ -1,0 +1,184 @@
+package control
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"harness.local/engorch/internal/repository"
+)
+
+func TestPlannerGoContractRecordFitsReservesRecordIDBoundary(t *testing.T) {
+	base := PlannerGoContextRecord{Version: 4, Query: "x"}
+	lo, hi := 0, plannerGoContextMaxRecord
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		candidate := base
+		candidate.Query = strings.Repeat("x", mid)
+		if plannerGoContractRecordFits(candidate) {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	fit := base
+	fit.Query = strings.Repeat("x", lo)
+	if !plannerGoContractRecordFits(fit) {
+		t.Fatal("computed fitting record rejected")
+	}
+	tooLarge := base
+	tooLarge.Query = strings.Repeat("x", lo+1)
+	if plannerGoContractRecordFits(tooLarge) {
+		t.Fatal("record above reserved boundary accepted")
+	}
+}
+
+func TestPlannerGoContractRetentionKeepsReplayablePrefix(t *testing.T) {
+	executable := os.Getenv("ENGORCH_RI_BINARY")
+	if executable == "" {
+		t.Skip("ENGORCH_RI_BINARY is required")
+	}
+	binary, err := os.ReadFile(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(binary)
+	c := autonomousCreation(t, 0)
+	c.Execution.PlannerContext = plannerContextGoContractV1
+	c.Execution.PlannerContextRIExecutable = filepath.Clean(executable)
+	c.Execution.PlannerContextRIExecutableSHA256 = hex.EncodeToString(sum[:])
+	autonomousGitInit(t, c.Repository.Root)
+	padding := strings.Repeat("x", 550<<10)
+	for _, name := range []string{"a.go", "b.go"} {
+		if err := os.WriteFile(filepath.Join(c.Repository.Root, name), []byte("package p\n/*"+padding+"*/\nfunc "+strings.TrimSuffix(name, ".go")+"() {}\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{{"add", "."}, {"-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "retention"}} {
+		if out, err := autonomousGitCmd(t, c.Repository.Root, args); err != nil {
+			t.Fatal(err, string(out))
+		}
+	}
+	identity, err := repository.Discover(context.Background(), c.Repository.Root, c.Config.Repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Repository = identity
+	path := filepath.Join(t.TempDir(), "run.jsonl")
+	if err := Append(path, "run.created", c); err != nil {
+		t.Fatal(err)
+	}
+	record, err := AdmitPlannerGoContext(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Unavailable != "" || record.ReadFiles != 1 || record.OmittedCount == 0 || len(record.ContractSources) != 1 {
+		t.Fatalf("retention did not keep a bounded prefix: %#v", record)
+	}
+	snapshot, err := Inspect(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.ModelAccess) != 0 || snapshot.PlannerAccess != nil || snapshot.PlannerProvider != nil || snapshot.WriterProposal != nil {
+		t.Fatal("retention admission created a runtime intent")
+	}
+}
+
+func TestPlannerGoContractUnavailableClearsReplayEvidence(t *testing.T) {
+	full := PlannerGoContextRecord{Version: 4, ReadFiles: 1, Sources: []repository.SourceDigest{{Path: "a.go"}}, ContractSources: []PlannerGoContractSource{{Path: "a.go", Hash: "h", Content: "package a"}}, ContractGenerationSources: []PlannerGoContractSource{{Path: "t", Hash: "h", Content: "t"}}}
+	got := plannerGoContractUnavailable(full, "contract_record_budget")
+	if got.ReadFiles != 0 || len(got.Sources) != 0 || len(got.ContractSources) != 0 || len(got.ContractGenerationSources) != 0 || got.Unavailable != "contract_record_budget" {
+		t.Fatalf("unavailable record retained evidence: %#v", got)
+	}
+}
+
+func TestPlannerGoContractReplayRejectsUnboundGenerationSource(t *testing.T) {
+	c, _, record := admitPlannerGoFixture(t, plannerContextGoContractV1, "Update generated wrapper template", goGenerationFixtureFiles(), "generation replay fixture")
+	if record.Version != 4 || record.GenerationMetadata == nil || len(record.ContractGenerationSources) == 0 {
+		t.Fatal("fixture did not admit generation evidence")
+	}
+	forged := record
+	forged.ContractGenerationSources = append([]PlannerGoContractSource(nil), record.ContractGenerationSources...)
+	extra := "package ignored\nfunc Extra() {}\n"
+	extraHash := sha256.Sum256([]byte(extra))
+	forged.ContractGenerationSources = append(forged.ContractGenerationSources, PlannerGoContractSource{Path: "unbound.go", Hash: hex.EncodeToString(extraHash[:]), Content: extra})
+	var err error
+	forged.RecordID, err = plannerGoContextRecordID(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := filepath.Join(t.TempDir(), "forged-generation.jsonl")
+	if err := Append(bad, "run.created", c); err != nil {
+		t.Fatal(err)
+	}
+	if err := Append(bad, "planner.go-context-admitted", forged); err == nil {
+		t.Fatal("self-rehashed unbound generation source was admitted")
+	}
+}
+
+func goGenerationFixtureFiles() map[string]string {
+	return map[string]string{
+		"bool.go":                           "// Code generated by gen-wrapper. DO NOT EDIT.\npackage sample\ntype Bool struct{}\n",
+		"bool_ext.go":                       "package sample\n//go:generate bin/gen-wrapper -name=Bool -file=bool.go\nfunc (b *Bool) Toggle() {}\n",
+		"internal/gen-wrapper/main.go":      "package main\nimport _ \"embed\"\n//go:embed *.tmpl\nvar template string\nfunc main() {}\n",
+		"internal/gen-wrapper/wrapper.tmpl": "{{define \"type\"}}type Bool struct{}{{end}}\n",
+		"Makefile":                          "GOBIN = $(shell pwd)/bin\nGEN_WRAPPER = $(GOBIN)/gen-wrapper\n$(GEN_WRAPPER): $(wildcard ./internal/gen-wrapper/*)\n\tgo build -o $@ ./internal/gen-wrapper\n",
+	}
+}
+
+func admitPlannerGoFixture(t *testing.T, mode, objective string, files map[string]string, message string) (Creation, string, PlannerGoContextRecord) {
+	t.Helper()
+	executable := os.Getenv("ENGORCH_RI_BINARY")
+	if executable == "" {
+		t.Skip("ENGORCH_RI_BINARY is required")
+	}
+	binary, err := os.ReadFile(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(binary)
+	c := autonomousCreation(t, 0)
+	c.Objective = objective
+	c.Execution.PlannerContext = mode
+	c.Execution.PlannerContextRIExecutable = filepath.Clean(executable)
+	c.Execution.PlannerContextRIExecutableSHA256 = hex.EncodeToString(digest[:])
+	autonomousGitInit(t, c.Repository.Root)
+	for name, content := range files {
+		if filepath.Ext(name) == ".go" {
+			if _, err := parser.ParseFile(token.NewFileSet(), name, content, parser.AllErrors); err != nil {
+				t.Fatalf("invalid Go fixture %q: %v", name, err)
+			}
+		}
+		full := filepath.Join(c.Repository.Root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(full), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{{"add", "."}, {"-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", message}} {
+		if out, err := autonomousGitCmd(t, c.Repository.Root, args); err != nil {
+			t.Fatal(err, string(out))
+		}
+	}
+	c.Repository, err = repository.Discover(context.Background(), c.Repository.Root, c.Config.Repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "run.jsonl")
+	if err := Append(path, "run.created", c); err != nil {
+		t.Fatal(err)
+	}
+	record, err := AdmitPlannerGoContext(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c, path, record
+}

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"strings"
 
-	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/engineeringplan"
 	"harness.local/engorch/internal/fileeffects"
 	"harness.local/engorch/internal/runtime"
@@ -88,17 +87,61 @@ func writerInvocation(s Snapshot) (runtime.Invocation, error) {
 }
 
 func writerInvocationForTask(s Snapshot, taskID string) (runtime.Invocation, error) {
+	base, err := writerInvocationForTaskBase(s, taskID)
+	if err != nil {
+		return runtime.Invocation{}, err
+	}
+	if taskID == "" {
+		return correctedRoleInvocation(s, base), nil
+	}
+	return base, nil
+}
+
+func writerInvocationForTaskBase(s Snapshot, taskID string) (runtime.Invocation, error) {
+	if stagedIsolationEnabled(s) {
+		if s.GraphIsolationPreparation != nil && s.GraphIsolationPreparation.Version == 3 && containsGraphIsolationTask(s.GraphIsolationPreparation.SelectedTaskIDs, taskID) {
+			binding, err := stagedForkBindingForTask(s, taskID)
+			if err != nil {
+				return runtime.Invocation{}, err
+			}
+			return writerInvocationForIsolatedTask(s, binding)
+		}
+		return writerInvocationForTaskLegacy(s, taskID)
+	}
+	isolated, err := isolatedInitialWriterForTask(s, taskID)
+	if err != nil {
+		return runtime.Invocation{}, err
+	}
+	if isolated {
+		binding, err := isolatedWriterBindingForTask(s, taskID)
+		if err != nil {
+			return runtime.Invocation{}, err
+		}
+		return writerInvocationForIsolatedTask(s, binding)
+	}
+	return writerInvocationForTaskLegacy(s, taskID)
+}
+
+func writerInvocationForTaskLegacy(s Snapshot, taskID string) (runtime.Invocation, error) {
+	return writerInvocationBody(s, taskID, nil)
+}
+
+func writerInvocationBody(s Snapshot, taskID string, isolated *isolatedWriterBinding) (runtime.Invocation, error) {
 	if err := filesAllowed(s); err != nil {
 		return runtime.Invocation{}, err
 	}
 	if s.Candidate == nil || s.Plan == nil {
 		return runtime.Invocation{}, errors.New("writer requires an admitted candidate and plan")
 	}
+	candidateState := s.Candidate
+	if isolated != nil {
+		candidateState = &isolated.Candidate
+	}
 	role := "writer"
 	if s.Creation.Config.Version == 2 && s.State == "REPAIRING" {
 		role = "fixer"
 	}
-	candidate, err := s.Candidate.ID()
+	candidate, err := candidateState.ID()
 	if err != nil {
 		return runtime.Invocation{}, err
 	}
@@ -118,25 +161,20 @@ func writerInvocationForTask(s Snapshot, taskID string) (runtime.Invocation, err
 	if err != nil {
 		return runtime.Invocation{}, err
 	}
-	lexical, err := roleLexical(s)
+	lexical, err := writerLexicalContext(s, isolated != nil)
 	if err != nil {
 		return runtime.Invocation{}, err
 	}
-	contextQuestion := s.Creation.Objective
-	if taskID != "" {
-		if s.Graph == nil {
-			return runtime.Invocation{}, errors.New("writer graph task unavailable")
-		}
-		task, ok := s.Graph.Graph.Task(taskID)
-		if !ok {
-			return runtime.Invocation{}, errors.New("writer graph task unavailable")
-		}
-		contextQuestion = fmt.Sprintf("[%s] %s | scope: %s | write paths: %s | objective: %s", task.ID, task.Title, strings.Join(task.ScopePaths, ","), strings.Join(task.WritePaths, ","), s.Creation.Objective)
-		if len(contextQuestion) > 4096 {
-			return runtime.Invocation{}, errors.New("writer task context exceeds bound")
-		}
+	contextQuestion, err := writerTaskContextQuestion(s, taskID)
+	if err != nil {
+		return runtime.Invocation{}, err
 	}
-	taskCtx, err := taskContextForRole(s, role, contextQuestion)
+	var taskCtx *TaskContextRecord
+	if isolated != nil {
+		taskCtx, err = taskContextForIsolatedWriter(s, role, contextQuestion, *isolated)
+	} else {
+		taskCtx, err = taskContextForRole(s, role, contextQuestion)
+	}
 	if err != nil {
 		return runtime.Invocation{}, err
 	}
@@ -144,6 +182,24 @@ func writerInvocationForTask(s Snapshot, taskID string) (runtime.Invocation, err
 	objective := s.Creation.Objective
 	var schema json.RawMessage
 	var implementationTask *writerImplementationContext
+	var isolationContext *isolatedWriterInvocationContext
+	if isolated != nil {
+		copy := isolated.Task
+		implementationTask = &copy
+		workspaceID, idErr := isolated.Workspace.ID()
+		if idErr != nil {
+			return runtime.Invocation{}, idErr
+		}
+		childID, idErr := isolated.Candidate.ID()
+		if idErr != nil {
+			return runtime.Invocation{}, idErr
+		}
+		isolationContext = &isolatedWriterInvocationContext{
+			TaskID: isolated.TaskID, IsolationID: isolated.IsolationID,
+			WorkspaceID: workspaceID, BaseCandidateID: isolated.BaseCandidateID,
+			ChildCandidateID: childID,
+		}
+	}
 	if s.Creation.Config.WriterContract == "nonempty-v1" || s.Creation.Config.WriterContract == "utf8-v2" || s.Creation.Config.WriterContract == writercontract.ContractChangesJSONV1 || s.Creation.Config.WriterContract == writercontract.ContractUTF8ReplaceV3 || s.Creation.Config.WriterContract == writercontract.ContractUTF8ScopedV4 || writercontract.IsAnchoredEdits(s.Creation.Config.WriterContract) {
 		var projectionErr error
 		objective, projectionErr = mutationObjective(objective)
@@ -164,7 +220,10 @@ func writerInvocationForTask(s Snapshot, taskID string) (runtime.Invocation, err
 			if err != nil {
 				return runtime.Invocation{}, err
 			}
-			if taskID != "" {
+			if isolated != nil {
+				copy := isolated.Task
+				implementationTask = &copy
+			} else if taskID != "" {
 				implementationTask, err = writerImplementationForTask(s, taskID)
 			} else {
 				implementationTask, err = writerImplementationForV4(s)
@@ -180,11 +239,18 @@ func writerInvocationForTask(s Snapshot, taskID string) (runtime.Invocation, err
 			}
 		}
 		if writercontract.IsAnchoredEdits(s.Creation.Config.WriterContract) {
-			schema, err = writercontract.AnchoredEditsSchemaForCandidate(candidate)
+			if s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV3 {
+				schema, err = writercontract.StrictAnchoredEditsSchemaForCandidate(candidate)
+			} else {
+				schema, err = writercontract.AnchoredEditsSchemaForCandidate(candidate)
+			}
 			if err != nil {
 				return runtime.Invocation{}, err
 			}
-			if taskID != "" {
+			if isolated != nil {
+				copy := isolated.Task
+				implementationTask = &copy
+			} else if taskID != "" {
 				implementationTask, err = writerImplementationForTask(s, taskID)
 			} else {
 				implementationTask, err = writerImplementationForV4(s)
@@ -198,8 +264,11 @@ func writerInvocationForTask(s Snapshot, taskID string) (runtime.Invocation, err
 			} else {
 				instruction += " No graph implementation_task is present, so no task-specific graph write scope is asserted; follow only the ordinary approved plan and existing controller permissions."
 			}
-			if s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV2 {
+			if s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV2 || s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV3 {
 				instruction += " Before returning the final proposal, call candidate_validate_anchored_edits for every existing-file change using the exact candidate_id, path, before_hash and edits from that change. A valid=false result means do not emit the final proposal yet: use candidate_read to inspect the same candidate bytes, correct the anchors, and validate again within this same turn. Keep each validation argument below 14 KiB to leave room for the 16 KiB tool-request envelope; use short unique anchors and small edits, reducing the per-file edit set if needed. New-file changes have no existing anchors and do not use this tool. The controller independently rechecks and composes every proposal against the exact candidate before admitting any file effect."
+			}
+			if s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV3 {
+				instruction += " Include only files with a real change. Never emit an existing-file entry with an empty edits array; omit an unchanged file entirely."
 			}
 		}
 		if s.Creation.Config.WriterContract == writercontract.ContractChangesJSONV1 {
@@ -209,22 +278,56 @@ func writerInvocationForTask(s Snapshot, taskID string) (runtime.Invocation, err
 		}
 		instruction = "ROLE: IMPLEMENTER. Produce the implementation required by the approved plan, not another analysis or plan. This invocation is the writer/fixer phase; planning-only directions quoted in the objective describe the earlier planner phase. Return 1 to 64 non-empty regular-file changes; an empty changes array is invalid and does not mean success. For new files, confirm absence from a complete candidate_list traversal or a page covering the exact path; a generic read error alone does not prove absence. New files use before_hash=null. " + instruction
 	}
-	input, err := canonical.Bytes(struct {
-		OutputSchema       json.RawMessage              `json:"output_schema,omitempty"`
-		Instruction        string                       `json:"instruction"`
-		RunID              string                       `json:"run_id"`
-		PlanID             string                       `json:"plan_id"`
-		CandidateID        string                       `json:"candidate_id"`
-		Objective          string                       `json:"objective"`
-		Plan               string                       `json:"plan"`
-		Verification       *writerVerification          `json:"verification,omitempty"`
-		Review             *writerReview                `json:"review,omitempty"`
-		RI                 *roleRIContext               `json:"ri,omitempty"`
-		Lexical            *roleLexicalContext          `json:"lexical,omitempty"`
-		Exploration        *explorationContext          `json:"exploration,omitempty"`
-		TaskContext        *TaskContextRecord           `json:"task_context,omitempty"`
-		ImplementationTask *writerImplementationContext `json:"implementation_task,omitempty"`
-	}{schema, instruction, s.RunID, s.PlanID, candidate, objective, s.Plan.Output, checks, feedback, intelligence, lexical, exploration, taskCtx, implementationTask})
+	if isolated != nil {
+		instruction += " This invocation is bound to the task's separately confirmed pristine child workspace and child candidate ID. Keep every change within the exact implementation_task write_paths and do not claim these child-proposed changes were applied; the controller will independently reprepare them against the parent integration candidate."
+	}
+	instruction += " Preserve established behavior outside the requested feature. Compare base and candidate behavior at relevant boundaries, and add a focused regression test that distinguishes the intended change from nearby unchanged cases. For parser or stateful-format work, use explicit lexical boundaries rather than lookahead heuristics; exercise quote, escape, comment, and end-of-input transitions."
+	instruction = promptRecipeInstruction(s.Creation.Execution, role, s.Creation.Config.WriterContract, instruction)
+	if s.Creation.Execution != nil && s.Creation.Execution.RepairIntelligenceVersion == 1 && implementationTask == nil {
+		if taskID == "" {
+			implementationTask, err = writerImplementationForV4(s)
+		} else {
+			implementationTask, err = writerImplementationForTask(s, taskID)
+		}
+		if err != nil {
+			return runtime.Invocation{}, err
+		}
+	}
+	repair, err := writerRepairIntelligence(s, implementationTask, taskCtx)
+	if err != nil {
+		return runtime.Invocation{}, err
+	}
+	baseInstruction := instruction
+	if repair != nil {
+		instruction += " The repair_intelligence object binds observed findings and any complete recorded task-context preimages to this task. Use its exact admitted write paths. A localized_llm suggestion is advisory; validate edits with current candidate tools. Stale, unavailable or ambiguous locations require investigation. Preserve every configured native check and independent review; never treat an anchor or strategy suggestion as finding closure or retry authority."
+		if repair.Spectrum != nil {
+			instruction += " Its spectrum is an advisory ranking from caller-supplied, untrusted test outcomes and mappings, filtered to this task's write paths. Recorded source bytes validate locations, not test execution, causality or closure."
+		}
+	}
+	taskCtx = writerVisibleTaskContext(taskCtx)
+	payload := struct {
+		OutputSchema       json.RawMessage                  `json:"output_schema,omitempty"`
+		Instruction        string                           `json:"instruction"`
+		RunID              string                           `json:"run_id"`
+		PlanID             string                           `json:"plan_id"`
+		CandidateID        string                           `json:"candidate_id"`
+		Objective          string                           `json:"objective"`
+		Plan               string                           `json:"plan"`
+		Verification       *writerVerification              `json:"verification,omitempty"`
+		Review             *writerReview                    `json:"review,omitempty"`
+		RI                 *roleRIContext                   `json:"ri,omitempty"`
+		Lexical            *roleLexicalContext              `json:"lexical,omitempty"`
+		Exploration        *explorationContext              `json:"exploration,omitempty"`
+		TaskContext        *TaskContextRecord               `json:"task_context,omitempty"`
+		ImplementationTask *writerImplementationContext     `json:"implementation_task,omitempty"`
+		Isolation          *isolatedWriterInvocationContext `json:"isolation,omitempty"`
+		RepairIntelligence *RepairDiagnosis                 `json:"repair_intelligence,omitempty"`
+	}{schema, instruction, s.RunID, s.PlanID, candidate, objective, s.Plan.Output, checks, feedback, intelligence, lexical, exploration, taskCtx, implementationTask, isolationContext, repair}
+	input, err := agentContextPromptBytes(s, role, agentContextWriterTask(s, taskID), payload)
+	if err == nil && repair != nil && len(input) > 256<<10 {
+		payload.RepairIntelligence, payload.Instruction = nil, baseInstruction
+		input, err = agentContextPromptBytes(s, role, agentContextWriterTask(s, taskID), payload)
+	}
 	if err != nil {
 		return runtime.Invocation{}, err
 	}
@@ -232,7 +335,59 @@ func writerInvocationForTask(s Snapshot, taskID string) (runtime.Invocation, err
 	if err != nil {
 		return runtime.Invocation{}, err
 	}
-	return runtime.NewInvocation(profile, string(input))
+	return runtime.NewInvocationWithCodexAutoCompact(profile, string(input), codexAutoCompactForExecution(s.Creation.Execution, profile))
+}
+
+type isolatedWriterInvocationContext struct {
+	TaskID           string `json:"task_id"`
+	IsolationID      string `json:"isolation_id"`
+	WorkspaceID      string `json:"workspace_id"`
+	BaseCandidateID  string `json:"base_candidate_id"`
+	ChildCandidateID string `json:"child_candidate_id"`
+}
+
+func writerInvocationForIsolatedTask(s Snapshot, binding isolatedWriterBinding) (runtime.Invocation, error) {
+	return writerInvocationForTaskWithIsolation(s, binding.TaskID, &binding)
+}
+
+func writerInvocationForTaskWithIsolation(s Snapshot, taskID string, isolated *isolatedWriterBinding) (runtime.Invocation, error) {
+	if isolated == nil {
+		return writerInvocationForTaskLegacy(s, taskID)
+	}
+	if !isolatedImplementationEnabled(s) || taskID == "" || isolated.TaskID != taskID {
+		return runtime.Invocation{}, errors.New("isolated writer task binding mismatch")
+	}
+	if stagedIsolationEnabled(s) {
+		current, err := stagedForkBindingForTask(s, taskID)
+		if err != nil || !sameCanonical(current, *isolated) {
+			return runtime.Invocation{}, errors.Join(errors.New("isolated writer binding is stale or substituted"), err)
+		}
+		return buildWriterInvocation(s, taskID, isolated)
+	}
+	current, err := isolatedWriterBindingForTask(s, taskID)
+	if err != nil || !sameCanonical(current, *isolated) {
+		return runtime.Invocation{}, errors.Join(errors.New("isolated writer binding is stale or substituted"), err)
+	}
+	return buildWriterInvocation(s, taskID, isolated)
+}
+
+func buildWriterInvocation(s Snapshot, taskID string, isolated *isolatedWriterBinding) (runtime.Invocation, error) {
+	// The historical builder remains a wrapper for old recipes. This explicit
+	// branch shares its construction while choosing only the candidate-bound
+	// context from the durable child receipt.
+	if isolated == nil {
+		return writerInvocationForTaskLegacy(s, taskID)
+	}
+	if err := filesAllowed(s); err != nil {
+		return runtime.Invocation{}, err
+	}
+	if s.Candidate == nil || s.Plan == nil {
+		return runtime.Invocation{}, errors.New("writer requires an admitted candidate and plan")
+	}
+	// Reuse the legacy input recipe exactly except for the versioned isolation
+	// binding and child candidate/context. The implementation lives in the
+	// shared builder below to keep every role field and schema identical.
+	return writerInvocationBody(s, taskID, isolated)
 }
 
 // PrepareWriterInvocation binds configured writer routing to the current admitted
@@ -285,10 +440,10 @@ func prepareWriterFilesForTask(ctx context.Context, path, taskID string, invocat
 	if writercontract.IsAnchoredEdits(s.Creation.Config.WriterContract) {
 		anchored, decodeErr := decodeAnchoredProposal(result.Output)
 		if decodeErr != nil {
-			return PreparedFiles{}, nil, decodeErr
+			return PreparedFiles{}, nil, rejectedSemanticOutput(decodeErr)
 		}
 		if anchored.CandidateID != candidate {
-			return PreparedFiles{}, nil, errors.New("writer candidate substitution")
+			return PreparedFiles{}, nil, errors.Join(ErrAutonomousUnsafe, errors.New("writer candidate substitution"))
 		}
 		manifest, captured, readErr := readAnchoredPreimages(ctx, path, s, anchored)
 		if readErr != nil {
@@ -303,10 +458,10 @@ func prepareWriterFilesForTask(ctx context.Context, path, taskID string, invocat
 	} else {
 		proposal, err = decodeWriterProposal(s.Creation.Config.WriterContract, result.Output)
 		if err != nil {
-			return PreparedFiles{}, nil, err
+			return PreparedFiles{}, nil, rejectedSemanticOutput(err)
 		}
 		if proposal.CandidateID != candidate {
-			return PreparedFiles{}, nil, errors.New("writer candidate substitution")
+			return PreparedFiles{}, nil, errors.Join(ErrAutonomousUnsafe, errors.New("writer candidate substitution"))
 		}
 	}
 	var prepared PreparedFiles
@@ -325,7 +480,7 @@ func prepareWriterFilesForTask(ctx context.Context, path, taskID string, invocat
 		return PreparedFiles{}, nil, err
 	}
 	if actual != candidate {
-		return PreparedFiles{}, nil, errors.New("writer candidate changed during preparation")
+		return PreparedFiles{}, nil, errors.Join(ErrAutonomousUnsafe, errors.New("writer candidate changed during preparation"))
 	}
 	return prepared, preimages, nil
 }
