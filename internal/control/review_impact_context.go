@@ -201,11 +201,8 @@ func maybeAdmitReviewImpactContext(ctx context.Context, path string) error {
 	if reviewImpactContextForCandidate(s) != nil {
 		return nil
 	}
-	if err := autonomousDispatchBlocked(s); err != nil {
+	if err := validateReviewImpactCandidateBoundary(s); err != nil {
 		return err
-	}
-	if s.State != "REVIEWING" || s.ReviewHost != nil || s.Review != nil || s.Workspace == nil || s.Candidate == nil {
-		return errors.New("review impact context requires an undispatched verified candidate")
 	}
 	source, baseGraph, baseInventory, err := reviewImpactBase(s)
 	if err != nil {
@@ -363,6 +360,64 @@ func reviewImpactHistoryLimit(s *Snapshot) int {
 	return limit
 }
 
+// validateReviewImpactCandidateBoundary permits only a settled
+// changes-requested review for an older candidate to remain in the snapshot.
+func validateReviewImpactCandidateBoundary(s Snapshot) error {
+	if s.State != "REVIEWING" || s.Workspace == nil || s.Candidate == nil {
+		return errors.New("review impact context requires an undispatched verified candidate")
+	}
+	if err := autonomousDispatchBlocked(s); err != nil {
+		return err
+	}
+	currentCandidateID, err := s.Candidate.ID()
+	if err != nil {
+		return err
+	}
+	if s.Review == nil {
+		if s.ReviewHost != nil {
+			return errors.New("review impact context has a host without a completed review")
+		}
+		return nil
+	}
+
+	prior := s.Review
+	var verdict ReviewVerdict
+	if err := canonical.Decode([]byte(prior.Result.Output), &verdict); err != nil {
+		return errors.New("review impact context prior review verdict is malformed")
+	}
+	var invocationInput struct {
+		CandidateID        string `json:"candidate_id"`
+		VerificationPlanID string `json:"verification_plan_id"`
+	}
+	// The full historical review input has many other members. Its exact
+	// invocation identity and original review event were already replayed; here
+	// extract the two binding fields without rejecting those other members.
+	if err := json.Unmarshal([]byte(prior.Invocation.Input), &invocationInput); err != nil ||
+		invocationInput.CandidateID != verdict.CandidateID || invocationInput.VerificationPlanID != verdict.VerificationPlanID {
+		return errors.New("review impact context prior invocation does not bind its verdict")
+	}
+	if safepath.RequireDigest(verdict.CandidateID) != nil || verdict.CandidateID == currentCandidateID || verdict.Decision != "changes_requested" || len(verdict.Findings) == 0 {
+		return errors.New("review impact context prior review is not a settled finding for an older candidate")
+	}
+	if err := requireOpenCodeRoleReceipt(s, prior.Invocation, prior.Result); err != nil {
+		return errors.New("review impact context prior review lacks its provider receipt")
+	}
+	if prior.Invocation.Profile.Runtime == "codex-app-server" {
+		host := s.ReviewHost
+		if host == nil || !host.Ready || host.Receipt == nil || host.RuntimeReceipt == nil || host.Intent.Invocation != prior.Invocation {
+			return errors.New("review impact context prior host result is incomplete or mismatched")
+		}
+		runtimeReceipt := host.RuntimeReceipt
+		resultHash, hashErr := canonical.Hash("harness.review-result.v1", prior.Result)
+		if hashErr != nil || runtimeReceipt.InvocationID != prior.Invocation.ID || runtimeReceipt.ResultHash != resultHash {
+			return errors.New("review impact context prior host receipt does not bind its result")
+		}
+	} else if s.ReviewHost != nil {
+		return errors.New("review impact context prior host does not match its runtime")
+	}
+	return nil
+}
+
 func (s Snapshot) reviewImpactContextForCandidate(candidateID string) *ReviewImpactContextRecord {
 	for index := range s.ReviewImpactContexts {
 		if s.ReviewImpactContexts[index].CandidateID == candidateID {
@@ -373,8 +428,11 @@ func (s Snapshot) reviewImpactContextForCandidate(candidateID string) *ReviewImp
 }
 
 func validateReviewImpactContextRecord(s Snapshot, record ReviewImpactContextRecord) error {
-	if !reviewImpactContextEnabled(s) || (s.Creation.Execution.PlannerContext != plannerContextGoContractV1 && s.Creation.Execution.PlannerContext != plannerContextGoContractV2 && s.Creation.Execution.PlannerContext != plannerContextGoContractV3) || s.State != "REVIEWING" || s.ReviewHost != nil || s.Review != nil || s.Candidate == nil || s.Workspace == nil || s.PlannerGoContext == nil || s.PlannerGoContext.Graph == nil || s.PlannerGoContext.Graph.ModuleInventory == nil {
+	if !reviewImpactContextEnabled(s) || (s.Creation.Execution.PlannerContext != plannerContextGoContractV1 && s.Creation.Execution.PlannerContext != plannerContextGoContractV2 && s.Creation.Execution.PlannerContext != plannerContextGoContractV3) || s.Candidate == nil || s.Workspace == nil || s.PlannerGoContext == nil || s.PlannerGoContext.Graph == nil || s.PlannerGoContext.Graph.ModuleInventory == nil {
 		return errors.New("review impact context transition rejected")
+	}
+	if err := validateReviewImpactCandidateBoundary(s); err != nil {
+		return errors.Join(errors.New("review impact context transition rejected"), err)
 	}
 	source, baseGraph, baseInventory, err := reviewImpactBase(s)
 	if err != nil {

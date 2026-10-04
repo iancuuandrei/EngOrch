@@ -778,3 +778,34 @@ remain unknown. Its SHA256 is
   qualification and integration remain pending. The blocked runs expose only
   `execution_blocked`, so their
   exact inner error is not yet proven; no uncertain effect was resent.
+
+## Checkpoint — v1.0.24 integrated; unseen fallback acceptance
+
+- Main/dev contain `34ae84f3b2473e81f8ac7dfab5477d70800711c6`, merged through
+  automation PR #31. Independent review, clean full Go, ten PowerShell
+  harnesses and hosted Sonar/security passed. The full Go log SHA256 is
+  `13cc0f3a14a99f22ce57c79ea10787a459a0ec436af1908d6812aa4a7ac60615`.
+- The frozen v1.0.22 eight-task run finished with four READY tasks: Humanize,
+  go-atomic, go-multierror and logr. Afero and numeric stopped at review;
+  Difflib stopped after its completed writer effect before proposal admission;
+  godotenv exhausted two repairs. Blocked candidates are not accepted and no
+  result is pooled with the fresh, separately prepared v1.0.24 cohort.
+- The genuinely unseen Wordwrap trial on frozen v1.0.23 passed native checks,
+  unchanged held-out acceptance and candidate-bound review with one repair.
+  Independent artifact review approved its private acceptance-policy receipt
+  SHA256 `3adc6d67316f53187e27820f35f129f8542555de8e1b9cd5b86d8433d21d66b6`.
+  Five completed runtime invocations and all observed effects are matched;
+  the accepted checkpoint has no unmatched or uncertain effect. The actual
+  fixer was Luna High with `calibration-objective-out-of-scope`; the candidate
+  profile was not selected or applied. This proves conservative fallback on
+  this task, not routing gains or calibration generalization.
+- Wordwrap input was 607,611 tokens: 482,560 cached and 125,051 uncached.
+  Output was 8,620, including 2,735 reasoning tokens. Task elapsed was 333,629
+  ms and includes acceptance checks. Physical provider calls, price and exact
+  READY timing remain unknown.
+- The v1.0.24 long-horizon review stopped without dispatch or journal change
+  with `review impact context requires an undispatched verified candidate`.
+  The current repaired candidate has native PASS and zero active/uncertain
+  effects, but the guard rejects its settled review from the prior candidate.
+  A narrow candidate-binding correction in admission/replay is in progress;
+  no new recovery machinery or old-effect resend is authorized.

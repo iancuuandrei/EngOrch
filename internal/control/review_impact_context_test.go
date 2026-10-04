@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"harness.local/engorch/internal/canonical"
+	"harness.local/engorch/internal/codexhost"
 	"harness.local/engorch/internal/config"
 	"harness.local/engorch/internal/repository"
 	"harness.local/engorch/internal/ri"
@@ -193,12 +195,13 @@ func TestReviewImpactContextAdmitsAndReplaysExactCandidateProjection(t *testing.
 			ContractContext: &ri.GoContractContext{SourceID: source.RepositoryID, GraphDigest: baseGraph.Digest, ProducerSHA256: producer, Coverage: "PARTIAL", Excerpts: []taskcontext.SelectedFile{}},
 		},
 	}
+	snapshot.Review, snapshot.ReviewHost = reviewImpactPriorReview(t, strings.Repeat("9", 64), strings.Repeat("8", 64))
 	record, err := makeReviewImpactContextRecord(snapshot, source, baseGraph, baseInventory, corpus)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := validateReviewImpactContextRecord(snapshot, record); err != nil {
-		t.Fatalf("fresh candidate record did not validate: %v", err)
+		t.Fatalf("new candidate after settled changes-requested review did not validate: %v", err)
 	}
 	receiverAwareSnapshot := snapshot
 	receiverAwareExecution := *snapshot.Creation.Execution
@@ -247,7 +250,7 @@ func TestReviewImpactContextAdmitsAndReplaysExactCandidateProjection(t *testing.
 		t.Fatal("durable review-impact record retained source text")
 	}
 	if err := replayReviewImpactContext(&snapshot, record); err != nil || len(snapshot.ReviewImpactContexts) != 1 {
-		t.Fatalf("valid record did not replay: count=%d err=%v", len(snapshot.ReviewImpactContexts), err)
+		t.Fatalf("new-candidate record after repair did not durably replay: count=%d err=%v", len(snapshot.ReviewImpactContexts), err)
 	}
 	if err := replayReviewImpactContext(&snapshot, record); err == nil {
 		t.Fatal("duplicate candidate review context replayed")
@@ -265,7 +268,101 @@ func TestReviewImpactContextAdmitsAndReplaysExactCandidateProjection(t *testing.
 	if err := replayReviewImpactContext(&fresh, forged); err == nil {
 		t.Fatal("self-rehashed forged projection replayed")
 	}
+	priorCandidateID, _ := candidate.ID()
+	sameCandidate := snapshot
+	sameCandidate.Review, _ = reviewImpactPriorReview(t, priorCandidateID, strings.Repeat("8", 64))
+	if err := validateReviewImpactCandidateBoundary(sameCandidate); err == nil {
+		t.Fatal("review result bound to the current candidate was treated as stale")
+	}
 
+	pendingHost := snapshot
+	pendingHost.ReviewHost = &ReviewHostState{}
+	if err := validateReviewImpactCandidateBoundary(pendingHost); err == nil {
+		t.Fatal("pending prior review host was treated as settled")
+	}
+
+	mismatchedHost := snapshot
+	mismatchedHost.ReviewHost = &ReviewHostState{
+		Ready: true, Receipt: &codexhost.Receipt{},
+		Intent:         ReviewHostIntent{Invocation: runtime.Invocation{ID: strings.Repeat("a", 64)}},
+		RuntimeReceipt: &ReviewRuntimeReceipt{InvocationID: strings.Repeat("a", 64), ThreadID: "thread", TurnID: "turn", JournalHead: strings.Repeat("b", 64), ResultHash: strings.Repeat("c", 64)},
+	}
+	if err := validateReviewImpactCandidateBoundary(mismatchedHost); err == nil {
+		t.Fatal("mismatched prior host and review were treated as settled")
+	}
+
+	mismatchedResult := snapshot
+	resultReview := *snapshot.Review
+	var wrongVerdict ReviewVerdict
+	if err := canonical.Decode([]byte(resultReview.Result.Output), &wrongVerdict); err != nil {
+		t.Fatal(err)
+	}
+	wrongVerdict.CandidateID = strings.Repeat("7", 64)
+	wrongOutput, err := canonical.Bytes(wrongVerdict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultReview.Result.Output = string(wrongOutput)
+	mismatchedResult.Review = &resultReview
+	if err := validateReviewImpactCandidateBoundary(mismatchedResult); err == nil {
+		t.Fatal("prior review result not bound to its invocation was treated as settled")
+	}
+
+	malformed := snapshot
+	badReview := *snapshot.Review
+	badReview.Result.Output = "not-json"
+	malformed.Review = &badReview
+	if err := validateReviewImpactCandidateBoundary(malformed); err == nil {
+		t.Fatal("malformed prior review was treated as settled")
+	}
+
+}
+
+func reviewImpactPriorReview(t *testing.T, candidateID, verificationPlanID string) (*ReviewRecord, *ReviewHostState) {
+	t.Helper()
+	profile := runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "review-fixture", Effort: "high", Role: "reviewer"}
+	input, err := canonical.Bytes(struct {
+		Instruction        string `json:"instruction"`
+		RunID              string `json:"run_id"`
+		PlanID             string `json:"plan_id"`
+		CandidateID        string `json:"candidate_id"`
+		VerificationPlanID string `json:"verification_plan_id"`
+		Objective          string `json:"objective"`
+		Plan               string `json:"plan"`
+	}{"Review this prior candidate.", strings.Repeat("1", 64), strings.Repeat("2", 64), candidateID, verificationPlanID, "fixture objective", "fixture plan"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation, err := runtime.NewInvocation(profile, string(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := canonical.Bytes(ReviewVerdict{
+		CandidateID: candidateID, VerificationPlanID: verificationPlanID,
+		Decision: "changes_requested", Findings: []ReviewFinding{{Path: "app.go", Message: "repair required"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := profile.Model
+	result := runtime.Result{
+		Version: 1, InvocationID: invocation.ID, Requested: profile, ObservedModel: &model, Output: string(output),
+	}
+	launch, hostReceipt := codexReceiptReplayFixture(t)
+	resultHash, err := canonical.Hash("harness.review-result.v1", result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := &ReviewRecord{Invocation: invocation, Result: result}
+	host := &ReviewHostState{
+		Intent: ReviewHostIntent{Invocation: invocation, Launch: launch},
+		Ready:  true, Receipt: &hostReceipt,
+		RuntimeReceipt: &ReviewRuntimeReceipt{
+			InvocationID: invocation.ID, ThreadID: "fixture-thread", TurnID: "fixture-turn",
+			JournalHead: strings.Repeat("b", 64), ResultHash: resultHash,
+		},
+	}
+	return record, host
 }
 
 func TestReviewImpactDisabledKeepsLegacyReviewPayloadShape(t *testing.T) {
