@@ -572,3 +572,36 @@ integrated increment, without resurrecting a G0 promotion ladder.
   Fixed-six 6/6, generated-code acceptance, real topology/model comparisons,
   accepted fresh rounds and pause/resume/release gates remain open. The previous
   v1.0.17 uncertain invocation is preserved and never resent.
+
+## Checkpoint — v1.0.19 integrated; corrected evaluation bindings
+
+- Public main/dev contain `44d935ba833f23d1832dd01a66946a2acee36bb6`;
+  bot-authored PR #26 merged. The exact clean source passed the complete fresh
+  Go suite, all ten PowerShell harnesses, independent source review, hosted
+  checks and Sonar (zero unresolved issues and zero new duplication). Rust
+  source is unchanged; no fresh v1.0.19 Rust suite is claimed.
+- The optional empirical calibration CLI, immutable objective-bound routing
+  and conservative fallback are integrated. They are mechanisms, not measured
+  model-quality, cost or default-selection improvements.
+- The settled v1.0.18 ParseBytes candidate completed its first effective review
+  using v1.0.19 and reached an accepted, quiescent READY checkpoint. Its writer
+  and completed native compaction remain v1.0.18 evidence; the mixed-version
+  continuation is not an entirely frozen v1.0.19 coding-task qualification.
+- The first fresh v1.0.19 fixed-eight evaluation was 0/8 PASS: all tasks stopped
+  in planning before host/model-access intent. Its explicit subscription access
+  file used `session`, whereas the supported Codex mode is `chatgpt-session`.
+  Token consumption and physical provider calls remain unobserved, not zero.
+  Those run journals are preserved and are not retried.
+- A new access file changes only that auth-mode spelling and preserves all
+  budget ceilings. The candidate-copy helper is rebuilt from clean v1.0.19
+  because the older helper rejected the newer compaction fields. Fresh trials
+  bind both corrected files explicitly; previous provider-free preparations
+  remain preserved and are not dispatched.
+- The frozen evaluation runner does not request planner parse caching. Earlier
+  planning notes that assumed it was enabled are superseded by this observation;
+  candidate-facts caching is a separate requested policy. The direct long-horizon
+  run did explicitly request planner parse caching.
+- The documented subscription example is corrected with a focused regression.
+  This documentation/test correction does not change product runtime source.
+  Fixed-six 6/6, generated-code acceptance, topology/model comparisons, accepted
+  fresh rounds, pause/resume and final release gates remain open.

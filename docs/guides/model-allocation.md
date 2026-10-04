@@ -19,8 +19,9 @@ rejected. Init validates the complete role and budget mapping before creating
 runtime state or writing `harness.toml`.
 
 For a Codex subscription route, an access file has this shape; choose the
-repository class, auth mode, token ceilings, and concurrency for your own
-policy:
+repository class, token ceilings, and concurrency for your own policy. The
+Codex app-server subscription route requires the exact auth mode
+`chatgpt-session`:
 
 ```json
 {
@@ -33,7 +34,7 @@ policy:
     "runtime": "codex-app-server",
     "provider": "openai",
     "credential_ref": "",
-    "auth_mode": "session",
+    "auth_mode": "chatgpt-session",
     "repository_classes": ["PRIVATE"]
   }],
   "roles": {
