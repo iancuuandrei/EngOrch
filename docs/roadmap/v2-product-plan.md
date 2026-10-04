@@ -449,3 +449,32 @@ integrated increment, without resurrecting a G0 promotion ladder.
   the source amendment. Fresh matched topology runs will use a qualified
   frozen increment. A read-only native model catalog confirmed Sol High for
   a predeclared fixer pilot; no pilot model invocation has been sent.
+## Checkpoint — v1.0.14 integrated; strict writer and fixer pilot candidate
+
+- Public main/dev advanced to `66252573e4377f6c9f409bc72cc22a4c034e9d01`
+  after clean full Go/Rust, focused Native harnesses, independent review,
+  hosted security and Sonar passed. See its qualification record.
+- Fresh topology preparations use that exact clean binary and RI b189 with
+  matched context/cache/isolation policies. Baseline native checks pass and
+  held-out assertions reject the baseline. The serial arm is evaluating;
+  parallel is not dispatched until serial completes. Each arm runs once.
+- Read-only diagnosis found the earlier godotenv blocker was an existing-file
+  entry with no anchored edits. A strict Codex writer contract now prevents
+  that form in the provider-facing schema and prompt, retaining historical
+  V1/V2 replay and the original fail-closed decoder. The old blocked run is
+  preserved; no new recovery or repair permission is introduced.
+- The next runner binds optional fixed fixer model/effort and a bounded public
+  access policy across Prepare/Evaluate before init. This enables the
+  predeclared Luna-versus-Sol fixer pilot; configuration alone is not actual
+  route exposure or adaptive-policy qualification.
+- Independent reviews and focused regressions approved the strict contract
+  and runner, including rejecting conflicting init flags before writes. Their
+  clean full qualification and actual model exercises remain pending.
+- The logr failure has a concrete retrieval/decomposition cause: root API
+  source was omitted and write ownership covered only the example sink.
+  A generic receiver/declaration selection repair is being scoped. The
+  difflib frozen representation failure remains unchanged; hidden acceptance
+  details are not placed in prompts or used to retroactively claim PASS.
+- Raw notifications from an exact completed Luna High writer thread report
+  an effective context window of 258,400 tokens. Fresh-round and organic
+  compaction experiments still need predeclared settings and live evidence.

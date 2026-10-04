@@ -211,6 +211,63 @@ not a cache-hit measurement: corpus diagnostic statistics are not included in
 the evaluation receipt, and no hit-rate or performance claim follows from the
 flag.
 
+## Explicit fixer-route allocation pilot
+
+Native Prepare/Evaluate accept optional `-FixerModel` and `-FixerEffort` with
+`-AccessConfigPath`. Either fixer override requires the access file; the access
+file alone is rejected. Both fixer fields may be set independently, and any
+unspecified value follows the base `-Model` or `-Effort` used at Evaluate. The
+runner requires an absolute regular non-reparse file no larger than 32 KiB,
+records its resolved path, byte count and SHA-256, and requires the same
+explicit fixer overrides and exact file binding at Prepare and Evaluate. It
+rechecks the file immediately before `fabric init`; the CLI then validates the
+strict `config.Access` schema before writing the task configuration. The
+runner records the configured fixer profile from the inspected creation
+snapshot. That is not evidence the fixer was invoked: report actual exposure
+only when runtime evidence shows a fixer invocation, and leave unobserved
+usage unknown. No repair allowance or escalation policy is changed.
+
+`-StrictWriterEdits` opts into `anchored-edits-v3`; it is exclusive with the
+existing `-ValidateWriterEdits` v2 option. Its requested version must match
+Prepare/Evaluate and the inspected creation config must report the same writer
+contract. Omitting both writer flags leaves the existing default init argv and
+configuration path unchanged. These options enable a fixed-route comparison;
+they do not establish adaptive model selection or a general model-quality
+claim.
+
+For the predeclared fixer-route pilot, use the same public v1 access file,
+planner/writer/reviewer model and effort, strict writer contract, source pins,
+checks and repair limit in each arm. The only intended arm difference is the
+explicit fixer model. Prepare and Evaluate each receive the same fixer fields
+and access-config path; compare the retained request and observed-configuration
+bindings before considering acceptance or route exposure. Subscription costs
+and provider-call counts remain unknown unless independently measured.
+
+```powershell
+$runner = 'scripts/evaluate-v1.ps1'
+$common = @{
+    RunRoot = 'D:\eval\model-allocation'
+    TaskIds = @('go-atomic-numeric-text')
+    FixerEffort = 'high'
+    AccessConfigPath = 'D:\eval\public-access-v1.json'
+    StrictWriterEdits = $true
+}
+$control = $common.Clone()
+$control.FixerModel = 'gpt-6-luna'
+& $runner -Action Prepare -RunId fixer-control @control
+$treatment = $common.Clone()
+$treatment.FixerModel = 'gpt-6.1-sol'
+& $runner -Action Prepare -RunId fixer-treatment @treatment
+
+# Evaluate each prepared arm separately, copying the same bound options and
+# adding that arm's explicit runtime, binary, helper and prepared RunId.
+```
+
+Both Evaluate calls must repeat their arm's exact `FixerModel`,
+`FixerEffort`, `AccessConfigPath`, and `StrictWriterEdits` values. The access
+file must remain unchanged after Prepare. Use fresh run IDs and do not treat a
+configured fixer profile as an invocation when no fixer call occurred.
+
 ## Controlled parallel-writer comparison
 
 Native evaluations accept `-ParallelWriters` and `-MaxParallel 1..8`.

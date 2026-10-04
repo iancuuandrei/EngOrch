@@ -118,28 +118,61 @@ func TestAnchoredEditSchemasAreClosedAndCandidateBound(t *testing.T) {
 }
 
 func TestAnchoredEditSchemaEncodesBothExplicitFileForms(t *testing.T) {
-	var doc any
-	if err := json.Unmarshal(AnchoredEditsSchema(), &doc); err != nil {
-		t.Fatal(err)
-	}
-	c := jsonschema.NewCompiler()
-	c.DefaultDraft(jsonschema.Draft2020)
-	if err := c.AddResource("urn:anchored-writer", doc); err != nil {
-		t.Fatal(err)
-	}
-	schema, err := c.Compile("urn:anchored-writer")
-	if err != nil {
-		t.Fatal(err)
-	}
+	schema := compileWriterSchema(t, "anchored-writer", AnchoredEditsSchema())
 	digest := strings.Repeat("a", 64)
-	valid := []map[string]any{
-		{"path": "existing.go", "before_hash": digest, "edits": []any{map[string]any{"before": "x", "after": "y"}}, "new_content_utf8": nil, "executable": false},
-		{"path": "new.go", "before_hash": nil, "edits": []any{}, "new_content_utf8": "package new\n", "executable": false},
-	}
-	for _, change := range valid {
+	for _, change := range anchoredExplicitChanges(digest) {
 		payload := map[string]any{"candidate_id": digest, "changes": []any{change}}
 		if err := schema.Validate(payload); err != nil {
 			t.Fatalf("valid explicit change rejected: %v", err)
 		}
+	}
+}
+
+func TestStrictAnchoredEditSchemaRejectsNoOpExistingFiles(t *testing.T) {
+	schema := compileWriterSchema(t, "strict-anchored-writer", StrictAnchoredEditsSchema())
+	digest := strings.Repeat("a", 64)
+	for _, change := range anchoredExplicitChanges(digest) {
+		if err := schema.Validate(map[string]any{"candidate_id": digest, "changes": []any{change}}); err != nil {
+			t.Fatalf("valid strict change rejected: %v", err)
+		}
+	}
+	for _, change := range []map[string]any{
+		{"path": "noop.go", "before_hash": digest, "edits": []any{}, "new_content_utf8": nil, "executable": false},
+		{"path": "replacement.go", "before_hash": digest, "edits": []any{map[string]any{"before": "x", "after": "y"}}, "new_content_utf8": "unexpected", "executable": false},
+		{"path": "new.go", "before_hash": nil, "edits": []any{map[string]any{"before": "x", "after": "y"}}, "new_content_utf8": "package new\n", "executable": false},
+	} {
+		if err := schema.Validate(map[string]any{"candidate_id": digest, "changes": []any{change}}); err == nil {
+			t.Fatalf("invalid strict change admitted: %#v", change)
+		}
+	}
+	bound, err := StrictAnchoredEditsSchemaForCandidate(digest)
+	if err != nil || !strings.Contains(string(bound), `"enum":["`+digest+`"]`) {
+		t.Fatalf("strict candidate schema was not bound: %v", err)
+	}
+}
+
+func compileWriterSchema(t *testing.T, name string, raw []byte) *jsonschema.Schema {
+	t.Helper()
+	var doc any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.DefaultDraft(jsonschema.Draft2020)
+	uri := "urn:" + name
+	if err := compiler.AddResource(uri, doc); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile(uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return schema
+}
+
+func anchoredExplicitChanges(digest string) []map[string]any {
+	return []map[string]any{
+		{"path": "existing.go", "before_hash": digest, "edits": []any{map[string]any{"before": "x", "after": "y"}}, "new_content_utf8": nil, "executable": false},
+		{"path": "new.go", "before_hash": nil, "edits": []any{}, "new_content_utf8": "package new\n", "executable": false},
 	}
 }

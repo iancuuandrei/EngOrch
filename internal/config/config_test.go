@@ -243,18 +243,28 @@ func TestAnchoredEditsV2IsCodexOnlyAndIdentityBound(t *testing.T) {
 	if err != nil || v1ID == v2ID {
 		t.Fatal("v2 validation opt-in was not configuration-identity-bound", err)
 	}
+	c.WriterContract = writercontract.ContractAnchoredEditsV3
+	if err := c.Validate(); err != nil {
+		t.Fatal("anchored-edits-v3 Codex route rejected", err)
+	}
+	v3ID, err := c.ID()
+	if err != nil || v3ID == v2ID {
+		t.Fatal("v3 strict opt-in was not configuration-identity-bound", err)
+	}
 
 	for _, runtimeName := range []string{"fake", "provider-api", "opencode-http"} {
-		unsupported := c
-		unsupported.WriterContract = writercontract.ContractAnchoredEditsV2
-		unsupported.Writer = &runtime.Profile{Runtime: runtimeName, Provider: "deterministic", Model: "fixture", Effort: "none", Role: "writer"}
-		if runtimeName == "provider-api" || runtimeName == "opencode-http" {
-			unsupported.Version = 2
-			unsupported.Access = &Access{}
-			unsupported.Provider = &Provider{}
-		}
-		if err := unsupported.Validate(); err == nil || !strings.Contains(err.Error(), "anchored-edits-v2 requires a Codex writer runtime") {
-			t.Fatalf("anchored-edits-v2 admitted unsupported runtime %q: %v", runtimeName, err)
+		for _, contract := range []string{writercontract.ContractAnchoredEditsV2, writercontract.ContractAnchoredEditsV3} {
+			unsupported := c
+			unsupported.WriterContract = contract
+			unsupported.Writer = &runtime.Profile{Runtime: runtimeName, Provider: "deterministic", Model: "fixture", Effort: "none", Role: "writer"}
+			if runtimeName == "provider-api" || runtimeName == "opencode-http" {
+				unsupported.Version = 2
+				unsupported.Access = &Access{}
+				unsupported.Provider = &Provider{}
+			}
+			if err := unsupported.Validate(); err == nil || !strings.Contains(err.Error(), "validated anchored edits require a Codex writer runtime") {
+				t.Fatalf("%s admitted unsupported runtime %q: %v", contract, runtimeName, err)
+			}
 		}
 	}
 

@@ -50,9 +50,17 @@ func anchoredWriterCandidate(t *testing.T, path string, invocation runtime.Invoc
 }
 
 func anchoredWriterV2Fixture(t *testing.T) (string, runtime.Invocation, string, string) {
+	return anchoredWriterValidatedFixture(t, writercontract.ContractAnchoredEditsV2)
+}
+
+func anchoredWriterV3Fixture(t *testing.T) (string, runtime.Invocation, string, string) {
+	return anchoredWriterValidatedFixture(t, writercontract.ContractAnchoredEditsV3)
+}
+
+func anchoredWriterValidatedFixture(t *testing.T, contract string) (string, runtime.Invocation, string, string) {
 	t.Helper()
 	c := creation(t)
-	c.Config.WriterContract = writercontract.ContractAnchoredEditsV2
+	c.Config.WriterContract = contract
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -271,6 +279,25 @@ func TestAnchoredEditsV2InstructionRequiresSameTurnValidation(t *testing.T) {
 	wantCanonical, wantErr := canonical.Normalize(wantSchema)
 	if actualErr != nil || wantErr != nil || string(actualCanonical) != string(wantCanonical) {
 		t.Fatal("v2 changed the frozen anchored-edits output schema")
+	}
+}
+
+func TestAnchoredEditsV3InstructionAndSchemaExcludeNoOpExistingFiles(t *testing.T) {
+	_, invocation, _, _ := anchoredWriterV3Fixture(t)
+	var input struct {
+		Instruction string          `json:"instruction"`
+		Schema      json.RawMessage `json:"output_schema"`
+	}
+	if err := json.Unmarshal([]byte(invocation.Input), &input); err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"candidate_validate_anchored_edits", "Include only files with a real change", "omit an unchanged file entirely"} {
+		if !strings.Contains(input.Instruction, required) {
+			t.Fatalf("v3 instruction omitted %q", required)
+		}
+	}
+	if !strings.Contains(string(input.Schema), `"anyOf"`) || !strings.Contains(string(input.Schema), `"minItems":1`) {
+		t.Fatal("v3 strict schema did not retain the existing-file edit minimum")
 	}
 }
 

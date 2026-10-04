@@ -228,7 +228,11 @@ func writerInvocationBody(s Snapshot, taskID string, isolated *isolatedWriterBin
 			}
 		}
 		if writercontract.IsAnchoredEdits(s.Creation.Config.WriterContract) {
-			schema, err = writercontract.AnchoredEditsSchemaForCandidate(candidate)
+			if s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV3 {
+				schema, err = writercontract.StrictAnchoredEditsSchemaForCandidate(candidate)
+			} else {
+				schema, err = writercontract.AnchoredEditsSchemaForCandidate(candidate)
+			}
 			if err != nil {
 				return runtime.Invocation{}, err
 			}
@@ -249,8 +253,11 @@ func writerInvocationBody(s Snapshot, taskID string, isolated *isolatedWriterBin
 			} else {
 				instruction += " No graph implementation_task is present, so no task-specific graph write scope is asserted; follow only the ordinary approved plan and existing controller permissions."
 			}
-			if s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV2 {
+			if s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV2 || s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV3 {
 				instruction += " Before returning the final proposal, call candidate_validate_anchored_edits for every existing-file change using the exact candidate_id, path, before_hash and edits from that change. A valid=false result means do not emit the final proposal yet: use candidate_read to inspect the same candidate bytes, correct the anchors, and validate again within this same turn. Keep each validation argument below 14 KiB to leave room for the 16 KiB tool-request envelope; use short unique anchors and small edits, reducing the per-file edit set if needed. New-file changes have no existing anchors and do not use this tool. The controller independently rechecks and composes every proposal against the exact candidate before admitting any file effect."
+			}
+			if s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV3 {
+				instruction += " Include only files with a real change. Never emit an existing-file entry with an empty edits array; omit an unchanged file entirely."
 			}
 		}
 		if s.Creation.Config.WriterContract == writercontract.ContractChangesJSONV1 {

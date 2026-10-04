@@ -360,6 +360,10 @@ func (c *Client) StartTurn(ctx context.Context, thread ThreadSettings, i runtime
 				candidateHash, hashErr := canonical.Hash("writer-output-schema", candidateSchema)
 				allowed = allowed || hashErr == nil && got == candidateHash
 			}
+			if candidateSchema, schemaErr := writercontract.StrictAnchoredEditsSchemaForCandidate(envelope.CandidateID); schemaErr == nil {
+				candidateHash, hashErr := canonical.Hash("writer-output-schema", candidateSchema)
+				allowed = allowed || hashErr == nil && got == candidateHash
+			}
 			if e != nil || !allowed {
 				return wire.Turn, nil, errors.New("writer output schema substitution")
 			}

@@ -36,11 +36,15 @@ func initCommand(ctx context.Context, root string, args []string, out io.Writer)
 	auth := flags.String("auth-source", "", "existing Codex auth.json")
 	state := flags.String("state-root", "", "private runtime state directory")
 	validateWriterEdits := flags.Bool("validate-writer-edits", false, "enable same-turn validation for anchored writer edits")
+	strictWriterEdits := flags.Bool("strict-writer-edits", false, "enable strict same-turn validation and reject no-op anchored writer entries")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("init accepts flags only")
+	}
+	if *validateWriterEdits && *strictWriterEdits {
+		return errors.New("--validate-writer-edits and --strict-writer-edits are mutually exclusive")
 	}
 	fixerProfileRequested := false
 	fixerModelProvided, fixerEffortProvided, accessConfigProvided := false, false, false
@@ -157,6 +161,9 @@ func initCommand(ctx context.Context, root string, args []string, out io.Writer)
 		writerContract := writercontract.ContractAnchoredEditsV1
 		if *validateWriterEdits {
 			writerContract = writercontract.ContractAnchoredEditsV2
+		}
+		if *strictWriterEdits {
+			writerContract = writercontract.ContractAnchoredEditsV3
 		}
 		cfg := config.Config{
 			Version: 1, Repository: filepath.Base(root), BaseBranch: "HEAD",

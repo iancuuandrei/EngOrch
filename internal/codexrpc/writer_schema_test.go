@@ -170,3 +170,35 @@ func TestCandidateBoundAnchoredWriterSchemaIsForwardedForExactEnvelopeCandidate(
 		t.Fatalf("anchored schema for another candidate was not rejected before RPC: %v", err)
 	}
 }
+
+func TestCandidateBoundStrictAnchoredWriterSchemaIsForwardedForExactEnvelopeCandidate(t *testing.T) {
+	p := runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "exact", Effort: "medium", Role: "writer"}
+	candidate := strings.Repeat("a", 64)
+	schema, err := writercontract.StrictAnchoredEditsSchemaForCandidate(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, _ := json.Marshal(map[string]any{"candidate_id": candidate, "output_schema": schema, "instruction": "edit anchors"})
+	i, err := runtime.NewInvocation(p, string(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := ThreadSettings{ThreadID: "thread", Model: p.Model, Provider: p.Provider, Effort: &p.Effort, Directory: t.TempDir(), Approval: "never", Sandbox: "readOnly"}
+	request := scriptedResponse(t, "", map[string]any{"turn": map[string]any{"id": "turn", "status": "completed", "items": []any{}}}, func(ctx context.Context, c *Client) error {
+		_, _, err := c.StartTurn(ctx, settings, i)
+		return err
+	})
+	var params map[string]json.RawMessage
+	if err := json.Unmarshal(request.Params, &params); err != nil || string(params["outputSchema"]) == "" {
+		t.Fatal("candidate-bound strict anchored schema did not reach turn/start", err)
+	}
+	wrongSchema, _ := writercontract.StrictAnchoredEditsSchemaForCandidate(strings.Repeat("b", 64))
+	wrongInput, _ := json.Marshal(map[string]any{"candidate_id": candidate, "output_schema": wrongSchema, "instruction": "edit anchors"})
+	wrong, err := runtime.NewInvocation(p, string(wrongInput))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := (&Client{}).StartTurn(context.Background(), settings, wrong); err == nil || !strings.Contains(err.Error(), "schema substitution") {
+		t.Fatalf("strict anchored schema for another candidate was not rejected before RPC: %v", err)
+	}
+}

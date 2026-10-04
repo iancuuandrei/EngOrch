@@ -67,7 +67,7 @@ func promptRecipeInstruction(policy *ExecutionPolicy, role, contract, instructio
 	}
 	switch role {
 	case "writer", "fixer":
-		if contract == writercontract.ContractAnchoredEditsV2 {
+		if contract == writercontract.ContractAnchoredEditsV2 || contract == writercontract.ContractAnchoredEditsV3 {
 			instruction += " For every existing-file change, copy candidate_id, path, and before_hash verbatim from the successful candidate_validate_anchored_edits result, and use the exact same edits from the corresponding validation call in the final proposal. Do not recompose or guess these values. If validation does not succeed or the exact values are unavailable, inspect the candidate and validate again."
 		}
 	case "reviewer":

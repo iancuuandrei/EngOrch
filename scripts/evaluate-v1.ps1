@@ -41,6 +41,14 @@ for that same Native review-impact treatment. It requires
 must match across Prepare and Evaluate. The receipt distinguishes the request
 from the inspected `candidate_facts_cache_version=1` policy; cache-hit
 statistics are not exposed and are not inferred.
+`-FixerModel` and/or `-FixerEffort` select an independent fixer route only
+with an explicit `-AccessConfigPath`. The bounded public config's resolved
+path and SHA-256 are bound by Prepare and must be unchanged at Evaluate; the
+runner rechecks its bytes immediately before `fabric init`. These Native-only
+options are appended to init only when requested. `-StrictWriterEdits` selects
+the anchored-edits-v3 writer contract and is mutually exclusive with the
+existing `-ValidateWriterEdits` v2 switch; its request is bound across
+Prepare/Evaluate and checked in the inspected creation config.
 Resource-bounded isolated writers are an optional Native-only treatment:
 `-IsolatedWriters -IsolationPolicyPath ABSOLUTE_PATH -MaxParallel N`. It is
 exclusive with `-ParallelWriters`; the policy path and exact file SHA-256 are
@@ -82,11 +90,15 @@ param(
     [string]$PlannerContextRIExecutableSHA256 = '',
     [switch]$ReviewImpactContext,
     [switch]$CandidateFactsCache,
+    [string]$FixerModel = '',
+    [string]$FixerEffort = '',
+    [string]$AccessConfigPath = '',
     [ValidateSet('', 'cache-prefix-v1')][string]$PromptRecipe = '',
     [switch]$ParallelWriters,
     [switch]$IsolatedWriters,
     [string]$IsolationPolicyPath = '',
     [switch]$ValidateWriterEdits,
+    [switch]$StrictWriterEdits,
     [ValidateRange(0, 8)][int]$MaxParallel = 0,
     [string]$PR5BaselineExe,
     [string]$PR5BaselineScript,
@@ -108,6 +120,28 @@ function Assert-AutoCompactRunnerBinding([string]$Mode, [long]$Limit, [bool]$Exp
     }
 }
 Assert-AutoCompactRunnerBinding $EvalMode $AutoCompactTokenLimit ([bool]$PSBoundParameters.ContainsKey('AutoCompactTokenLimit'))
+function Assert-FixerAccessRunnerBinding([string]$Mode, [bool]$FixerModelExplicit, [string]$Model, [bool]$FixerEffortExplicit, [string]$Effort, [bool]$AccessConfigExplicit, [string]$AccessConfig) {
+    $fixerRequested = $FixerModelExplicit -or $FixerEffortExplicit
+    if ($fixerRequested -and $Mode -ne 'Native') { throw 'Fixer model allocation requires Native mode.' }
+    if ($FixerModelExplicit -and [string]::IsNullOrWhiteSpace($Model)) { throw 'FixerModel must not be empty when explicitly supplied.' }
+    if ($FixerEffortExplicit -and [string]::IsNullOrWhiteSpace($Effort)) { throw 'FixerEffort must not be empty when explicitly supplied.' }
+    if ($fixerRequested -ne $AccessConfigExplicit) {
+        throw 'FixerModel or FixerEffort requires exactly one AccessConfigPath; AccessConfigPath is only valid with a fixer override.'
+    }
+    if ($AccessConfigExplicit -and [string]::IsNullOrWhiteSpace($AccessConfig)) { throw 'AccessConfigPath must not be empty.' }
+}
+$FixerModelExplicit = [bool]$PSBoundParameters.ContainsKey('FixerModel')
+$FixerEffortExplicit = [bool]$PSBoundParameters.ContainsKey('FixerEffort')
+$AccessConfigExplicit = [bool]$PSBoundParameters.ContainsKey('AccessConfigPath')
+Assert-FixerAccessRunnerBinding $EvalMode $FixerModelExplicit $FixerModel $FixerEffortExplicit $FixerEffort $AccessConfigExplicit $AccessConfigPath
+function Get-WriterContractRequest([bool]$ValidateEnabled, [bool]$StrictEnabled, [string]$Mode) {
+    if ($ValidateEnabled -and $StrictEnabled) { throw 'StrictWriterEdits and ValidateWriterEdits are mutually exclusive.' }
+    if (($ValidateEnabled -or $StrictEnabled) -and $Mode -ne 'Native') { throw 'Writer contract overrides require Native mode.' }
+    if ($StrictEnabled) { return 'anchored-edits-v3' }
+    if ($ValidateEnabled) { return 'anchored-edits-v2' }
+    return ''
+}
+$writerContractRequested = Get-WriterContractRequest ([bool]$ValidateWriterEdits) ([bool]$StrictWriterEdits) $EvalMode
 function Assert-IsolatedRunnerOptionShape([bool]$Enabled, [string]$PolicyPath, [bool]$Parallel, [string]$Mode, [int]$ParallelLimit) {
     if ($Enabled -ne (-not [string]::IsNullOrWhiteSpace($PolicyPath))) {
         throw 'IsolatedWriters and IsolationPolicyPath must be supplied together.'
@@ -122,7 +156,7 @@ function Assert-IsolatedRunnerOptionShape([bool]$Enabled, [string]$PolicyPath, [
         throw 'IsolatedWriters requires an explicit MaxParallel value from 1 through 8.'
     }
 }
-if ($Action -eq 'Evaluate' -and $EvalMode -eq 'PR5Matched' -and ($ParallelWriters -or $ValidateWriterEdits -or $MaxParallel -ne 0)) {
+if ($Action -eq 'Evaluate' -and $EvalMode -eq 'PR5Matched' -and ($ParallelWriters -or $ValidateWriterEdits -or $StrictWriterEdits -or $MaxParallel -ne 0)) {
     throw 'Writer and scheduler overrides require Native mode; PR5Matched retains its original invocation.'
 }
 Assert-IsolatedRunnerOptionShape ([bool]$IsolatedWriters) $IsolationPolicyPath ([bool]$ParallelWriters) $EvalMode $MaxParallel
@@ -189,9 +223,15 @@ $git = (Get-Command git -ErrorAction Stop).Source
 
 $DiffByteLimit = 1048576
 
-function Get-NativeInitArgs([string]$TaskPath, [string]$RuntimePath, [string]$WriterModel, [string]$WriterEffort, [bool]$EnableEditValidation) {
+function Get-NativeInitArgs([string]$TaskPath, [string]$RuntimePath, [string]$WriterModel, [string]$WriterEffort, [bool]$EnableEditValidation, [string]$FixerModel = '', [string]$FixerEffort = '', [string]$AccessConfigPath = '', [bool]$EnableStrictWriterEdits = $false) {
+    if ($EnableEditValidation -and $EnableStrictWriterEdits) { throw 'StrictWriterEdits and ValidateWriterEdits are mutually exclusive.' }
+    Assert-FixerAccessRunnerBinding 'Native' ($FixerModel -ne '') $FixerModel ($FixerEffort -ne '') $FixerEffort ($AccessConfigPath -ne '') $AccessConfigPath
     $nativeArgs = @('--root', $TaskPath, 'init', '--codex', $RuntimePath, '--model', $WriterModel, '--effort', $WriterEffort)
+    if ($FixerModel -ne '') { $nativeArgs += @('--fixer-model', $FixerModel) }
+    if ($FixerEffort -ne '') { $nativeArgs += @('--fixer-effort', $FixerEffort) }
+    if ($AccessConfigPath -ne '') { $nativeArgs += @('--access-config', $AccessConfigPath) }
     if ($EnableEditValidation) { $nativeArgs += '--validate-writer-edits' }
+    if ($EnableStrictWriterEdits) { $nativeArgs += '--strict-writer-edits' }
     return $nativeArgs
 }
 
@@ -258,6 +298,82 @@ function Get-FileSha256([string]$Path) {
         try { return ([BitConverter]::ToString($h.ComputeHash($fs)) -replace '-', '').ToLowerInvariant() }
         finally { $fs.Close() }
     } finally { $h.Dispose() }
+}
+
+function Get-AccessConfigBinding([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not [IO.Path]::IsPathFullyQualified($Path)) {
+        throw 'AccessConfigPath must be an absolute file path.'
+    }
+    $item = Get-Item -LiteralPath $Path -ErrorAction Stop
+    if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'AccessConfigPath must name a regular non-reparse file.'
+    }
+    if ($item.Length -eq 0 -or $item.Length -gt (32 * 1024)) {
+        throw 'Access config must be nonempty and no larger than 32 KiB.'
+    }
+    $stream = [IO.File]::Open($item.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    try {
+        if ($stream.Length -eq 0 -or $stream.Length -gt (32 * 1024)) { throw 'Access config must be nonempty and no larger than 32 KiB.' }
+        $buffer = New-Object byte[] (32 * 1024 + 1)
+        $read = $stream.Read($buffer, 0, $buffer.Length)
+        if ($read -eq 0 -or $read -gt (32 * 1024) -or $stream.ReadByte() -ne -1) {
+            throw 'Access config must be nonempty and no larger than 32 KiB.'
+        }
+        [byte[]]$bytes = $buffer[0..($read - 1)]
+    } finally { $stream.Dispose() }
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    try { $sha256 = ([BitConverter]::ToString($hasher.ComputeHash($bytes)) -replace '-', '').ToLowerInvariant() }
+    finally { $hasher.Dispose() }
+    return [ordered]@{ Path = $item.FullName; Sha256 = $sha256; Bytes = $bytes.Length }
+}
+
+function Assert-CurrentAccessConfigBinding($Binding) {
+    if ($null -eq $Binding) { throw 'Access config binding is missing.' }
+    $current = Get-AccessConfigBinding $Binding.Path
+    if ($current.Path -cne $Binding.Path -or $current.Sha256 -cne $Binding.Sha256 -or $current.Bytes -ne $Binding.Bytes) {
+        throw 'Access config path or file bytes changed after Prepare.'
+    }
+}
+
+function Assert-FixerAccessPreparedBinding($Prior, [bool]$FixerModelExplicit, [string]$Model, [bool]$FixerEffortExplicit, [string]$Effort, $Binding) {
+    $expected = @{
+        fixer_model_requested = if ($FixerModelExplicit) { $Model } else { $null }
+        fixer_effort_requested = if ($FixerEffortExplicit) { $Effort } else { $null }
+        access_config_path_requested = if ($null -ne $Binding) { $Binding.Path } else { $null }
+        access_config_sha256_requested = if ($null -ne $Binding) { $Binding.Sha256 } else { $null }
+        access_config_bytes_requested = if ($null -ne $Binding) { [int]$Binding.Bytes } else { $null }
+    }
+    foreach ($name in $expected.Keys) {
+        $property = $Prior.PSObject.Properties[$name]
+        $actual = if ($null -ne $property) { $property.Value } else { $null }
+        if ($null -eq $expected[$name]) {
+            if ($null -ne $actual -and $actual -ne '') { throw 'Fixer model/access config options must match the prepared run.' }
+        } elseif ([string]$actual -cne [string]$expected[$name]) {
+            throw 'Fixer model/access config options must match the prepared run.'
+        }
+    }
+}
+
+function Assert-WriterContractPreparedBinding($Prior, [string]$ExpectedContract) {
+    $property = $Prior.PSObject.Properties['writer_contract_requested']
+    $actual = if ($null -ne $property) { [string]$property.Value } else { '' }
+    if ($actual -cne $ExpectedContract) { throw 'Writer contract must match the treatment recorded by the prepared run.' }
+}
+
+function Assert-WriterContractObserved($Snapshot, [string]$ExpectedContract) {
+    if ($ExpectedContract -eq '') { return $null }
+    $actual = [string]$Snapshot.creation.config.writer_contract
+    if ($actual -cne $ExpectedContract) { throw "Inspected run writer contract '$actual' does not match requested '$ExpectedContract'." }
+    return $actual
+}
+
+function Assert-FixerRouteObserved($Snapshot, [bool]$Enabled, [string]$ExpectedModel, [string]$ExpectedEffort) {
+    if (-not $Enabled) { return $null }
+    $fixerProfile = $Snapshot.creation.config.fixer
+    if ($null -eq $fixerProfile -or [string]$fixerProfile.model -cne $ExpectedModel -or [string]$fixerProfile.effort -cne $ExpectedEffort) {
+        throw 'Inspected run fixer route does not match the explicitly requested model and effort.'
+    }
+    return [ordered]@{ model = [string]$fixerProfile.model; effort = [string]$fixerProfile.effort }
 }
 
 function Get-IsolationPolicyBinding([string]$Path) {
@@ -924,6 +1040,7 @@ function Get-RunGate([object]$Snap, [string]$FabricRunId, [string]$DiffCandidate
 
 $GoExe = (Resolve-Path -LiteralPath $GoExe -ErrorAction Stop).Path
 if (-not (Test-Path -LiteralPath $GoExe -PathType Leaf)) { throw 'Pinned Go executable is not a file.' }
+$fixerAccessBinding = if ($AccessConfigExplicit) { Get-AccessConfigBinding $AccessConfigPath } else { $null }
 $goVersion = (& $GoExe version).Trim()
 if ($LASTEXITCODE -ne 0 -or $goVersion -notmatch 'go1\.27\.1') { throw "Expected Go 1.27.1, got $goVersion" }
 $goEnvironmentBinding = Get-PinnedGoEnvironmentBinding $GoExe
@@ -1039,6 +1156,14 @@ if ($Action -eq 'Prepare') {
         }
         if ($ReviewImpactContext) { $records[-1].review_impact_context_requested = $true }
         if ($CandidateFactsCache) { $records[-1].candidate_facts_cache_version_requested = 1 }
+        if ($FixerModelExplicit) { $records[-1].fixer_model_requested = $FixerModel }
+        if ($FixerEffortExplicit) { $records[-1].fixer_effort_requested = $FixerEffort }
+        if ($null -ne $fixerAccessBinding) {
+            $records[-1].access_config_path_requested = $fixerAccessBinding.Path
+            $records[-1].access_config_sha256_requested = $fixerAccessBinding.Sha256
+            $records[-1].access_config_bytes_requested = $fixerAccessBinding.Bytes
+        }
+        if ($writerContractRequested -ne '') { $records[-1].writer_contract_requested = $writerContractRequested }
         if ($IsolatedWriters) {
             $records[-1].isolated_writers_requested = $true
             $records[-1].max_parallel_requested = $MaxParallel
@@ -1077,6 +1202,14 @@ if ($Action -eq 'Prepare') {
     }
     if ($ReviewImpactContext) { $record.review_impact_context_requested = $true }
     if ($CandidateFactsCache) { $record.candidate_facts_cache_version_requested = 1 }
+    if ($FixerModelExplicit) { $record.fixer_model_requested = $FixerModel }
+    if ($FixerEffortExplicit) { $record.fixer_effort_requested = $FixerEffort }
+    if ($null -ne $fixerAccessBinding) {
+        $record.access_config_path_requested = $fixerAccessBinding.Path
+        $record.access_config_sha256_requested = $fixerAccessBinding.Sha256
+        $record.access_config_bytes_requested = $fixerAccessBinding.Bytes
+    }
+    if ($writerContractRequested -ne '') { $record.writer_contract_requested = $writerContractRequested }
     if ($IsolatedWriters) {
         $record.isolated_writers_requested = $true
         $record.max_parallel_requested = $MaxParallel
@@ -1136,6 +1269,8 @@ $prior = Get-Content -Raw -LiteralPath $runJsonPath | ConvertFrom-Json
 Assert-AutoCompactPreparedBinding $prior $AutoCompactTokenLimit
 Assert-ReviewImpactPreparedBinding $prior ([bool]$ReviewImpactContext)
 Assert-CandidateFactsCachePreparedBinding $prior ([bool]$CandidateFactsCache)
+Assert-FixerAccessPreparedBinding $prior $FixerModelExplicit $FixerModel $FixerEffortExplicit $FixerEffort $fixerAccessBinding
+Assert-WriterContractPreparedBinding $prior $writerContractRequested
 $preparedPlannerContext = [string]$prior.planner_context_requested
 if ($preparedPlannerContext -ne $PlannerContext) {
     throw 'PlannerContext must match the treatment recorded by the prepared run.'
@@ -1203,6 +1338,14 @@ foreach ($entry in $entries) {
     }
     if ($ReviewImpactContext) { $result.review_impact_context_requested = $true }
     if ($CandidateFactsCache) { $result.candidate_facts_cache_version_requested = 1 }
+    if ($FixerModelExplicit) { $result.fixer_model_requested = $FixerModel }
+    if ($FixerEffortExplicit) { $result.fixer_effort_requested = $FixerEffort }
+    if ($null -ne $fixerAccessBinding) {
+        $result.access_config_path_requested = $fixerAccessBinding.Path
+        $result.access_config_sha256_requested = $fixerAccessBinding.Sha256
+        $result.access_config_bytes_requested = $fixerAccessBinding.Bytes
+    }
+    if ($writerContractRequested -ne '') { $result.writer_contract_requested = $writerContractRequested }
     if ($IsolatedWriters) {
         $result.isolated_writers_requested = $true
         $result.max_parallel_requested = $MaxParallel
@@ -1225,7 +1368,8 @@ foreach ($entry in $entries) {
             if ((Test-Path -LiteralPath (Join-Path $taskPath 'harness.toml')) -or (Test-Path -LiteralPath (Join-Path $taskPath '.harness'))) {
                 throw "Task checkout for $($entry.id) already initialized; Evaluate requires a fresh prepared clone"
             }
-            $initArgs = @(Get-NativeInitArgs $taskPath $CodexExe $Model $Effort ([bool]$ValidateWriterEdits))
+            if ($null -ne $fixerAccessBinding) { Assert-CurrentAccessConfigBinding $fixerAccessBinding }
+            $initArgs = @(Get-NativeInitArgs $taskPath $CodexExe $Model $Effort ([bool]$ValidateWriterEdits) $FixerModel $FixerEffort $(if ($null -ne $fixerAccessBinding) { $fixerAccessBinding.Path } else { '' }) ([bool]$StrictWriterEdits))
             Invoke-WithPinnedGo $GoExe {
                 & $FabricExe @initArgs 1> (Join-Path $taskOutDir 'fabric-init.stdout.log') 2> (Join-Path $taskOutDir 'fabric-init.stderr.log')
                 if ($LASTEXITCODE -ne 0) { throw "fabric init failed for $($entry.id); see fabric-init.*.log" }
@@ -1242,6 +1386,7 @@ foreach ($entry in $entries) {
             if ($IsolatedWriters) { $result.isolated_writers_requested = $true }
             if ($AutoCompactTokenLimit -gt 0) { $result.auto_compact_token_limit_requested = $AutoCompactTokenLimit }
             $result.writer_edit_validation_requested = [bool]$ValidateWriterEdits
+            if ($writerContractRequested -ne '') { $result.writer_contract_requested = $writerContractRequested }
             $result.max_parallel_requested = if ($MaxParallel -eq 0) { $null } else { $MaxParallel }
             Invoke-WithPinnedGo $GoExe {
                 if ($IsolatedWriters) { Assert-CurrentIsolationPolicyBinding $isolationPolicyBinding }
@@ -1287,6 +1432,10 @@ foreach ($entry in $entries) {
             $result.auto_compact_token_limit_observed = if ($null -ne $autoCompactObserved) { $autoCompactObserved.token_limit } else { $null }
             $candidateFactsCacheObserved = Assert-CandidateFactsCacheObserved $snap ([bool]$CandidateFactsCache)
             if ($null -ne $candidateFactsCacheObserved) { $result.candidate_facts_cache_version_observed = $candidateFactsCacheObserved }
+            $writerContractObserved = Assert-WriterContractObserved $snap $writerContractRequested
+            if ($null -ne $writerContractObserved) { $result.writer_contract_observed = $writerContractObserved }
+            $fixerRouteObserved = Assert-FixerRouteObserved $snap ($FixerModelExplicit -or $FixerEffortExplicit) $(if ($FixerModelExplicit) { $FixerModel } else { $Model }) $(if ($FixerEffortExplicit) { $FixerEffort } else { $Effort })
+            if ($null -ne $fixerRouteObserved) { $result.fixer_route_config_observed = $fixerRouteObserved }
             if ($IsolatedWriters) {
                 $expectedStateRoot = [IO.Path]::GetFullPath((Join-Path $taskOutDir 'controller-state'))
                 if ([string]$snap.creation.config.controller_state_root -cne $expectedStateRoot) {
@@ -1650,6 +1799,14 @@ $evalRecord = [ordered]@{
 }
 if ($ReviewImpactContext) { $evalRecord.review_impact_context_requested = $true }
 if ($CandidateFactsCache) { $evalRecord.candidate_facts_cache_version_requested = 1 }
+if ($FixerModelExplicit) { $evalRecord.fixer_model_requested = $FixerModel }
+if ($FixerEffortExplicit) { $evalRecord.fixer_effort_requested = $FixerEffort }
+if ($null -ne $fixerAccessBinding) {
+    $evalRecord.access_config_path_requested = $fixerAccessBinding.Path
+    $evalRecord.access_config_sha256_requested = $fixerAccessBinding.Sha256
+    $evalRecord.access_config_bytes_requested = $fixerAccessBinding.Bytes
+}
+if ($writerContractRequested -ne '') { $evalRecord.writer_contract_requested = $writerContractRequested }
 if ($IsolatedWriters) {
     $evalRecord.isolated_writers_requested = $true
     $evalRecord.max_parallel_requested = $MaxParallel

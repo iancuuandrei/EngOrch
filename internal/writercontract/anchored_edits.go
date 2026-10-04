@@ -14,10 +14,14 @@ const ContractAnchoredEditsV1 = "anchored-edits-v1"
 // candidate anchor validation for writer/fixer model invocations.
 const ContractAnchoredEditsV2 = "anchored-edits-v2"
 
-// IsAnchoredEdits reports contracts that share the frozen anchored proposal
-// schema and controller-side composition rules.
+// ContractAnchoredEditsV3 adds a provider-facing schema branch that excludes
+// no-op existing-file entries while preserving the v1/v2 proposal decoder.
+const ContractAnchoredEditsV3 = "anchored-edits-v3"
+
+// IsAnchoredEdits reports contracts that share the anchored proposal decoder
+// and controller-side composition rules. V3 uses a stricter provider schema.
 func IsAnchoredEdits(contract string) bool {
-	return contract == ContractAnchoredEditsV1 || contract == ContractAnchoredEditsV2
+	return contract == ContractAnchoredEditsV1 || contract == ContractAnchoredEditsV2 || contract == ContractAnchoredEditsV3
 }
 
 const (
@@ -61,6 +65,19 @@ func AnchoredEditsSchema() json.RawMessage {
 // AnchoredEditsSchemaForCandidate constrains output to the exact candidate ID.
 func AnchoredEditsSchemaForCandidate(candidateID string) (json.RawMessage, error) {
 	return schemaForCandidate(AnchoredEditsSchema(), candidateID)
+}
+
+// StrictAnchoredEditsSchema describes v3's two disjoint file forms. The
+// existing-file branch requires at least one anchored edit; the new-file branch
+// requires no edits and explicit content. It uses nested anyOf, which the
+// documented Codex structured-output subset supports; native qualification remains pending.
+func StrictAnchoredEditsSchema() json.RawMessage {
+	return json.RawMessage(fmt.Sprintf(`{"type":"object","additionalProperties":false,"required":["candidate_id","changes"],"properties":{"candidate_id":{"type":"string","pattern":"^[0-9a-f]{64}$"},"changes":{"type":"array","minItems":1,"maxItems":%d,"items":{"anyOf":[{"type":"object","additionalProperties":false,"required":["path","before_hash","edits","new_content_utf8","executable"],"properties":{"path":{"type":"string","minLength":1},"before_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},"edits":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["before","after"],"properties":{"before":{"type":"string","minLength":1,"maxLength":%d},"after":{"type":"string","maxLength":%d}}}},"new_content_utf8":{"type":"null"},"executable":{"type":"boolean"}}},{"type":"object","additionalProperties":false,"required":["path","before_hash","edits","new_content_utf8","executable"],"properties":{"path":{"type":"string","minLength":1},"before_hash":{"type":"null"},"edits":{"type":"array","maxItems":0,"items":{"type":"object","additionalProperties":false,"required":["before","after"],"properties":{"before":{"type":"string","minLength":1,"maxLength":%d},"after":{"type":"string","maxLength":%d}}}},"new_content_utf8":{"type":"string","maxLength":%d},"executable":{"type":"boolean"}}}]}}}}`, AnchoredEditsMaxChanges, AnchoredEditAnchorMax, AnchoredEditAnchorMax, AnchoredEditAnchorMax, AnchoredEditAnchorMax, AnchoredNewFileMax))
+}
+
+// StrictAnchoredEditsSchemaForCandidate binds v3 output to one exact candidate.
+func StrictAnchoredEditsSchemaForCandidate(candidateID string) (json.RawMessage, error) {
+	return schemaForCandidate(StrictAnchoredEditsSchema(), candidateID)
 }
 
 func schemaForCandidate(schema json.RawMessage, candidateID string) (json.RawMessage, error) {

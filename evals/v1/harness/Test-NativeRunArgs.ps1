@@ -33,9 +33,23 @@ $reviewImpactObserved = $ast.Find({ param($node) $node -is [System.Management.Au
 $factsCacheBinding = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-CandidateFactsCacheRunnerBindingShape' }, $true)
 $factsCachePrepared = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-CandidateFactsCachePreparedBinding' }, $true)
 $factsCacheObserved = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-CandidateFactsCacheObserved' }, $true)
+$fixerShape = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-FixerAccessRunnerBinding' }, $true)
+$accessBinding = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-AccessConfigBinding' }, $true)
+$currentAccessBinding = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-CurrentAccessConfigBinding' }, $true)
+$preparedFixerBinding = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-FixerAccessPreparedBinding' }, $true)
+$preparedWriterContract = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-WriterContractPreparedBinding' }, $true)
+$writerContractRequest = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-WriterContractRequest' }, $true)
+$observedWriterContract = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-WriterContractObserved' }, $true)
+$observedFixerRoute = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-FixerRouteObserved' }, $true)
+$nativeInitArgs = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-NativeInitArgs' }, $true)
 if ($null -eq $reviewImpactBinding -or $null -eq $reviewImpactPrepared -or $null -eq $reviewImpactObserved -or
     $null -eq $factsCacheBinding -or $null -eq $factsCachePrepared -or $null -eq $factsCacheObserved) {
     throw 'Review-impact/candidate-facts-cache treatment binding helpers missing.'
+}
+if ($null -eq $fixerShape -or $null -eq $accessBinding -or $null -eq $currentAccessBinding -or
+    $null -eq $preparedFixerBinding -or $null -eq $preparedWriterContract -or $null -eq $writerContractRequest -or
+    $null -eq $observedWriterContract -or $null -eq $observedFixerRoute -or $null -eq $nativeInitArgs) {
+    throw 'Fixer/access or writer-contract runner binding helpers missing.'
 }
 . ([scriptblock]::Create($goMode.Extent.Text))
 . ([scriptblock]::Create($fileHash.Extent.Text))
@@ -46,6 +60,15 @@ if ($null -eq $reviewImpactBinding -or $null -eq $reviewImpactPrepared -or $null
 . ([scriptblock]::Create($factsCacheBinding.Extent.Text))
 . ([scriptblock]::Create($factsCachePrepared.Extent.Text))
 . ([scriptblock]::Create($factsCacheObserved.Extent.Text))
+. ([scriptblock]::Create($fixerShape.Extent.Text))
+. ([scriptblock]::Create($accessBinding.Extent.Text))
+. ([scriptblock]::Create($currentAccessBinding.Extent.Text))
+. ([scriptblock]::Create($preparedFixerBinding.Extent.Text))
+. ([scriptblock]::Create($preparedWriterContract.Extent.Text))
+. ([scriptblock]::Create($writerContractRequest.Extent.Text))
+. ([scriptblock]::Create($observedWriterContract.Extent.Text))
+. ([scriptblock]::Create($observedFixerRoute.Extent.Text))
+. ([scriptblock]::Create($nativeInitArgs.Extent.Text))
 . ([scriptblock]::Create($policyBinding.Extent.Text))
 . ([scriptblock]::Create($preparedBinding.Extent.Text))
 . ([scriptblock]::Create($observedPolicy.Extent.Text))
@@ -81,6 +104,86 @@ foreach ($invalidOptions in @(
 
 $taskPath = 'D:\task path\repo'
 $objective = 'Implement a real task with --literal text'
+$legacyInitArgs = @(Get-NativeInitArgs $taskPath 'C:\tools\codex.exe' 'gpt-6-luna' 'high' $false)
+$expectedLegacyInitArgs = @('--root', $taskPath, 'init', '--codex', 'C:\tools\codex.exe', '--model', 'gpt-6-luna', '--effort', 'high')
+if (($legacyInitArgs | ConvertTo-Json -Compress) -ne ($expectedLegacyInitArgs | ConvertTo-Json -Compress)) { throw 'Default init argv changed.' }
+$pilotInitArgs = @(Get-NativeInitArgs $taskPath 'C:\tools\codex.exe' 'gpt-6-luna' 'high' $false 'gpt-6.1-sol' 'high' 'D:\policy\public-access-v1.json' $true)
+$expectedPilotInitArgs = @('--root', $taskPath, 'init', '--codex', 'C:\tools\codex.exe', '--model', 'gpt-6-luna', '--effort', 'high', '--fixer-model', 'gpt-6.1-sol', '--fixer-effort', 'high', '--access-config', 'D:\policy\public-access-v1.json', '--strict-writer-edits')
+if (($pilotInitArgs | ConvertTo-Json -Compress) -ne ($expectedPilotInitArgs | ConvertTo-Json -Compress)) { throw 'Pilot init argv does not select only the explicit fixer route/access file and strict writer contract.' }
+Assert-FixerAccessRunnerBinding 'Native' $true 'gpt-6.1-sol' $true 'high' $true 'D:\policy\access.json'
+Assert-FixerAccessRunnerBinding 'Native' $true 'gpt-6.1-sol' $false '' $true 'D:\policy\access.json'
+foreach ($badFixerBinding in @(
+    @{ Mode='Native'; ModelOn=$true; Model='gpt-6-sol'; EffortOn=$false; Effort=''; AccessOn=$false; Access='' },
+    @{ Mode='Native'; ModelOn=$false; Model=''; EffortOn=$false; Effort=''; AccessOn=$true; Access='D:\policy\access.json' },
+    @{ Mode='PR5Matched'; ModelOn=$true; Model='gpt-6-sol'; EffortOn=$true; Effort='high'; AccessOn=$true; Access='D:\policy\access.json' },
+    @{ Mode='Native'; ModelOn=$true; Model=' '; EffortOn=$false; Effort=''; AccessOn=$true; Access='D:\policy\access.json' }
+)) {
+    $rejected = $false
+    try { Assert-FixerAccessRunnerBinding $badFixerBinding.Mode $badFixerBinding.ModelOn $badFixerBinding.Model $badFixerBinding.EffortOn $badFixerBinding.Effort $badFixerBinding.AccessOn $badFixerBinding.Access } catch { $rejected = $true }
+    if (-not $rejected) { throw 'Invalid fixer/access runner combination was accepted.' }
+}
+if ((Get-WriterContractRequest $false $false 'Native') -cne '' -or
+    (Get-WriterContractRequest $true $false 'Native') -cne 'anchored-edits-v2' -or
+    (Get-WriterContractRequest $false $true 'Native') -cne 'anchored-edits-v3') { throw 'Writer contract request mapping is incorrect.' }
+$rejectedWriterContractConflict = $false
+try { Get-WriterContractRequest $true $true 'Native' | Out-Null } catch { $rejectedWriterContractConflict = $true }
+if (-not $rejectedWriterContractConflict) { throw 'Conflicting writer contract flags were accepted.' }
+$preparedWriterV3 = [pscustomobject]@{ writer_contract_requested = 'anchored-edits-v3' }
+Assert-WriterContractPreparedBinding $preparedWriterV3 'anchored-edits-v3'
+Assert-WriterContractPreparedBinding ([pscustomobject]@{}) ''
+$rejectedWriterContractMutation = $false
+try { Assert-WriterContractPreparedBinding $preparedWriterV3 'anchored-edits-v2' } catch { $rejectedWriterContractMutation = $true }
+if (-not $rejectedWriterContractMutation) { throw 'Evaluate accepted a changed writer contract.' }
+$observedWriterV3 = Assert-WriterContractObserved @{creation=@{config=@{writer_contract='anchored-edits-v3'}}} 'anchored-edits-v3'
+if ($observedWriterV3 -cne 'anchored-edits-v3') { throw 'Inspected strict writer contract was not observed.' }
+$observedFixer = Assert-FixerRouteObserved @{creation=@{config=@{fixer=@{model='gpt-6.1-sol';effort='high'}}}} $true 'gpt-6.1-sol' 'high'
+if ($observedFixer.model -cne 'gpt-6.1-sol' -or $observedFixer.effort -cne 'high') { throw 'Inspected fixer route did not preserve model/effort evidence.' }
+$rejectedWrongFixer = $false
+try { Assert-FixerRouteObserved @{creation=@{config=@{fixer=@{model='gpt-6-luna';effort='high'}}}} $true 'gpt-6.1-sol' 'high' } catch { $rejectedWrongFixer = $true }
+if (-not $rejectedWrongFixer) { throw 'Inspected fixer route mismatch was accepted.' }
+
+$accessTestRoot = Join-Path $env:TEMP ('runner-access-config-' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $accessTestRoot | Out-Null
+try {
+    $accessPath = Join-Path $accessTestRoot 'public-access-v1.json'
+    [IO.File]::WriteAllText($accessPath, '{"class":"PUBLIC"}', (New-Object System.Text.UTF8Encoding($false)))
+    $access = Get-AccessConfigBinding $accessPath
+    if ($access.Path -cne $accessPath -or $access.Bytes -ne 18 -or $access.Sha256 -notmatch '^[0-9a-f]{64}$') { throw 'Access config path/size/hash binding is incomplete.' }
+    Assert-CurrentAccessConfigBinding $access
+    $preparedAccess = [pscustomobject]@{
+        fixer_model_requested = 'gpt-6.1-sol'; fixer_effort_requested = 'high'
+        access_config_path_requested = $access.Path; access_config_sha256_requested = $access.Sha256
+        access_config_bytes_requested = $access.Bytes
+    }
+    Assert-FixerAccessPreparedBinding $preparedAccess $true 'gpt-6.1-sol' $true 'high' $access
+    Assert-FixerAccessPreparedBinding ([pscustomobject]@{}) $false '' $false '' $null
+    $changedAccess = [pscustomobject]@{
+        fixer_model_requested = 'gpt-6.1-sol'; fixer_effort_requested = 'high'
+        access_config_path_requested = $access.Path; access_config_sha256_requested = ('0' * 64)
+        access_config_bytes_requested = $access.Bytes
+    }
+    $rejectedAccessMutation = $false
+    try { Assert-FixerAccessPreparedBinding $changedAccess $true 'gpt-6.1-sol' $true 'high' $access } catch { $rejectedAccessMutation = $true }
+    if (-not $rejectedAccessMutation) { throw 'Evaluate accepted a changed access-config content hash.' }
+    $changedAccessPath = [pscustomobject]@{
+        fixer_model_requested = 'gpt-6.1-sol'; fixer_effort_requested = 'high'
+        access_config_path_requested = (Join-Path $accessTestRoot 'other.json'); access_config_sha256_requested = $access.Sha256
+        access_config_bytes_requested = $access.Bytes
+    }
+    $rejectedAccessPathMutation = $false
+    try { Assert-FixerAccessPreparedBinding $changedAccessPath $true 'gpt-6.1-sol' $true 'high' $access } catch { $rejectedAccessPathMutation = $true }
+    if (-not $rejectedAccessPathMutation) { throw 'Evaluate accepted an access-config path change with the same recorded bytes/hash.' }
+    [IO.File]::WriteAllText($accessPath, '{"class":"PUBLIC","changed":true}', (New-Object System.Text.UTF8Encoding($false)))
+    $rejectedCurrentAccessMutation = $false
+    try { Assert-CurrentAccessConfigBinding $access } catch { $rejectedCurrentAccessMutation = $true }
+    if (-not $rejectedCurrentAccessMutation) { throw 'Changed access-config bytes passed the pre-init binding check.' }
+    [IO.File]::WriteAllText($accessPath, ('x' * (32 * 1024 + 1)), (New-Object System.Text.UTF8Encoding($false)))
+    $rejectedOversizedAccess = $false
+    try { Get-AccessConfigBinding $accessPath | Out-Null } catch { $rejectedOversizedAccess = $true }
+    if (-not $rejectedOversizedAccess) { throw 'Oversized access config was accepted.' }
+} finally {
+    Remove-Item -LiteralPath $accessTestRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
 Assert-AutoCompactRunnerBinding 'Native' 0 $false
 Assert-AutoCompactRunnerBinding 'Native' 64000 $true
 foreach ($badAutoCompact in @(
@@ -205,6 +308,18 @@ $rejectedBeforeEffects = $false
 try { & $runner -Action Prepare -RunRoot $preEffectProbeRoot -CandidateFactsCache } catch { $rejectedBeforeEffects = $true }
 if (-not $rejectedBeforeEffects -or (Test-Path -LiteralPath $preEffectProbeRoot)) {
     throw 'Invalid CandidateFactsCache runner arguments were not rejected before creating the run root.'
+}
+$fixerPreEffectRoot = Join-Path ([IO.Path]::GetTempPath()) ('fabric-v1-fixer-invalid-' + [guid]::NewGuid().ToString('N'))
+$rejectedMissingAccess = $false
+try { & $runner -Action Prepare -RunRoot $fixerPreEffectRoot -FixerModel 'gpt-6-sol' } catch { $rejectedMissingAccess = $true }
+if (-not $rejectedMissingAccess -or (Test-Path -LiteralPath $fixerPreEffectRoot)) {
+    throw 'Missing fixer access policy was not rejected before creating the run root.'
+}
+$strictConflictRoot = Join-Path ([IO.Path]::GetTempPath()) ('fabric-v1-writer-contract-invalid-' + [guid]::NewGuid().ToString('N'))
+$rejectedWriterConflictBeforeEffects = $false
+try { & $runner -Action Prepare -RunRoot $strictConflictRoot -ValidateWriterEdits -StrictWriterEdits } catch { $rejectedWriterConflictBeforeEffects = $true }
+if (-not $rejectedWriterConflictBeforeEffects -or (Test-Path -LiteralPath $strictConflictRoot)) {
+    throw 'Conflicting writer contract flags were not rejected before creating the run root.'
 }
 $reviewCandidate = 'a' * 64
 $reviewImpactSnapshot = @{
@@ -377,4 +492,4 @@ foreach ($invalid in @(-1, 9)) {
     try { Get-NativeRunArgs $taskPath $objective $true $invalid | Out-Null } catch { $rejected = $true }
     if (-not $rejected) { throw "Invalid limit $invalid was admitted." }
 }
-Write-Output 'PASS: legacy argv is byte-order stable; Go planner modes bind exact parser provenance; reviewer-impact and candidate-facts-cache opt-ins match Prepare/Evaluate and observed immutable policy versions; isolated mode binds policy and an external controller state root; invalid combinations and mutations reject; objectives stay one argument; no provider calls.'
+Write-Output 'PASS: legacy argv is byte-order stable; Go planner modes bind exact parser provenance; reviewer-impact/cache/fixer/access and writer-contract options match Prepare/Evaluate; access bytes and observed immutable policies are bound; invalid combinations and mutations reject; objectives stay one argument; no provider calls.'

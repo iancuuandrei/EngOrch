@@ -320,7 +320,7 @@ func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected
 			return result, policyErr
 		}
 		candidateBinding := &codexruntime.CandidateBinding{Workspace: *workspace, Candidate: before}
-		if s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV2 && (expected.Invocation.Profile.Role == "writer" || expected.Invocation.Profile.Role == "fixer") {
+		if (s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV2 || s.Creation.Config.WriterContract == writercontract.ContractAnchoredEditsV3) && (expected.Invocation.Profile.Role == "writer" || expected.Invocation.Profile.Role == "fixer") {
 			candidateBinding.AnchorValidationVersion = candidatetools.AnchorValidationVersion
 		}
 		directory := filepath.Join(l.Root, "workspace")
