@@ -30,6 +30,7 @@ type UsageStart struct {
 
 // UsageNormalized is the normalized receipt and failure for one notification.
 type UsageNormalized struct {
+	Version int                `json:"version,omitempty"`
 	Receipt codexusage.Receipt `json:"receipt"`
 	Failure string             `json:"failure"`
 }
@@ -53,8 +54,19 @@ func (a *Adapter) beginUsage(thread codexrpc.ThreadSettings) error {
 }
 
 func normalizeUsage(s *State) UsageNormalized {
-	n := UsageNormalized{}
-	event, err := codexusage.DecodeNotification(s.UsagePending.Params)
+	return normalizeUsageWithDecoder(s, 2, codexusage.DecodeNotification)
+}
+
+// normalizeUsageLegacy retains the exact strict decoder used by versionless
+// historical normalization records. Recorded failures remain authoritative on
+// replay even when a newer decoder recognizes an additional native observation.
+func normalizeUsageLegacy(s *State) UsageNormalized {
+	return normalizeUsageWithDecoder(s, 0, codexusage.DecodeNotificationLegacy)
+}
+
+func normalizeUsageWithDecoder(s *State, version int, decode func([]byte) (codexusage.Notification, error)) UsageNormalized {
+	n := UsageNormalized{Version: version}
+	event, err := decode(s.UsagePending.Params)
 	if err != nil {
 		n.Failure = "USAGE_INVALID_EVENT"
 		if s.usageTracker != nil {
@@ -179,7 +191,15 @@ func (s *State) usageEvent(kind string, raw json.RawMessage) error {
 		if err := canonical.Decode(raw, &got); err != nil {
 			return err
 		}
-		want := normalizeUsage(s)
+		var want UsageNormalized
+		switch got.Version {
+		case 0:
+			want = normalizeUsageLegacy(s)
+		case 2:
+			want = normalizeUsage(s)
+		default:
+			return errors.New("unsupported usage normalization version")
+		}
 		a, _ := canonical.Hash("usage", got)
 		b, _ := canonical.Hash("usage", want)
 		if a != b {

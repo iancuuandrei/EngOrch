@@ -11,13 +11,77 @@ import (
 	"testing"
 	"time"
 
+	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/codexrpc"
+	"harness.local/engorch/internal/codexusage"
 	"harness.local/engorch/internal/journal"
 )
 
 func usageParams(total int64) map[string]any {
 	counts := map[string]any{"inputTokens": total - 1, "cachedInputTokens": 0, "outputTokens": 1, "reasoningOutputTokens": 0, "totalTokens": total}
 	return map[string]any{"threadId": "thread-1", "turnId": "turn-1", "tokenUsage": map[string]any{"last": counts, "total": counts}}
+}
+
+func totalOnlyLastUsageParams() []byte {
+	raw, _ := json.Marshal(map[string]any{
+		"threadId": "thread-1", "turnId": "turn-1",
+		"tokenUsage": map[string]any{
+			"last":  map[string]any{"inputTokens": 0, "cachedInputTokens": 0, "outputTokens": 0, "reasoningOutputTokens": 0, "cacheWriteInputTokens": 0, "totalTokens": 19175},
+			"total": map[string]any{"inputTokens": 155748, "cachedInputTokens": 123648, "outputTokens": 2384, "reasoningOutputTokens": 1052, "cacheWriteInputTokens": 0, "totalTokens": 158132},
+		},
+	})
+	return raw
+}
+
+func TestTotalOnlyLastUsageUsesVersionedNormalizerAndPreservesLegacyFailure(t *testing.T) {
+	pending := &codexrpc.Message{Method: "thread/tokenUsage/updated", Params: totalOnlyLastUsageParams()}
+	newState := func() State {
+		tracker, err := codexusage.FreshTracker("thread-1", "turn-1", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return State{
+			Thread:       &codexrpc.ThreadSettings{ThreadID: "thread-1"},
+			TurnPending:  true,
+			UsageTurnID:  "turn-1",
+			UsagePolicy:  &UsagePolicy{ThreadID: "thread-1", Origin: "FRESH_THREAD"},
+			UsagePending: pending,
+			usageTracker: tracker,
+		}
+	}
+	legacyState := newState()
+	legacy := normalizeUsageLegacy(&legacyState)
+	const legacyFailure = "codex usage notification is invalid: last: totalTokens does not equal inputTokens plus outputTokens"
+	if legacy.Version != 0 || legacy.Failure != legacyFailure {
+		t.Fatalf("legacy normalizer changed historical failure: %+v", legacy)
+	}
+	legacyBytes, err := canonical.Bytes(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacyState.usageEvent("runtime.usage-normalized", legacyBytes); err != nil || legacyState.UsageFailure != legacyFailure {
+		t.Fatalf("historical normalization did not replay its stored failure: state=%+v err=%v", legacyState, err)
+	}
+	stopBytes, err := canonical.Bytes(UsageStop{Reason: legacyFailure, ThreadID: "thread-1", TurnID: "turn-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacyState.usageEvent("runtime.usage-interrupt-intent", stopBytes); err != nil || !legacyState.UsageInterrupt {
+		t.Fatalf("historical usage interrupt did not remain replayable: state=%+v err=%v", legacyState, err)
+	}
+
+	state := newState()
+	current := normalizeUsage(&state)
+	if current.Version != 2 || current.Failure != "" || current.Receipt.Coverage != "OBSERVED" || current.Receipt.After.TotalTokens != 158132 || current.Receipt.Delta.InputTokens != 155748 || current.Receipt.Delta.OutputTokens != 2384 {
+		t.Fatalf("new normalizer did not retain only cumulative typed usage: %+v", current)
+	}
+	currentBytes, err := canonical.Bytes(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.usageEvent("runtime.usage-normalized", currentBytes); err != nil || state.UsageFailure != "" || state.UsageReceipt == nil || state.UsageReceipt.After.TotalTokens != 158132 {
+		t.Fatalf("versioned current normalization failed: state=%+v err=%v", state, err)
+	}
 }
 
 func TestLiveUsageJournalAndBudgetStop(t *testing.T) {

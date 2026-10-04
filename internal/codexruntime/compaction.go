@@ -12,6 +12,7 @@ const (
 	compactionLifecycleVersion = 1
 	maxCompactionItems         = 64
 	maxCompactionEvents        = maxCompactionItems * 2
+	maxCompactionParams        = 16 * 1024
 )
 
 // CompactionLifecycle records a metadata-only Codex compaction item phase.
@@ -56,12 +57,27 @@ func compactionNotification(m codexrpc.Message) (CompactionLifecycle, bool, erro
 	default:
 		return CompactionLifecycle{}, false, nil
 	}
-	var envelope struct {
-		ThreadID string          `json:"threadId"`
-		TurnID   string          `json:"turnId"`
-		Item     json.RawMessage `json:"item"`
+	if len(m.Params) == 0 || len(m.Params) > codexrpc.MaxMessage {
+		return CompactionLifecycle{}, true, errors.New("invalid compaction notification envelope")
 	}
-	if len(m.Params) == 0 || len(m.Params) > 16*1024 || canonical.Decode(m.Params, &envelope) != nil {
+	itemType, err := notificationItemType(m.Params)
+	if err != nil {
+		return CompactionLifecycle{}, true, err
+	}
+	if itemType != "contextCompaction" {
+		if !knownThreadItemType(itemType) {
+			return CompactionLifecycle{}, true, errors.New("unknown provider item type")
+		}
+		// Codex sends the complete ThreadItem on lifecycle notifications. Ordinary
+		// user and agent messages can therefore exceed the smaller compaction
+		// metadata bound without making compaction coverage ambiguous.
+		return CompactionLifecycle{}, false, nil
+	}
+	if len(m.Params) > maxCompactionParams {
+		return CompactionLifecycle{}, true, errors.New("invalid compaction notification envelope")
+	}
+	var envelope compactionNotificationEnvelope
+	if err := decodeCompactionEnvelope(m.Method, m.Params, &envelope); err != nil {
 		return CompactionLifecycle{}, true, errors.New("invalid compaction notification envelope")
 	}
 	itemID, compaction, itemErr := compactionItemID(envelope.Item)
@@ -75,6 +91,74 @@ func compactionNotification(m codexrpc.Message) (CompactionLifecycle, bool, erro
 		return CompactionLifecycle{}, true, errors.New("invalid compaction notification identity")
 	}
 	return CompactionLifecycle{Version: compactionLifecycleVersion, ThreadID: envelope.ThreadID, TurnID: envelope.TurnID, ItemID: itemID, Phase: phase}, true, nil
+}
+
+type compactionNotificationEnvelope struct {
+	ThreadID string          `json:"threadId"`
+	TurnID   string          `json:"turnId"`
+	Item     json.RawMessage `json:"item"`
+}
+
+func notificationItemType(raw json.RawMessage) (string, error) {
+	var envelope struct {
+		Item json.RawMessage `json:"item"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil || len(envelope.Item) == 0 {
+		return "", errors.New("invalid provider item")
+	}
+	var discriminator struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(envelope.Item, &discriminator); err != nil || discriminator.Type == "" || len(discriminator.Type) > 64 {
+		return "", errors.New("invalid provider item")
+	}
+	return discriminator.Type, nil
+}
+
+func knownThreadItemType(itemType string) bool {
+	switch itemType {
+	case "userMessage", "hookPrompt", "agentMessage", "functionCallOutput", "plan", "reasoning",
+		"commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall",
+		"subAgentActivity", "webSearch", "imageView", "sleep", "imageGeneration", "enteredReviewMode", "exitedReviewMode":
+		return true
+	default:
+		return false
+	}
+}
+
+func decodeCompactionEnvelope(method string, raw json.RawMessage, envelope *compactionNotificationEnvelope) error {
+	switch method {
+	case "item/started":
+		var wire struct {
+			ThreadID    string          `json:"threadId"`
+			TurnID      string          `json:"turnId"`
+			Item        json.RawMessage `json:"item"`
+			StartedAtMS *int64          `json:"startedAtMs,omitempty"`
+		}
+		if err := canonical.Decode(raw, &wire); err != nil || !validNotificationTimestamp(wire.StartedAtMS) {
+			return errors.New("invalid started notification")
+		}
+		envelope.ThreadID, envelope.TurnID, envelope.Item = wire.ThreadID, wire.TurnID, wire.Item
+		return nil
+	case "item/completed":
+		var wire struct {
+			ThreadID      string          `json:"threadId"`
+			TurnID        string          `json:"turnId"`
+			Item          json.RawMessage `json:"item"`
+			CompletedAtMS *int64          `json:"completedAtMs,omitempty"`
+		}
+		if err := canonical.Decode(raw, &wire); err != nil || !validNotificationTimestamp(wire.CompletedAtMS) {
+			return errors.New("invalid completed notification")
+		}
+		envelope.ThreadID, envelope.TurnID, envelope.Item = wire.ThreadID, wire.TurnID, wire.Item
+		return nil
+	default:
+		return errors.New("unsupported item notification method")
+	}
+}
+
+func validNotificationTimestamp(timestamp *int64) bool {
+	return timestamp == nil || *timestamp >= 0 && *timestamp <= 9007199254740991
 }
 
 func compactionItemID(raw json.RawMessage) (string, bool, error) {

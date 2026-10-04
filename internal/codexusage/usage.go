@@ -47,6 +47,9 @@ type ThreadTokenUsage struct {
 	Last               TokenUsage `json:"last"`
 	Total              TokenUsage `json:"total"`
 	ModelContextWindow *int64     `json:"modelContextWindow,omitempty"`
+	// lastContextTokens is a native total-only last observation. It is not
+	// typed consumption and never contributes to a cumulative receipt.
+	lastContextTokens *int64
 }
 
 // Notification mirrors thread/tokenUsage/updated params.
@@ -70,6 +73,17 @@ type notificationUsageWire struct {
 // present; the optional cache-write field remains nil when absent. Decoding does
 // not persist raw evidence and callers must do so before passing the result to Observe.
 func DecodeNotification(raw []byte) (Notification, error) {
+	return decodeNotification(raw, true, true)
+}
+
+// DecodeNotificationLegacy retains the historical structural decoder and
+// tracker-side relationship validation needed to replay older normalization
+// records exactly.
+func DecodeNotificationLegacy(raw []byte) (Notification, error) {
+	return decodeNotification(raw, false, false)
+}
+
+func decodeNotification(raw []byte, allowTotalOnlyLast, validateRelationships bool) (Notification, error) {
 	type wireThreadUsage struct {
 		Last               *notificationUsageWire `json:"last"`
 		Total              *notificationUsageWire `json:"total"`
@@ -93,13 +107,18 @@ func DecodeNotification(raw []byte) (Notification, error) {
 	if wire.ThreadID == nil || wire.TurnID == nil || wire.TokenUsage == nil || wire.TokenUsage.Last == nil || wire.TokenUsage.Total == nil {
 		return Notification{}, fmt.Errorf("%w: missing required notification field", ErrInvalidUsage)
 	}
-	last, err := decodeRequiredUsage("last", wire.TokenUsage.Last)
+	last, lastContextTokens, err := decodeLastUsage(wire.TokenUsage.Last, allowTotalOnlyLast, validateRelationships)
 	if err != nil {
 		return Notification{}, err
 	}
 	total, err := decodeRequiredUsage("total", wire.TokenUsage.Total)
 	if err != nil {
 		return Notification{}, err
+	}
+	if validateRelationships {
+		if err := validateUsage(total); err != nil {
+			return Notification{}, fmt.Errorf("%w: total: %v", ErrInvalidUsage, err)
+		}
 	}
 	return Notification{
 		ThreadID: *wire.ThreadID,
@@ -108,8 +127,37 @@ func DecodeNotification(raw []byte) (Notification, error) {
 			Last:               last,
 			Total:              total,
 			ModelContextWindow: wire.TokenUsage.ModelContextWindow,
+			lastContextTokens:  lastContextTokens,
 		},
 	}, nil
+}
+
+func decodeLastUsage(wire *notificationUsageWire, allowTotalOnlyLast, validateRelationships bool) (TokenUsage, *int64, error) {
+	usage, err := decodeRequiredUsage("last", wire)
+	if err != nil {
+		return TokenUsage{}, nil, err
+	}
+	if !validateRelationships || validateUsage(usage) == nil {
+		return usage, nil, nil
+	}
+	if !allowTotalOnlyLast || !isTotalOnlyLastUsage(wire) {
+		return TokenUsage{}, nil, fmt.Errorf("%w: last usage relationships", ErrInvalidUsage)
+	}
+	contextTokens := *wire.TotalTokens
+	return TokenUsage{}, &contextTokens, nil
+}
+
+// isTotalOnlyLastUsage recognizes only the native observation in which last
+// carries a positive context total but no typed consumption counters. It does
+// not reinterpret any nonzero consumption or cache-write count.
+func isTotalOnlyLastUsage(wire *notificationUsageWire) bool {
+	if wire == nil || wire.InputTokens == nil || wire.CachedInputTokens == nil || wire.OutputTokens == nil || wire.ReasoningOutputTokens == nil || wire.TotalTokens == nil {
+		return false
+	}
+	if *wire.InputTokens != 0 || *wire.CachedInputTokens != 0 || *wire.OutputTokens != 0 || *wire.ReasoningOutputTokens != 0 || *wire.TotalTokens < 1 {
+		return false
+	}
+	return wire.CacheWriteInputTokens == nil || *wire.CacheWriteInputTokens == 0
 }
 
 func decodeRequiredUsage(label string, wire *notificationUsageWire) (TokenUsage, error) {
@@ -261,8 +309,12 @@ func (t *Tracker) Observe(notification Notification) (Receipt, error) {
 	if notification.ThreadID != t.threadID || notification.TurnID != t.turnID {
 		return t.Receipt(), fmt.Errorf("%w: got thread %q turn %q", ErrIdentityMismatch, notification.ThreadID, notification.TurnID)
 	}
-	if err := validateUsage(notification.TokenUsage.Last); err != nil {
-		return t.Receipt(), fmt.Errorf("%w: last: %v", ErrInvalidUsage, err)
+	if notification.TokenUsage.lastContextTokens == nil {
+		if err := validateUsage(notification.TokenUsage.Last); err != nil {
+			return t.Receipt(), fmt.Errorf("%w: last: %v", ErrInvalidUsage, err)
+		}
+	} else if *notification.TokenUsage.lastContextTokens < 1 || notification.TokenUsage.Last != (TokenUsage{}) {
+		return t.Receipt(), fmt.Errorf("%w: invalid total-only context observation", ErrInvalidUsage)
 	}
 	if err := validateUsage(notification.TokenUsage.Total); err != nil {
 		return t.Receipt(), fmt.Errorf("%w: total: %v", ErrInvalidUsage, err)

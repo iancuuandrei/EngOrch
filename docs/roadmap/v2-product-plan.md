@@ -520,3 +520,28 @@ integrated increment, without resurrecting a G0 promotion ladder.
   dispatched. The next productive live steps are unchanged coding acceptance,
   matched topology/model trials and useful accepted fresh rounds; all broader
   qualification and release gates remain open.
+
+## Checkpoint — v1.0.17 integrated; native usage compatibility candidate
+
+- Public main/dev contain `1e0084198637fba7f347d00a96378695e4f61a2c`.
+  Fresh complete Go/Rust checks, all ten PowerShell harnesses, independent
+  review, hosted security and Sonar passed. PR #24 merged. The qualification
+  record preserves the earlier documentation-check failure and same-increment
+  correction; hosted checks alone did not qualify the original source.
+- Nine synthetic formatter measurements demonstrate exact warm reuse and
+  lower allocated bytes/counts. Process-level memory and CPU are separately
+  sampled; no task-latency, model-token, provider-cost or speedup is claimed.
+- Fresh fixed-eight preparation passed native baseline checks with zero
+  provider calls. The unchanged acceptance cohort remains unexecuted.
+- The first useful ParseBytes/native-compaction task blocked during
+  implementation when a native last-usage observation had a total-only
+  context estimate but zero typed counters. Cumulative consumption remained
+  coherent. The old invocation remains active/uncertain and is never resent.
+- The next narrow product correction recognizes that native observation
+  without changing consumed-token accounting or budget enforcement. Versioned
+  normalization preserves historical failure/interrupt replay; an actual
+  read-only replay of the old journal returned byte-identical observations
+  and the unchanged nonaccepted controller checkpoint.
+- Fixed-six 6/6, generated-code acceptance, topology/model comparisons, accepted
+  fresh rounds and completed native compaction still require live evidence.
+  Code, fixture and preparation progress is not substituted for these gates.

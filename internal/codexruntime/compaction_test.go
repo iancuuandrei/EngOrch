@@ -35,6 +35,19 @@ func itemNotification(method, turnID, itemID, itemType string) codexrpc.Message 
 	return codexrpc.Message{Method: method, Params: params}
 }
 
+func timedCompactionNotification(method, timestampField string, timestamp any) codexrpc.Message {
+	params := map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"item":     map[string]any{"id": "compact-timed", "type": "contextCompaction"},
+	}
+	if timestampField != "" {
+		params[timestampField] = timestamp
+	}
+	raw, _ := json.Marshal(params)
+	return codexrpc.Message{Method: method, Params: raw}
+}
+
 func compactionProtocolPeer(t *testing.T, root string, notifications []codexrpc.Message, turn any, readback any, beforeTurn func() error) (*codexrpc.Client, <-chan error, chan string) {
 	t.Helper()
 	client, server := net.Pipe()
@@ -219,6 +232,77 @@ func TestAutomaticCompactionEmptyItemsViewAcceptsExactLifecyclePair(t *testing.T
 	usage, err := MeasureContext(path)
 	if err != nil || usage.CompactionCount == nil || *usage.CompactionCount != 1 || usage.CompactionCover != "OBSERVED" {
 		t.Fatalf("typed usage did not report the proven empty-view pair: %+v, %v", usage, err)
+	}
+}
+
+func TestLargeOrdinaryItemNotificationsDoNotInvalidateCompactionCoverage(t *testing.T) {
+	text := strings.Repeat("ordinary user content ", 1200)
+	started, _ := json.Marshal(map[string]any{
+		"threadId": "thread-1", "turnId": "turn-1", "startedAtMs": 1791012510000,
+		"item": map[string]any{"id": "user-1", "type": "userMessage", "content": []any{map[string]any{"type": "text", "text": text, "text_elements": []any{}}}},
+	})
+	completed, _ := json.Marshal(map[string]any{
+		"threadId": "thread-1", "turnId": "turn-1", "completedAtMs": 1791012510001,
+		"item": map[string]any{"id": "user-1", "type": "userMessage", "content": []any{map[string]any{"type": "text", "text": text, "text_elements": []any{}}}},
+	})
+	notifications := []codexrpc.Message{
+		{Method: "item/started", Params: started},
+		{Method: "item/completed", Params: completed},
+	}
+	for _, message := range notifications {
+		if len(message.Params) <= maxCompactionParams || len(message.Params) > codexrpc.MaxMessage {
+			t.Fatalf("fixture does not exercise the bounded non-compaction path: params=%d", len(message.Params))
+		}
+	}
+	path, _, executeErr, _ := runCompactionFixture(t, notifications, completedTurn(), nil)
+	if executeErr != nil {
+		t.Fatal(executeErr)
+	}
+	s, err := Inspect(path)
+	if err != nil || s.Result == nil || s.Compaction != nil {
+		t.Fatalf("ordinary large items poisoned or fabricated compaction evidence: result=%v summary=%+v err=%v", s.Result != nil, s.Compaction, err)
+	}
+	events, err := journal.Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Kind == "runtime.compaction-unknown" || event.Kind == "runtime.compaction-item" {
+			t.Fatalf("ordinary user item produced compaction evidence: %s", event.Kind)
+		}
+	}
+}
+
+func TestCompactionNotificationAcceptsMatchingOptionalTimestampOnly(t *testing.T) {
+	path, _, executeErr, _ := runCompactionFixture(t, []codexrpc.Message{
+		timedCompactionNotification("item/started", "startedAtMs", int64(1791012510000)),
+		timedCompactionNotification("item/completed", "completedAtMs", int64(1791012510001)),
+	}, completedTurnWithCompaction("full", "compact-timed"), nil)
+	if executeErr != nil {
+		t.Fatal(executeErr)
+	}
+	s, err := Inspect(path)
+	if err != nil || s.Compaction == nil || s.Compaction.Coverage != "OBSERVED" || s.Compaction.Count != 1 {
+		t.Fatalf("matching protocol timestamps changed lifecycle pairing: summary=%+v err=%v", s.Compaction, err)
+	}
+}
+
+func TestOversizedOrMalformedCompactionNotificationFailsClosed(t *testing.T) {
+	oversized := makeCompactionNotification("item/started", "thread-1", "turn-1", "compact-large")
+	oversized.Params = json.RawMessage(strings.TrimSuffix(string(oversized.Params), "}") + `,"padding":"` + strings.Repeat("x", maxCompactionParams) + `"}`)
+	if len(oversized.Params) <= maxCompactionParams {
+		t.Fatal("oversized compaction fixture is below the strict compaction bound")
+	}
+	for _, message := range []codexrpc.Message{
+		oversized,
+		{Method: "item/started", Params: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","item":{"id":"c","type":"contextCompaction"},"startedAtMs":"not-a-number"}`)},
+		{Method: "item/started", Params: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","item":{"id":"c","type":"contextCompaction"},"completedAtMs":1791012510000}`)},
+		{Method: "item/completed", Params: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","item":{"id":"c","type":"contextCompaction"},"metadata":true}`)},
+	} {
+		_, relevant, err := compactionNotification(message)
+		if !relevant || err == nil {
+			t.Fatalf("invalid context compaction notification was not rejected: relevant=%v err=%v", relevant, err)
+		}
 	}
 }
 
