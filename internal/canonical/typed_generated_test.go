@@ -98,3 +98,24 @@ func TestTypedGeneratedBytesRetainsRawAndDepthBounds(t *testing.T) {
 		t.Fatal("depth bound diverged")
 	}
 }
+
+func TestTypedGeneratedBytesBoundedAdmitsOnlyExplicitLargerClosedValues(t *testing.T) {
+	value := typedGeneratedValue{First: strings.Repeat("x", MaxBytes), Second: "bounded"}
+	if _, err := TypedGeneratedBytes(value); err == nil {
+		t.Fatal("default typed generated boundary accepted oversized value")
+	}
+	encoded, err := TypedGeneratedBytesBounded(value, 2<<20)
+	if err != nil || len(encoded) <= MaxBytes {
+		t.Fatalf("explicit bounded encoding = %d bytes, %v", len(encoded), err)
+	}
+	if _, err := TypedGeneratedHashBounded("harness.typed.bounded.v1", value, MaxBytes); err == nil {
+		t.Fatal("default-size bounded hash accepted oversized value")
+	}
+	if _, err := TypedGeneratedHashBounded("harness.typed.bounded.v1", value, 2<<20); err != nil {
+		t.Fatal(err)
+	}
+	overCap := typedGeneratedValue{First: strings.Repeat("x", MaxTypedGeneratedBytes), Second: "over-cap"}
+	if _, err := TypedGeneratedBytesBounded(overCap, MaxTypedGeneratedBytes); err == nil {
+		t.Fatal("explicit typed generated cap accepted an oversized value")
+	}
+}

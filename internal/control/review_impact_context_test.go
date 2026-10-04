@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -206,6 +207,20 @@ func TestReviewImpactContextAdmitsAndReplaysExactCandidateProjection(t *testing.
 	receiverAwareRecord, err := makeReviewImpactContextRecord(receiverAwareSnapshot, source, baseGraph, baseInventory, corpus)
 	if err != nil || validateReviewImpactContextRecord(receiverAwareSnapshot, receiverAwareRecord) != nil {
 		t.Fatalf("receiver-aware contract evidence did not admit review-impact context: make=%v validate=%v", err, validateReviewImpactContextRecord(receiverAwareSnapshot, receiverAwareRecord))
+	}
+	oversizedCorpus := corpus
+	oversizedGraph := corpus.Graph
+	oversizedGraph.Nodes = append([]ri.GoGraphNode{}, corpus.Graph.Nodes...)
+	for index := 0; index < 9000; index++ {
+		oversizedGraph.Nodes = append(oversizedGraph.Nodes, ri.GoGraphNode{ID: fmt.Sprintf("oversized-%05d", index), Kind: "call", Label: strings.Repeat("bounded-node-", 12), Path: "app.go", Resolution: "UNRESOLVED"})
+	}
+	oversizedCorpus.Graph = oversizedGraph
+	fallback, err := makeReviewImpactContextRecord(receiverAwareSnapshot, source, baseGraph, baseInventory, oversizedCorpus)
+	if err != nil || fallback.UnavailableReason != "candidate_review_record_budget" || fallback.Corpus != nil || fallback.Projection != nil {
+		t.Fatalf("oversized candidate graph did not produce bounded unavailable fallback: reason=%q err=%v", fallback.UnavailableReason, err)
+	}
+	if err := validateReviewImpactContextRecord(receiverAwareSnapshot, fallback); err != nil {
+		t.Fatalf("bounded unavailable fallback did not validate: %v", err)
 	}
 	encoded, err := json.Marshal(record)
 	if err != nil {

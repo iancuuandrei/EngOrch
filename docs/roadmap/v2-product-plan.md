@@ -605,3 +605,33 @@ integrated increment, without resurrecting a G0 promotion ladder.
   This documentation/test correction does not change product runtime source.
   Fixed-six 6/6, generated-code acceptance, topology/model comparisons, accepted
   fresh rounds, pause/resume and final release gates remain open.
+## Checkpoint — v1.0.20 integrated; large candidate graph review correction
+
+- Public main/dev contain `cf729529e776a734a0f53cbc91bcbc059f486b4d`.
+  Bot-authored PR #27 merged. The documentation/example regression and ledger
+  passed fresh doccheck, independent review, Sonar and security checks. Product
+  runtime source is identical to qualified v1.0.19; no fresh complete v1.0.20
+  Go suite is claimed.
+- Correctly configured fresh v1.0.19 evaluations are active. Humanize and
+  go-atomic completed native/held-out/review gates; broader cohort acceptance
+  remains pending. Numeric-text exhausted its two repairs and is preserved.
+- Afero and multierror stopped before reviewer dispatch. A single authorized
+  normal Afero review continuation, after a quiescent candidate-bound preflight,
+  retained the exact error `JSON size or UTF-8 invalid`. It left the candidate
+  and controller unchanged and created no reviewer effect. Other generic
+  review blocks are not asserted to share this cause without specific evidence.
+- Graph sealing used the generic 1 MiB canonical limit before review impact
+  could emit its existing 900 KiB unavailable summary. The next narrow product
+  correction applies an explicit 32 MiB closed-typed bound at graph sealing,
+  matching the existing graph input ceiling. Generic/untrusted boundaries and
+  small graph identities are unchanged. Large graph seal/replay and bounded
+  unavailable-summary regressions pass with independent review; complete clean
+  qualification and integration remain pending.
+- The first long-horizon round passed its original Humanize held-out gate and
+  was committed locally through Fabric as `20bad9c4bbee3fb0acdb318e5e25b5361107a4ea`.
+  A separately added Commaf supplement failed and remains recorded; it was not
+  part of that round's preregistered ParseBytes gate. Round two starts from the
+  confirmed commit, with a distinct run/thread/CODEX_HOME and no copied
+  conversation. Its shared runtime parent is a private protocol deviation,
+  not proof of the entire original private protocol. Round-two acceptance and
+  pause/resume remain pending.
