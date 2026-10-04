@@ -2,7 +2,8 @@
 
 Generated from `internal/cli`; do not edit by hand.
 
-Use `harness [--root PATH] COMMAND`. Output is canonical JSON except help, aggregated run-snapshot JSON, and `inspect --export-jsonl`.
+Use `fabric [--root PATH] COMMAND`; `harness` remains a compatibility executable.
+Output is canonical JSON except help, aggregated run-snapshot JSON, and `inspect --export-jsonl`.
 
 | Command | Arguments | Behavior |
 | --- | --- | --- |
@@ -100,7 +101,7 @@ Use `harness [--root PATH] COMMAND`. Output is canonical JSON except help, aggre
 | `prepare-recovery` | `RUN` | Preview recognized partial writes as a fresh recovery approval target. |
 | `recover-files` | `RUN PREVIEW_JSON INTENT_ID ACTOR` | Explicitly approve cleanup and completion of recognized partial writes. |
 
-`harness help` shows commands; `harness reference` regenerates this file.
+`fabric help` shows commands; `fabric reference` regenerates this file.
 Errors exit 1; success exits 0. Workspaces and exact approved file proposals are
 implemented, with journaled verification and Codex planning. GitHub effects follow.
 `reconcile` observes UNKNOWN workspace/file state without retrying writes.

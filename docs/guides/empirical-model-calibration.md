@@ -66,6 +66,10 @@ Persisted evidence binds the frozen config, objective hash, calibration digest,
 selected profile, reason and bounded cohort counts. Replay rederives that choice
 from the frozen configuration and original objective rather than live history.
 
-The implementation and fixtures qualify this mechanism only. Real matched
-training/holdout trials and independent review are still required before any
-measured routing improvement or release qualification is claimed.
+Real training/holdout trials exercised the mechanism, but UNKNOWN outcomes
+left the empirical candidate unselected. An independently reviewed unseen
+Wordwrap task passed with the baseline fixer and the recorded
+`calibration-objective-out-of-scope` fallback. This demonstrates conservative
+fallback, without a routing improvement, price estimate or default promotion.
+See the [current product checkpoints](../roadmap/v2-product-plan.md) for the
+source identities, acceptance evidence and remaining release gates.

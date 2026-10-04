@@ -24,3 +24,14 @@ the inspected immutable execution policy, and records requested/observed
 threshold fields in its receipt. Omit the parameter on both actions for the
 legacy argv. PR5Matched rejects this option because its baseline invocation is
 kept unchanged.
+
+## Observed continuation evidence
+
+Two coding rounds reached accepted, independently checked candidates. The
+sustained second round recorded six native compaction events, then
+completed a run-scoped pause and resume without another model invocation.
+These rounds used mixed Fabric versions and shared the recorded parent runtime
+state home. They qualify this observed continuation, rather than a frozen
+single-version experiment or every Codex release. See the
+[current product checkpoints](../roadmap/v2-product-plan.md) for exact evidence
+and the remaining release gates.

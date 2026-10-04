@@ -128,11 +128,11 @@ var commands = []Command{
 // Reference returns generated Markdown from the actual command catalogue.
 func Reference() string {
 	var b strings.Builder
-	b.WriteString("# CLI reference\n\nGenerated from `internal/cli`; do not edit by hand.\n\nUse `harness [--root PATH] COMMAND`. Output is canonical JSON except help, aggregated run-snapshot JSON, and `inspect --export-jsonl`.\n\n| Command | Arguments | Behavior |\n| --- | --- | --- |\n")
+	b.WriteString("# CLI reference\n\nGenerated from `internal/cli`; do not edit by hand.\n\nUse `fabric [--root PATH] COMMAND`; `harness` remains a compatibility executable.\nOutput is canonical JSON except help, aggregated run-snapshot JSON, and `inspect --export-jsonl`.\n\n| Command | Arguments | Behavior |\n| --- | --- | --- |\n")
 	for _, c := range commands {
 		fmt.Fprintf(&b, "| `%s` | `%s` | %s |\n", c.Name, c.Arguments, c.Summary)
 	}
-	b.WriteString("\n`harness help` shows commands; `harness reference` regenerates this file.\nErrors exit 1; success exits 0. Workspaces and exact approved file proposals are\nimplemented, with journaled verification and Codex planning. GitHub effects follow.\n`reconcile` observes UNKNOWN workspace/file state without retrying writes.\n")
+	b.WriteString("\n`fabric help` shows commands; `fabric reference` regenerates this file.\nErrors exit 1; success exits 0. Workspaces and exact approved file proposals are\nimplemented, with journaled verification and Codex planning. GitHub effects follow.\n`reconcile` observes UNKNOWN workspace/file state without retrying writes.\n")
 	b.WriteString("Commands that return a run snapshot encode the complete replay-validated state as JSON; this aggregate is not an identity payload and may exceed the canonical single-value bound. Other command output remains canonical JSON. `inspect RUN --export-jsonl` emits the validated event history as per-event canonical JSONL.\n")
 	return b.String()
 }

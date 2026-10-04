@@ -809,3 +809,45 @@ remain unknown. Its SHA256 is
   effects, but the guard rejects its settled review from the prior candidate.
   A narrow candidate-binding correction in admission/replay is in progress;
   no new recovery machinery or old-effect resend is authorized.
+
+## Checkpoint — v1.0.25 integrated; accepted long-horizon continuation
+
+- Main/dev contain `f365a49149705e2a799c916809888836fbf9121a`, merged through
+  automation PR #32. Independent review, clean fresh full Go, ten PowerShell
+  harnesses and hosted Sonar/security passed. Full Go log SHA256:
+  `e0965e1995bb65c436ad59715296d9796567213f43f685947fe9b06d6ae123c0`.
+  Sonar reported zero unresolved issues and zero new duplication. Rust source
+  is unchanged; no fresh v1.0.25 Rust suite is claimed.
+- The narrow review boundary now admits a repaired, natively verified candidate
+  after a settled changes-requested review of its previous candidate. Pending,
+  uncertain, malformed or current-candidate review effects remain blocked.
+  Actual v1.0.24/v1.0.25 read-only replay of the old round-two journal produced
+  identical inspect/checkpoint bytes without changing the journal.
+- Round two received a normal v1.0.25 review: APPROVE, followed by fresh native
+  and unchanged Commaf held-out PASS on separate candidate-bound copies.
+  Candidate `821a9d6ece0d30b2561aef41445035dc0983494eb68c6d3d83f5b94081af96fa`
+  remains READY and accepted, with zero active or uncertain intents. The native
+  command was the saved `go test -count=1 .`; the held-out command was
+  `go test -count=1 -run '^TestFabricV1Heldout$' .`.
+- Run-scoped pause, explicit quiescence settlement, lifecycle resume and one
+  autonomous resume completed successfully. The candidate stayed accepted,
+  and all eight invocation IDs remained unchanged; the resume completed the
+  existing review-progress record without a new model invocation. Private
+  lifecycle receipt SHA256:
+  `ee0f3d2239d59d93b4fa0dc1095292a82a356cce0e78fe26c39789658e8a9051`.
+  This does not assert that unrelated Fabric workloads were stopped.
+- The two accepted coding rounds used distinct threads/run state. Sustained
+  round-two execution recorded six native compaction events. Their source
+  versions are mixed, and their state homes share the recorded parent home;
+  this is accepted continuation evidence, not a pure-v1.0.25 frozen experiment
+  or completion of the original isolation protocol.
+- The separately frozen v1.0.24 cohort completed 5/8 PASS: Humanize, Afero,
+  multierror, atomic and Difflib. Logr passed native verification and review
+  but failed unchanged held-out acceptance. Numeric and godotenv stopped at
+  the review boundary. Fixed-six is 5/6, not 6/6. Later candidate continuation
+  cannot retroactively change these frozen results. The numeric repair budget
+  is exhausted; godotenv has one of two repairs remaining.
+- v2 remains open pending the fresh complete coding gate, measured efficiency
+  qualification and final integrated release/happy-path review. No adaptive
+  routing gain, physical provider-call count or monetary saving is inferred
+  from UNKNOWN outcomes or observed runtime token counters.

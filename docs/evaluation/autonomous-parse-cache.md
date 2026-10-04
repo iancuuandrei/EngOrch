@@ -74,15 +74,24 @@ does not establish an end-user latency claim. The benchmark does not invoke a
 model or provider. Final candidate and native checks are outside the benchmark
 and remain uncached.
 
-One five-sample `-benchtime=1x` run on Windows amd64, Go 1.27.1, the pinned RI
-executable, and go-humanize commit
-`a1b4e66b9a6d890e9e15e7091cf16c8032367d6e` produced these median
-per-collection times:
+The retained five-sample `-benchtime=1x` corpus receipt is
+`D:\fabric-ci2-tools\v109-resource-samples.json` (SHA-256
+`755efad4e89493a676a2ee163d6b0c0db4c0db5926b224b92d0fc0dd879ed9b4`). It
+binds the EngOrch source commit/tree `4ec8d0252332618c22a316cc9653d20eaef61497`
+`026565566a16667de86fc5c01194aea9a97299bd`, source fingerprint
+`6829e13b7bde9d8ac1767024b28b28c43ffa7810f5ffdc4e8cf7499d11bf4011`, Go
+1.27.1 Windows/amd64 (executable SHA-256
+`d3ccdb604eafa6031133aefe1a3db24f0bb7362b857bc2125ac4e4c178b4b490`), and
+RI executable SHA-256
+`c86244aa6becf439eb770b1f4d4c0076ae65411ef15353d4f9300e1a74520ec0`. The
+Humanize input was commit `a1b4e66b9a6d890e9e15e7091cf16c8032367d6e`, tree
+`6d08f76afdc588592be994934de82a283b125d2c`. The medians below are recomputed
+from the five raw samples in that receipt:
 
 | Input | Uncached | Cold cache | Warm cache | Warm hits | Cache bytes |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Synthetic 24 × 64 KiB | 0.759 s | 0.782 s | 0.606 s | 24 | 16,440 |
-| Pinned go-humanize | 0.951 s | 0.999 s | 0.952 s | 19 | 135,024 |
+| Synthetic 24 × 64 KiB | 0.650 s | 0.652 s | 0.512 s | 24 | 16,440 |
+| Pinned go-humanize | 0.799 s | 0.812 s | 0.742 s | 19 | 135,024 |
 
 The synthetic source set was 24 files and 1,571,842 bytes; the selected
 go-humanize corpus was 19 files and 52,828 bytes. Graph and context construction
@@ -103,3 +112,40 @@ and context digest
 `7e472ff99e392ef36e6486b114f28e55005892485a36148da4c3c2e36bc5a261`. The
 benchmark output also logged matching per-input source, graph, and context
 digests across all three modes.
+
+The same receipt's process-tree sampler observed a maximum working set of
+290,803,712 bytes and cumulative CPU of 31,734.4 ms across the full test
+process. Those totals include setup and RI subprocesses and are not attributable
+to individual cache modes.
+
+## Contract-admission measurement on v1.0.25
+
+The complete contract-admission benchmark was run three times on the clean
+v1.0.25 source commit/tree
+`f365a49149705e2a799c916809888836fbf9121a`
+`bc749a53fc4b047684ff9e19984a5f31153ca8dc`, with source fingerprint
+`6bebc01a6f7d01698f605ae11efe8fc90070377425257aacf32654327adbb7f4`, the
+same pinned Humanize commit/tree, Go executable SHA-256
+`d3ccdb604eafa6031133aefe1a3db24f0bb7362b857bc2125ac4e4c178b4b490`, and RI
+executable SHA-256
+`b1894e16caf3b73b069722a5dd12829ce0f28fc4ded4e488b411b98f734d5603`. Its
+private receipt is
+`D:\fabric-ci2-tools\v125-contract-cache-resource-20261004.json` (SHA-256
+`9343869e8537bcac9b4f14425a15b956d28a3086fd670bbd2e2d3873ff7d7526`). Each
+sample timed only `AdmitPlannerGoContext`; run-record creation, warm-cache
+priming, cache deletion for cold samples, and cache-byte accounting were
+outside the timer. The median admission times and output/cache sizes were:
+
+| Admission | Median time | Record bytes | Resident cache bytes |
+| --- | ---: | ---: | ---: |
+| Uncached | 1.387 s | 596,881 | 0 |
+| Cold cache | 1.763 s | 596,881 | 135,050 |
+| Warm cache | 1.647 s | 596,881 | 135,050 |
+
+All samples retained identical record IDs, graph digests, and contract
+digests. The whole-process sampler observed maximum working set 448,225,280
+bytes and cumulative CPU 27,156.2 ms across the full test process. These
+include setup, priming, and RI subprocesses, so they are not per-mode resource
+measurements. This is a single-host observation, not a latency or resource
+qualification; this sample does not show an admission-time benefit over
+uncached execution.

@@ -11,6 +11,11 @@ for download, setup, a bounded autonomous task and result inspection. The
 [release guide](docs/guides/release.md) describes the accepted package and its
 limits. Linux amd64 remains optional and unqualified.
 
+For the current development checkout, use the
+[source-build autonomous guide](docs/guides/autonomous-task.md).
+The [v2 product roadmap](docs/roadmap/v2-product-plan.md) records capability
+qualification separately from published release acceptance.
+
 ## Run your first real coding task
 
 The installed-task guide uses `fabric run --autonomous` to plan, explore,
@@ -37,22 +42,25 @@ Use the installed-task guide above for the v1.0.0 autonomous workflow.
 Build from source with Go 1.27.1 and Git installed:
 
 ```sh
-go build -o bin/harness ./cmd/harness
+go build -o bin/ ./cmd/fabric
 ```
+
+Add the generated `bin` directory to your shell's `PATH` before the commands
+below. The executable is `fabric.exe` on Windows and `fabric` on other systems.
 
 Use a repository with an existing commit. `init` writes `harness.toml` without
 overwriting an existing file. Edit its repository name and required checks.
 
 ```sh
-harness --root PATH_TO_REPOSITORY init
+fabric --root PATH_TO_REPOSITORY init
 ```
 
 ```sh
-harness --root PATH_TO_REPOSITORY plan "Add a tested greeting"
+fabric --root PATH_TO_REPOSITORY plan "Add a tested greeting"
 ```
 
 For an existing goal document, use
-`harness --root PATH_TO_REPOSITORY plan --file goal.md`. Relative goal paths resolve
+`fabric --root PATH_TO_REPOSITORY plan --file goal.md`. Relative goal paths resolve
 against the selected repository. The file must contain nonempty UTF-8 text of at
 most 256 KiB; its exact text is retained in the run's immutable inputs.
 
@@ -79,6 +87,10 @@ qualify plugin installation or sandbox inheritance.
 - [Autonomous task graphs](docs/guides/graph-autonomous-task.md): dependency
   waves, bounded context and parallel read tasks; development qualification
   remains in progress.
+- [Impact-aware review context](docs/guides/reviewer-impact-context.md)
+- [Prompt-cache recipes](docs/guides/prompt-cache-recipes.md)
+- [Empirical model calibration and conservative fallback](docs/guides/empirical-model-calibration.md)
+- [Native runtime compaction](docs/guides/native-auto-compaction.md)
 - [Apply file changes](docs/guides/file-changes.md)
 - [Build and verify a local package](docs/guides/local-packaging.md): local directory only; never a signed, tagged, or published release.
 - [Reproducible release bundles and installation](docs/guides/release.md):
