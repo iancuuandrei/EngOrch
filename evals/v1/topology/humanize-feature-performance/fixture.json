@@ -1,7 +1,7 @@
 {
   "schema": "fabric.eval.topology-fixture.v1",
-  "fixture_id": "humanize-feature-performance-disjoint-v1",
-  "status": "DESIGN_ONLY",
+  "fixture_id": "humanize-feature-performance-review-impact-v2",
+  "status": "RUNNER_SUPPORTED_NOT_QUALIFIED",
   "runner_consumed": false,
   "repository": {
     "id": "go-humanize-feature-performance",
@@ -10,6 +10,9 @@
     "license": "MIT"
   },
   "manifest_task": "go-humanize-feature-performance",
+  "review_impact_context_requested": true,
+  "planner_context": "go-contract-context-v1",
+  "review_impact_context_version_required": 1,
   "objective": "objective.md",
   "acceptance_recipe": "acceptance.md",
   "read_only_hub_paths": [
@@ -21,10 +24,10 @@
     "common_test.go"
   ],
   "desired_plan_properties": {
-    "read_only_hub_precedes_implementation": true,
-    "hub_has_no_candidate_file_effect": true,
-    "initial_implementation_leaves": 2,
-    "implementation_write_sets_disjoint": true,
+    "cap_2_treatment_read_only_hub_precedes_implementation": true,
+    "cap_2_treatment_hub_has_no_candidate_file_effect": true,
+    "cap_2_treatment_initial_implementation_leaves": 2,
+    "cap_2_treatment_implementation_write_sets_disjoint": true,
     "leaf_a_paths": ["bytes.go", "bytes_test.go"],
     "leaf_b_paths": ["comma.go", "comma_test.go"],
     "task_ids_are_fixed": false,
@@ -55,5 +58,5 @@
       "runtime_slots": 1
     }
   },
-  "current_product_gate": "design_only_until_a_fresh_matched_pair_is_prepared_and_qualified"
+  "current_product_gate": "not_qualified_until_a_fresh_matched_pair_is_prepared_and_accepted"
 }

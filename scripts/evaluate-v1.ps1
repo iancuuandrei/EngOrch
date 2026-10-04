@@ -30,6 +30,11 @@ is restored in finally and the executable hash/binding are recorded. The
 path and its lowercase SHA-256 via `-PlannerContextRIExecutable` and
 `-PlannerContextRIExecutableSHA256`; no parser is discovered from PATH or the
 environment, and both values are bound in the prepared/evaluated receipts.
+The opt-in Native-only `-ReviewImpactContext` treatment requires
+`-PlannerContext go-contract-context-v1` and the same pinned parser binding.
+Its request is matched across Prepare and Evaluate; the inspected run must
+show `review_impact_context_version=1` and one durable context record for the
+exact reviewed candidate. Omitting it preserves the previous run argv.
 Resource-bounded isolated writers are an optional Native-only treatment:
 `-IsolatedWriters -IsolationPolicyPath ABSOLUTE_PATH -MaxParallel N`. It is
 exclusive with `-ParallelWriters`; the policy path and exact file SHA-256 are
@@ -69,6 +74,7 @@ param(
     [string]$PlannerContext = '',
     [string]$PlannerContextRIExecutable = '',
     [string]$PlannerContextRIExecutableSHA256 = '',
+    [switch]$ReviewImpactContext,
     [ValidateSet('', 'cache-prefix-v1')][string]$PromptRecipe = '',
     [switch]$ParallelWriters,
     [switch]$IsolatedWriters,
@@ -116,6 +122,13 @@ Assert-IsolatedRunnerOptionShape ([bool]$IsolatedWriters) $IsolationPolicyPath (
 function Test-GoSourceContextMode([string]$Mode) {
     return $Mode -ceq 'go-source-context-v1' -or $Mode -ceq 'go-source-context-v2' -or $Mode -ceq 'go-contract-context-v1'
 }
+function Assert-ReviewImpactRunnerBindingShape([bool]$Enabled, [string]$PlannerMode, [string]$Mode) {
+    if (-not $Enabled) { return }
+    if ($Mode -ne 'Native') { throw 'ReviewImpactContext requires Native mode.' }
+    if ($PlannerMode -cne 'go-contract-context-v1') {
+        throw 'ReviewImpactContext requires PlannerContext go-contract-context-v1 and its explicit pinned RI parser binding.'
+    }
+}
 function Assert-PlannerContextBindingShape([string]$Mode, [string]$Executable, [string]$ExecutableSHA256) {
     if ($Mode -cnotin @('', 'source-bounded-v1', 'go-source-context-v1', 'go-source-context-v2', 'go-contract-context-v1')) {
         throw 'PlannerContext must be empty, source-bounded-v1, go-source-context-v1, go-source-context-v2, or go-contract-context-v1.'
@@ -137,6 +150,7 @@ function Assert-PlannerContextBindingShape([string]$Mode, [string]$Executable, [
     }
 }
 Assert-PlannerContextBindingShape $PlannerContext $PlannerContextRIExecutable $PlannerContextRIExecutableSHA256
+Assert-ReviewImpactRunnerBindingShape ([bool]$ReviewImpactContext) $PlannerContext $EvalMode
 if ($Action -eq 'Evaluate' -and $EvalMode -eq 'PR5Matched' -and ($PlannerContext -ne '' -or $PlannerContextRIExecutable -ne '' -or $PlannerContextRIExecutableSHA256 -ne '')) {
     throw 'PlannerContext requires Native mode; PR5Matched retains its original invocation.'
 }
@@ -166,11 +180,12 @@ function Get-NativeInitArgs([string]$TaskPath, [string]$RuntimePath, [string]$Wr
     return $nativeArgs
 }
 
-function Get-NativeRunArgs([string]$TaskPath, [string]$Objective, [bool]$EnableParallelWriters, [int]$ParallelLimit, [string]$PlannerContext = '', [string]$PromptRecipe = '', [string]$PlannerContextRIExecutable = '', [string]$PlannerContextRIExecutableSHA256 = '', [bool]$EnableIsolatedWriters = $false, [string]$IsolationPolicyPath = '', [long]$AutoCompactTokenLimit = 0) {
+function Get-NativeRunArgs([string]$TaskPath, [string]$Objective, [bool]$EnableParallelWriters, [int]$ParallelLimit, [string]$PlannerContext = '', [string]$PromptRecipe = '', [string]$PlannerContextRIExecutable = '', [string]$PlannerContextRIExecutableSHA256 = '', [bool]$EnableIsolatedWriters = $false, [string]$IsolationPolicyPath = '', [long]$AutoCompactTokenLimit = 0, [bool]$EnableReviewImpactContext = $false) {
     if ($ParallelLimit -lt 0 -or $ParallelLimit -gt 8) { throw 'Scheduler override must be 0 (default) or 1..8.' }
     if ($AutoCompactTokenLimit -lt 0 -or $AutoCompactTokenLimit -gt 10000000) { throw 'AutoCompactTokenLimit must be 0 (omitted) or 1..10000000.' }
     if ($PromptRecipe -notin @('', 'cache-prefix-v1')) { throw 'Unsupported prompt recipe.' }
     Assert-PlannerContextBindingShape $PlannerContext $PlannerContextRIExecutable $PlannerContextRIExecutableSHA256
+    Assert-ReviewImpactRunnerBindingShape $EnableReviewImpactContext $PlannerContext 'Native'
     if ($EnableParallelWriters -and $EnableIsolatedWriters) { throw 'ParallelWriters and IsolatedWriters are mutually exclusive.' }
     if ($EnableIsolatedWriters -ne (-not [string]::IsNullOrWhiteSpace($IsolationPolicyPath))) { throw 'IsolatedWriters and IsolationPolicyPath must be supplied together.' }
     if ($EnableIsolatedWriters -and ($ParallelLimit -lt 1 -or $ParallelLimit -gt 8)) { throw 'IsolatedWriters requires MaxParallel from 1 through 8.' }
@@ -179,6 +194,7 @@ function Get-NativeRunArgs([string]$TaskPath, [string]$Objective, [bool]$EnableP
     if (Test-GoSourceContextMode $PlannerContext) {
         $nativeArgs += @('--planner-context-ri-executable', $PlannerContextRIExecutable, '--planner-context-ri-executable-sha256', $PlannerContextRIExecutableSHA256)
     }
+    if ($EnableReviewImpactContext) { $nativeArgs += '--review-impact-context' }
     if ($PromptRecipe -ne '') { $nativeArgs += @('--prompt-recipe', $PromptRecipe) }
     if ($EnableParallelWriters) { $nativeArgs += '--parallel-writers' }
     if ($EnableIsolatedWriters) { $nativeArgs += @('--isolated-writers', '--isolation-policy', $IsolationPolicyPath) }
@@ -327,6 +343,43 @@ function Assert-IsolationPolicyPreparedBinding($Prior, $Binding, [bool]$Enabled,
         }
     } elseif ($null -ne $Prior.isolation_policy_sha256_requested -and $Prior.isolation_policy_sha256_requested -ne '') {
         throw 'Prepared run unexpectedly contains isolated-writer policy provenance.'
+    }
+}
+
+function Assert-ReviewImpactPreparedBinding($Prior, [bool]$Enabled) {
+    $preparedEnabled = $false
+    if ($null -ne $Prior.PSObject.Properties['review_impact_context_requested']) {
+        $preparedEnabled = [bool]$Prior.review_impact_context_requested
+    }
+    if ($preparedEnabled -ne $Enabled) {
+        throw 'ReviewImpactContext must match the treatment recorded by the prepared run.'
+    }
+}
+
+function Assert-ReviewImpactObserved($Snapshot, [string]$ExpectedCandidateId, [bool]$Enabled) {
+    $execution = $Snapshot.creation.execution
+    $observedVersion = 0
+    if ($null -ne $execution.review_impact_context_version) { $observedVersion = [int]$execution.review_impact_context_version }
+    if (-not $Enabled) {
+        if ($observedVersion -ne 0) { throw 'Inspected run unexpectedly enables reviewer impact context.' }
+        return $null
+    }
+    if ($observedVersion -ne 1) { throw 'Inspected run review_impact_context_version does not match the requested treatment.' }
+    $impactRecords = @($Snapshot.review_impact_contexts | Where-Object { [string]$_.candidate_id -ceq $ExpectedCandidateId })
+    if ($impactRecords.Count -ne 1 -or $impactRecords[0].version -ne 1 -or
+        [string]$impactRecords[0].candidate_files_hash -cne [string]$Snapshot.candidate.files_hash -or
+        [string]$impactRecords[0].record_id -cnotmatch '^[0-9a-f]{64}$') {
+        throw 'Inspected run lacks one valid review-impact record for the exact reviewed candidate.'
+    }
+    return [ordered]@{
+        version = 1
+        candidate_id = [string]$impactRecords[0].candidate_id
+        record_id = [string]$impactRecords[0].record_id
+        unavailable_reason = if ($null -ne $impactRecords[0].unavailable_reason) { [string]$impactRecords[0].unavailable_reason } else { $null }
+        changed_path_count = [int]$impactRecords[0].changed_path_count
+        admitted_path_count = [int]$impactRecords[0].admitted_path_count
+        deleted_path_count = [int]$impactRecords[0].deleted_path_count
+        omitted_count = [int]$impactRecords[0].omitted_count
     }
 }
 
@@ -942,6 +995,7 @@ if ($Action -eq 'Prepare') {
             candidate_sha          = $null
             candidate_tree_sha256  = $null
         }
+        if ($ReviewImpactContext) { $records[-1].review_impact_context_requested = $true }
         if ($IsolatedWriters) {
             $records[-1].isolated_writers_requested = $true
             $records[-1].max_parallel_requested = $MaxParallel
@@ -978,6 +1032,7 @@ if ($Action -eq 'Prepare') {
         credentials_retained          = $false
         task_records                  = $records
     }
+    if ($ReviewImpactContext) { $record.review_impact_context_requested = $true }
     if ($IsolatedWriters) {
         $record.isolated_writers_requested = $true
         $record.max_parallel_requested = $MaxParallel
@@ -1035,6 +1090,7 @@ if (-not (Test-Path -LiteralPath $runJsonPath)) { throw "Prepared run not found:
 $priorRunJsonSha = (Get-FileSha256 $runJsonPath).ToLowerInvariant()
 $prior = Get-Content -Raw -LiteralPath $runJsonPath | ConvertFrom-Json
 Assert-AutoCompactPreparedBinding $prior $AutoCompactTokenLimit
+Assert-ReviewImpactPreparedBinding $prior ([bool]$ReviewImpactContext)
 $preparedPlannerContext = [string]$prior.planner_context_requested
 if ($preparedPlannerContext -ne $PlannerContext) {
     throw 'PlannerContext must match the treatment recorded by the prepared run.'
@@ -1100,6 +1156,7 @@ foreach ($entry in $entries) {
         prompt_recipe_requested = $PromptRecipe
         auto_compact_token_limit_requested = if ($AutoCompactTokenLimit -gt 0) { $AutoCompactTokenLimit } else { $null }
     }
+    if ($ReviewImpactContext) { $result.review_impact_context_requested = $true }
     if ($IsolatedWriters) {
         $result.isolated_writers_requested = $true
         $result.max_parallel_requested = $MaxParallel
@@ -1134,7 +1191,7 @@ foreach ($entry in $entries) {
             $result.verification_config_sha256 = $verPolicy.ConfigSha
             $result.native_test_scope = $verPolicy.Scope
             Set-Content -NoNewline -Encoding utf8 (Join-Path $taskOutDir 'verification-argv.log') $verPolicy.ArgvText
-            $runArgs = @(Get-NativeRunArgs $taskPath $entry.task ([bool]$ParallelWriters) $MaxParallel $PlannerContext $PromptRecipe $PlannerContextRIExecutable $PlannerContextRIExecutableSHA256 ([bool]$IsolatedWriters) $isolationPolicyBinding.Path $AutoCompactTokenLimit)
+            $runArgs = @(Get-NativeRunArgs $taskPath $entry.task ([bool]$ParallelWriters) $MaxParallel $PlannerContext $PromptRecipe $PlannerContextRIExecutable $PlannerContextRIExecutableSHA256 ([bool]$IsolatedWriters) $isolationPolicyBinding.Path $AutoCompactTokenLimit ([bool]$ReviewImpactContext))
             $result.parallel_writers_requested = [bool]$ParallelWriters
             if ($IsolatedWriters) { $result.isolated_writers_requested = $true }
             if ($AutoCompactTokenLimit -gt 0) { $result.auto_compact_token_limit_requested = $AutoCompactTokenLimit }
@@ -1331,6 +1388,19 @@ foreach ($entry in $entries) {
             continue
         }
         $result.review_candidate_id_expected = $expectedCandidateId
+        $reviewImpactObserved = Assert-ReviewImpactObserved $snap $expectedCandidateId ([bool]$ReviewImpactContext)
+        if ($null -ne $reviewImpactObserved) {
+            $result.review_impact_context_version_observed = $reviewImpactObserved.version
+            $result.review_impact_context_candidate_id_observed = $reviewImpactObserved.candidate_id
+            $result.review_impact_context_record_id_observed = $reviewImpactObserved.record_id
+            $result.review_impact_context_unavailable_reason_observed = $reviewImpactObserved.unavailable_reason
+            $result.review_impact_context_counts_observed = [ordered]@{
+                changed = $reviewImpactObserved.changed_path_count
+                admitted = $reviewImpactObserved.admitted_path_count
+                deleted = $reviewImpactObserved.deleted_path_count
+                omitted = $reviewImpactObserved.omitted_count
+            }
+        }
 
         # Candidate-bound observation/copy under a read lease. Helper failure
         # is BLOCKED before any acceptance tests, never rerun; a failed
@@ -1530,6 +1600,7 @@ $evalRecord = [ordered]@{
     credentials_retained   = $false
     results                = $results
 }
+if ($ReviewImpactContext) { $evalRecord.review_impact_context_requested = $true }
 if ($IsolatedWriters) {
     $evalRecord.isolated_writers_requested = $true
     $evalRecord.max_parallel_requested = $MaxParallel

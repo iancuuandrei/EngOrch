@@ -10,11 +10,21 @@ copies and distinct external controller-state roots. Prepare both arms before
 either evaluation; Prepare must make zero provider calls. Evaluate serially,
 one arm at a time. Do not resume an earlier Humanize run.
 
-Only the writer treatment differs:
+Use isolated-writer execution with the same resource policy in both arms; only
+the scheduler cap differs:
 
-- Serial control: `MaxParallel = 1`, `IsolatedWriters = false`.
-- Isolated treatment: `MaxParallel = 2`, `IsolatedWriters = true`, with the
-  explicit policy below.
+- Serial control: `MaxParallel = 1`, `IsolatedWriters = true`.
+- Two-writer treatment: `MaxParallel = 2`, `IsolatedWriters = true`.
+
+Enable `ReviewImpactContext = $true` in the common hashtable for both arms.
+Use `PlannerContext = 'go-contract-context-v1'` with the same explicit pinned
+RI parser path and SHA-256 in both. The runner rejects Prepare/Evaluate mode
+mismatches, requires this exact planner mode for the feature, records the
+requested flag, and verifies that the inspected run reports version 1 plus one
+durable context record for the exact reviewed candidate. Do not infer context
+usefulness from the requested flag alone; retain candidate binding, partial
+coverage, omission counts, and unavailable reasons from the observed record.
+Both arms use the pinned CLI default repair allowance of two.
 
 Create the policy at an absolute path outside both source checkouts and pin its
 content hash through the runner:
@@ -52,9 +62,10 @@ $common = @{
     CandidateCopyExe = 'C:\tools\candidatecopy.exe'
     Model = 'gpt-6-luna'
     Effort = 'high'
-    PlannerContext = 'go-source-context-v2'
+    PlannerContext = 'go-contract-context-v1'
     PlannerContextRIExecutable = 'C:\tools\engorch-ri.exe'
     PlannerContextRIExecutableSHA256 = '<verified lowercase SHA-256>'
+    ReviewImpactContext = $true
     PromptRecipe = 'cache-prefix-v1'
     ValidateWriterEdits = $true
     TaskIds = @('go-humanize-feature-performance')
@@ -63,7 +74,8 @@ $common = @{
 $serial = $common.Clone()
 $serial.RunRoot = 'D:\eval\humanize-serial'
 $serial.MaxParallel = 1
-$serial.IsolatedWriters = $false
+$serial.IsolatedWriters = $true
+$serial.IsolationPolicyPath = 'D:\eval\policy\humanize-two-writers.json'
 & .\scripts\evaluate-v1.ps1 @serial
 
 $parallel = $common.Clone()
@@ -86,8 +98,8 @@ bindings in the two retained run receipts; reject the pair if any differ.
 
 ## Evidence for topology
 
-The isolated arm qualifies the topology only if its validated graph and
-journal prove all of these:
+The cap-2 isolated treatment qualifies the two-leaf topology only if its
+validated graph and journal prove all of these:
 
 1. A read-only design/research task completed before implementation and caused
    no file effect.
@@ -104,11 +116,14 @@ journal prove all of these:
    unchanged held-out assertions, and review approve with zero findings on the
    combined candidate. There are no unresolved external intents.
 
-The serial control should bind the same two contracts and finish with the same
-acceptance gates, but have no overlapping writer-dispatch intervals. If the
-planner emits one implementation task, lacks the read-only hub, or proposes
-overlapping writes, record `NOT QUALIFIED` for the topology. Do not edit or
-replan its graph to manufacture the desired cohort.
+The cap-1 serial control must finish with the same acceptance gates and have
+no overlapping writer-dispatch intervals. Since the cap is also a planner
+input, it may choose one cohesive implementation task; record that actual
+plan and do not require it to bind the same two implementation contracts as
+the cap-2 treatment. If the cap-2 treatment emits one implementation task,
+lacks the read-only hub, or proposes overlapping writes, record `NOT
+QUALIFIED` for the two-leaf topology. Do not edit or replan either graph to
+manufacture the desired cohort.
 
 The runner's existing combined held-out check composes the unchanged
 `humanize.heldout_test.go` and `commaf_performance.heldout_test.go`; retain its

@@ -42,6 +42,18 @@ func RunReview(ctx context.Context, path string) (ReviewRecord, error) {
 			return ReviewRecord{}, err
 		}
 	}
+	if reviewImpactContextEnabled(s) {
+		if err := maybeAdmitReviewImpactContext(ctx, path); err != nil {
+			return ReviewRecord{}, err
+		}
+		s, err = Inspect(path)
+		if err != nil {
+			return ReviewRecord{}, err
+		}
+		if err := requireCurrentHostAdmission(ctx, s); err != nil {
+			return ReviewRecord{}, err
+		}
+	}
 	invocation, err := reviewInvocation(s)
 	if err != nil {
 		return ReviewRecord{}, err

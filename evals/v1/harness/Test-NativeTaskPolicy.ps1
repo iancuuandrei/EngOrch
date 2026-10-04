@@ -34,6 +34,15 @@ $entry = @($manifest.repositories | Where-Object id -eq 'go-humanize-feature-per
 if ($entry.Count -ne 1 -or $entry[0].check -ne 'humanize-feature-performance') {
     throw 'Combined humanize manifest entry/check mapping is missing or ambiguous.'
 }
+$topologyFixturePath = Join-Path $PSScriptRoot '..\topology\humanize-feature-performance\fixture.json'
+$topologyFixture = Get-Content -Raw -LiteralPath $topologyFixturePath | ConvertFrom-Json
+if ($topologyFixture.manifest_task -ne $entry[0].id -or
+    $topologyFixture.review_impact_context_requested -ne $true -or
+    $topologyFixture.planner_context -cne 'go-contract-context-v1' -or
+    $topologyFixture.review_impact_context_version_required -ne 1 -or
+    $topologyFixture.current_product_gate -cne 'not_qualified_until_a_fresh_matched_pair_is_prepared_and_accepted') {
+    throw 'Humanize topology fixture is not bound to the supported opt-in reviewer-impact runner treatment.'
+}
 $sources = @(Get-HeldoutSources $entry[0].check)
 if ($sources.Count -ne 3 -or
     ($sources.RelativePath -join ',') -cne 'fabric_v1_heldout_humanize_test.go,fabric_v1_heldout_commaf_test.go,fabric_v1_heldout_test.go') {

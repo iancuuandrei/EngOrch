@@ -284,6 +284,63 @@ func TestAutonomousContractPlannerContextBindsSeparateOptIn(t *testing.T) {
 	}
 }
 
+func TestAutonomousReviewImpactContextRequiresAndBindsPinnedContractMode(t *testing.T) {
+	for _, args := range [][]string{
+		{"run", "--autonomous", "--review-impact-context", "objective"},
+		{"run", "--autonomous", "--review-impact-context", "--planner-context", autonomousPlannerContextGoSourceV1, "objective"},
+		{"run", "--autonomous", "--review-impact-context", "--planner-context", autonomousPlannerContextGoContractV1, "objective"},
+	} {
+		root := autonomousCLIFixture(t)
+		var out bytes.Buffer
+		if err := Execute(context.Background(), args, root, &out); err == nil {
+			t.Fatalf("invalid review-impact invocation accepted: %v", args)
+		}
+		entries, err := filepath.Glob(filepath.Join(root, ".harness", "runs", "*.jsonl"))
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("invalid review-impact invocation created a run: %v (%v)", entries, err)
+		}
+	}
+
+	parser, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary, err := os.ReadFile(parser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(binary)
+	parserHash := hex.EncodeToString(sum[:])
+	root := autonomousCLIFixture(t)
+	var out bytes.Buffer
+	err = Execute(context.Background(), []string{
+		"run", "--autonomous", "--prepare-only", "--max-parallel", "1",
+		"--planner-context", autonomousPlannerContextGoContractV1,
+		"--planner-context-ri-executable", parser,
+		"--planner-context-ri-executable-sha256", parserHash,
+		"--review-impact-context", "A bounded contract review objective",
+	}, root, &out)
+	if err == nil {
+		t.Fatal("test executable unexpectedly satisfied the RI protocol")
+	}
+	var failure autonomousFailure
+	if decodeErr := json.Unmarshal(out.Bytes(), &failure); decodeErr != nil || failure.RunID == "" {
+		t.Fatalf("failed local parser admission did not identify its run: %s (%v)", out.Bytes(), decodeErr)
+	}
+	path, err := runPath(root, failure.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := control.Inspect(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := snapshot.Creation.Execution
+	if policy == nil || policy.ReviewImpactContextVersion != 1 || policy.PlannerContext != autonomousPlannerContextGoContractV1 || policy.PlannerContextRIExecutable != parser || policy.PlannerContextRIExecutableSHA256 != parserHash {
+		t.Fatalf("review impact mode/parser were not bound in run creation: %#v", policy)
+	}
+}
+
 func TestPlannerParseCacheFlagIsContextVersioned(t *testing.T) {
 	for _, test := range []struct {
 		mode    string

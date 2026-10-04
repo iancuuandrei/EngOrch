@@ -394,3 +394,31 @@ integrated increment, without resurrecting a G0 promotion ladder.
 - A candidate-bound, bounded impact projection for reviewer guidance is being
   implemented separately. It supplies observed coupling and possible tests,
   without claiming complete dependencies, independence or successful checks.
+
+## Checkpoint — v1.0.12 integrated; impact context candidate
+
+- Public main/dev contain `e447adf4dceec58fba85dd19e5a390667ee79f6b`;
+  automation PR #21 merged. Corrected clean full Go, independent review,
+  native-argument/public-objective checks, Sonar and security passed. The
+  obsolete cache-policy test correction is in that same increment.
+- The frozen v1.0.11 contract cohort completed with fixed-six 5/6 PASS,
+  godotenv PASS and numeric-text BLOCKED after two permitted repairs. Logr's
+  native verification/review passed but its held-out acceptance failed. The
+  exhausted numeric run is preserved. The matched v2 arm is evaluating; no
+  new default or comparative quality improvement is established yet.
+- Typed usage includes failed work: a read-only supplement captures numeric
+  usage skipped by the runner's nonzero-run path, without modifying the
+  frozen receipt or redispatching. Cost and physical provider-call counts
+  remain UNKNOWN.
+- Candidate-bound reviewer impact context has passed independent RI and
+  control review. It remains opt-in and source-free, with durable bounded
+  replay and explicit partial/unavailable coverage. Clean full qualification
+  and a fresh provider exercise remain pending.
+- A graph-sealing optimization under review reduced allocation bytes by
+  8.85% and allocation count by 9.27% in three alternating paired samples
+  against the same frozen source. Mean elapsed time increased 1.61%, with
+  overlapping ranges; this is not a speed improvement claim.
+- Real topology A/B preparation, routing-decision evidence and exact derived
+  context reuse are the next product work. Adaptive policy calibration,
+  sustained fresh-context/native compaction qualification and v2 release
+  gates remain open.

@@ -52,10 +52,13 @@ the original evaluation's copy-decoder BLOCKED outcome remains preserved.
 with the Commaf allocation task on the same pinned repository. The source/test
 ownership groups are `bytes.go`/`bytes_test.go` and `comma.go`/`comma_test.go`.
 Both behavioral and performance oracles are mandatory. The planner must still
-verify independence; the task does not force unsafe parallel execution. Use
-fresh serial and parallel arms with the identical objective, pins, binary,
-model, runtime and held-out checks. Adding this task is not accepted parallel
-execution or a speedup claim.
+verify independence; the task does not force unsafe parallel execution. The
+[runner-supported topology recipe](topology/humanize-feature-performance/README.md)
+uses fresh isolated arms with `MaxParallel` 1 and 2, the same resource policy,
+and candidate-bound reviewer impact enabled in both. It preserves the manifest
+objective, source, binary, model, runtime, full native check, and both held-out
+assertions. The recipe is not yet qualified; adding this task is not accepted
+parallel execution or a speedup claim.
 The [composed preflight](results/humanize-composed-preflight-20261003.json)
 records full native baseline PASS and compiled, targeted baseline failures for
 both required improvements, with zero provider calls.

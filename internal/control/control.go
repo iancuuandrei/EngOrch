@@ -62,6 +62,9 @@ type ExecutionPolicy struct {
 	// validated, content-addressed source syntax facts. Zero preserves the
 	// existing collection behavior; cache observations grant no authority.
 	PlannerParseCacheVersion int `json:"planner_parse_cache_version,omitempty"`
+	// ReviewImpactContextVersion opts reviews into a candidate-bound, bounded
+	// source-topology projection. Zero preserves historical reviewer invocations.
+	ReviewImpactContextVersion int `json:"review_impact_context_version,omitempty"`
 	// PlannerContextRIExecutable and PlannerContextRIExecutableSHA256 pin the
 	// local read-only parser used only by Go planner-context admission. They
 	// are immutable run inputs and do not authorize a model or repository effect.
@@ -129,6 +132,12 @@ func (p ExecutionPolicy) Validate() error {
 	}
 	if p.PlannerParseCacheVersion == 1 && p.PlannerContext != plannerContextGoSourceV2 && p.PlannerContext != plannerContextGoContractV1 {
 		return errors.New("planner parse cache requires go-source-context-v2 or go-contract-context-v1")
+	}
+	if p.ReviewImpactContextVersion != 0 && p.ReviewImpactContextVersion != 1 {
+		return errors.New("invalid review impact context version")
+	}
+	if p.ReviewImpactContextVersion == 1 && (p.PlannerContext != plannerContextGoContractV1 || p.PlannerContextRIExecutable == "" || safepath.RequireDigest(p.PlannerContextRIExecutableSHA256) != nil) {
+		return errors.New("review impact context requires go-contract-context-v1 and a pinned RI parser")
 	}
 	if p.GraphVersion != 0 && p.GraphVersion != 1 {
 		return errors.New("invalid execution graph version")
@@ -257,6 +266,7 @@ type Snapshot struct {
 	TaskContexts              []TaskContextRecord                `json:"task_contexts,omitempty"`
 	PlannerContext            *PlannerContextRecord              `json:"planner_context,omitempty"`
 	PlannerGoContext          *PlannerGoContextRecord            `json:"planner_go_context,omitempty"`
+	ReviewImpactContexts      []ReviewImpactContextRecord        `json:"review_impact_contexts,omitempty"`
 	Graph                     *GraphState                        `json:"graph,omitempty"`
 	GraphIsolations           map[string]GraphIsolationState     `json:"graph_isolations,omitempty"`
 	GraphIsolationPreparation *GraphIsolationPreparation         `json:"graph_isolation_preparation,omitempty"`
@@ -787,6 +797,14 @@ func Replay(events []journal.Event) (Snapshot, error) {
 				return s, err
 			}
 			if err := replayPlannerGoContext(&s, record); err != nil {
+				return s, err
+			}
+		case "review.impact-context-admitted":
+			var record ReviewImpactContextRecord
+			if err := canonical.Decode(e.Payload, &record); err != nil {
+				return s, err
+			}
+			if err := replayReviewImpactContext(&s, record); err != nil {
 				return s, err
 			}
 		case "graph.recorded", "graph.progress", "graph.revised":

@@ -5,7 +5,7 @@ Use the unchanged `go-humanize-feature-performance` task text from
 `github.com/dustin/go-humanize@a1b4e66b9a6d890e9e15e7091cf16c8032367d6e`.
 This fixture does not create an alternate task objective.
 
-The topology under observation is:
+The target topology for the cap-2 treatment is:
 
 1. One read-only research/design task examines the public API, package tests,
    existing helpers, and exact test/write boundaries, then identifies safe
@@ -22,5 +22,6 @@ independent. There is no algorithmic dependency between `ParseBytes` and
 are the integration hub.
 
 These are properties to measure, not fixed task IDs or a prescribed plan. A
-single cohesive implementation task can still be a valid product outcome; it
-simply does not qualify this two-leaf topology.
+single cohesive implementation task can still be a valid product outcome. It
+is acceptable in the cap-1 control, whose purpose is to provide a serial
+comparison, but it does not qualify the cap-2 treatment's two-leaf topology.

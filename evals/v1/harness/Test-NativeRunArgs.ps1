@@ -27,9 +27,16 @@ if ($null -eq $fileHash -or $null -eq $policyBinding -or $null -eq $preparedBind
 if ($null -eq $taskConfig -or $null -eq $nativeGoArgs) { throw 'Task verification configuration helper missing.' }
 $contextValidator = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-PlannerContextBindingShape' }, $true)
 if ($null -eq $contextValidator) { throw 'Planner context binding validator missing.' }
+$reviewImpactBinding = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-ReviewImpactRunnerBindingShape' }, $true)
+$reviewImpactPrepared = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-ReviewImpactPreparedBinding' }, $true)
+$reviewImpactObserved = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-ReviewImpactObserved' }, $true)
+if ($null -eq $reviewImpactBinding -or $null -eq $reviewImpactPrepared -or $null -eq $reviewImpactObserved) { throw 'Review-impact treatment binding helpers missing.' }
 . ([scriptblock]::Create($goMode.Extent.Text))
 . ([scriptblock]::Create($fileHash.Extent.Text))
 . ([scriptblock]::Create($contextValidator.Extent.Text))
+. ([scriptblock]::Create($reviewImpactBinding.Extent.Text))
+. ([scriptblock]::Create($reviewImpactPrepared.Extent.Text))
+. ([scriptblock]::Create($reviewImpactObserved.Extent.Text))
 . ([scriptblock]::Create($policyBinding.Extent.Text))
 . ([scriptblock]::Create($preparedBinding.Extent.Text))
 . ([scriptblock]::Create($observedPolicy.Extent.Text))
@@ -124,6 +131,42 @@ if (($goSourceV2 | ConvertTo-Json -Compress) -ne ($expectedGoSourceV2 | ConvertT
 $goContractV1 = @(Get-NativeRunArgs $taskPath $objective $false 0 'go-contract-context-v1' '' $parserPath $parserHash)
 $expectedGoContractV1 = @('--root', $taskPath, 'run', '--autonomous', '--planner-context', 'go-contract-context-v1', '--planner-context-ri-executable', $parserPath, '--planner-context-ri-executable-sha256', $parserHash, $objective)
 if (($goContractV1 | ConvertTo-Json -Compress) -ne ($expectedGoContractV1 | ConvertTo-Json -Compress)) { throw 'go-contract-context-v1 argv does not preserve the exact explicit parser binding.' }
+$reviewImpact = @(Get-NativeRunArgs $taskPath $objective $false 1 'go-contract-context-v1' '' $parserPath $parserHash $false '' 0 $true)
+$expectedReviewImpact = @('--root', $taskPath, 'run', '--autonomous', '--planner-context', 'go-contract-context-v1', '--planner-context-ri-executable', $parserPath, '--planner-context-ri-executable-sha256', $parserHash, '--review-impact-context', '--max-parallel', '1', $objective)
+if (($reviewImpact | ConvertTo-Json -Compress) -ne ($expectedReviewImpact | ConvertTo-Json -Compress)) { throw 'Review-impact argv does not bind the contract planner and exact pinned parser.' }
+Assert-ReviewImpactRunnerBindingShape $false '' 'Native'
+Assert-ReviewImpactRunnerBindingShape $true 'go-contract-context-v1' 'Native'
+foreach ($badReviewImpact in @(
+    @{ Enabled=$true; Planner=''; Mode='Native' },
+    @{ Enabled=$true; Planner='go-source-context-v2'; Mode='Native' },
+    @{ Enabled=$true; Planner='go-contract-context-v1'; Mode='PR5Matched' }
+)) {
+    $rejected = $false
+    try { Assert-ReviewImpactRunnerBindingShape $badReviewImpact.Enabled $badReviewImpact.Planner $badReviewImpact.Mode } catch { $rejected = $true }
+    if (-not $rejected) { throw 'Invalid reviewer-impact mode/planner combination was accepted.' }
+}
+$reviewImpactPrepared = [pscustomobject]@{ review_impact_context_requested = $true }
+Assert-ReviewImpactPreparedBinding $reviewImpactPrepared $true
+Assert-ReviewImpactPreparedBinding ([pscustomobject]@{}) $false
+$rejectedReviewImpactMismatch = $false
+try { Assert-ReviewImpactPreparedBinding $reviewImpactPrepared $false } catch { $rejectedReviewImpactMismatch = $true }
+if (-not $rejectedReviewImpactMismatch) { throw 'Evaluate accepted a changed reviewer-impact treatment.' }
+$reviewCandidate = 'a' * 64
+$reviewImpactSnapshot = @{
+    creation = @{ execution = @{ review_impact_context_version = 1 } }
+    candidate = @{ files_hash = 'b' * 64 }
+    review_impact_contexts = @(@{
+        version = 1; candidate_id = $reviewCandidate; candidate_files_hash = 'b' * 64; record_id = 'c' * 64
+        changed_path_count = 1; admitted_path_count = 0; deleted_path_count = 0; omitted_count = 0
+    })
+}
+$observedReviewImpact = Assert-ReviewImpactObserved $reviewImpactSnapshot $reviewCandidate $true
+if ($observedReviewImpact.version -ne 1 -or $observedReviewImpact.candidate_id -cne $reviewCandidate) { throw 'Observed review-impact evidence was not returned.' }
+$rejectedMissingImpact = $false
+try { Assert-ReviewImpactObserved (@{ creation=@{ execution=@{ review_impact_context_version=1 } }; candidate=@{ files_hash='b' * 64 }; review_impact_contexts=@() }) $reviewCandidate $true } catch { $rejectedMissingImpact = $true }
+if (-not $rejectedMissingImpact) { throw 'Enabled reviewer-impact treatment passed without a candidate-bound record.' }
+$legacyImpactObserved = Assert-ReviewImpactObserved (@{ creation=@{ execution=@{} } }) '' $false
+if ($null -ne $legacyImpactObserved) { throw 'Legacy mode unexpectedly returned reviewer-impact evidence.' }
 $policyRoot = Join-Path $env:TEMP ('isolated-runner-policy-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $policyRoot | Out-Null
 try {
@@ -135,6 +178,9 @@ try {
     $isolated = @(Get-NativeRunArgs $taskPath $objective $false 2 '' '' '' '' $true $binding.Path)
     $expectedIsolated = @('--root', $taskPath, 'run', '--autonomous', '--isolated-writers', '--isolation-policy', $policyPath, '--max-parallel', '2', $objective)
     if (($isolated | ConvertTo-Json -Compress) -ne ($expectedIsolated | ConvertTo-Json -Compress)) { throw 'Isolated writer argv does not preserve exact policy path and MaxParallel.' }
+    $isolatedReviewImpact = @(Get-NativeRunArgs $taskPath $objective $false 2 'go-contract-context-v1' '' $parserPath $parserHash $true $binding.Path 0 $true)
+    $expectedIsolatedReviewImpact = @('--root', $taskPath, 'run', '--autonomous', '--planner-context', 'go-contract-context-v1', '--planner-context-ri-executable', $parserPath, '--planner-context-ri-executable-sha256', $parserHash, '--review-impact-context', '--isolated-writers', '--isolation-policy', $policyPath, '--max-parallel', '2', $objective)
+    if (($isolatedReviewImpact | ConvertTo-Json -Compress) -ne ($expectedIsolatedReviewImpact | ConvertTo-Json -Compress)) { throw 'Topology treatment argv does not preserve the pinned contract parser, review flag, resource policy and parallel cap.' }
 
     $priorBinding = [pscustomobject]@{
         isolated_writers_requested = $true
@@ -273,4 +319,4 @@ foreach ($invalid in @(-1, 9)) {
     try { Get-NativeRunArgs $taskPath $objective $true $invalid | Out-Null } catch { $rejected = $true }
     if (-not $rejected) { throw "Invalid limit $invalid was admitted." }
 }
-Write-Output 'PASS: legacy argv is byte-order stable; v1/v2/contract-v1 Go planner treatments bind exact parser provenance; isolated mode binds policy and a validated external controller state root into the task config hash; inside-checkout roots reject; invalid combinations and mutations reject; objectives stay one argument; no provider calls.'
+Write-Output 'PASS: legacy argv is byte-order stable; Go planner modes bind exact parser provenance; reviewer-impact opt-in matches the prepared treatment and exact candidate record; isolated mode binds policy and an external controller state root; invalid combinations and mutations reject; objectives stay one argument; no provider calls.'

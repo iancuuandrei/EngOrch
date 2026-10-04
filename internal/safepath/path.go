@@ -202,7 +202,7 @@ func EnsureDirectory(root, name string) error {
 		p := strings.Join(parts[:i+1], "/")
 		info, err := r.Lstat(p)
 		if os.IsNotExist(err) {
-			if err = r.Mkdir(p, 0700); err != nil {
+			if err = r.Mkdir(p, 0700); err != nil && !os.IsExist(err) {
 				return err
 			}
 			info, err = r.Lstat(p)

@@ -1061,7 +1061,7 @@ func buildGoEngineeringGraph(sourceID, candidateID, producer string, files []GoG
 		copy := cloneGoModuleInventory(*inventory)
 		graph.ModuleInventory = &copy
 	}
-	graph.Digest, err = canonical.Hash("harness.ri.go-engineering-graph.v1", graph.content())
+	graph.Digest, err = canonical.TypedGeneratedHash("harness.ri.go-engineering-graph.v1", graph.content())
 	if err != nil {
 		return GoEngineeringGraph{}, err
 	}
