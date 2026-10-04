@@ -50,6 +50,9 @@ func RunExplorer(ctx context.Context, path, question string) (ExplorerRecord, er
 	if err != nil {
 		return ExplorerRecord{}, err
 	}
+	if err := requireModelAccessAdmissionAvailable(s, invocation); err != nil {
+		return ExplorerRecord{}, err
+	}
 	if err := requireExecutableRoleRuntime(invocation.Profile); err != nil {
 		return ExplorerRecord{}, err
 	}
@@ -234,6 +237,9 @@ func executeExplorer(ctx context.Context, path string, s Snapshot, expected Expl
 	// Per-invocation state: every map lookup binds the exact invocation, no
 	// sibling host is substituted. Legacy singleton is mirrored in the map.
 	if run, ok := explorerRunForInvocation(s, expected.Invocation.ID); !ok || run.Intent != expected {
+		if _, _, _, _, policyErr := codexRuntimeUsagePolicy(s, expected.Invocation.Profile.Role); policyErr != nil {
+			return result, policyErr
+		}
 		if err := Append(path, "explorer.host-intent", expected); err != nil {
 			return result, err
 		}
@@ -291,7 +297,18 @@ func executeExplorer(ctx context.Context, path string, s Snapshot, expected Expl
 		cancel()
 		return result, errors.Join(errors.New("explorer runtime is terminal without a result"), terminalErr)
 	}
-	if readErr != nil || state.Result == nil {
+	var pendingResult *runtime.Result
+	usagePending := false
+	if readErr == nil && s.Creation.Config.Version == 2 && state.SemanticResult != nil && state.Result == nil &&
+		state.UsagePolicy != nil && state.UsagePolicy.Required && (state.UsageReceipt == nil || state.UsageReceipt.Coverage != "OBSERVED") {
+		_, semantic, _, pendingErr := observeSemanticUsagePending(ctx, path, runtimePath, expected.Invocation, "harness.explorer-result.v1")
+		if pendingErr != nil {
+			return result, pendingErr
+		}
+		pendingResult = &semantic
+		usagePending = true
+	}
+	if readErr != nil || state.Result == nil && !usagePending {
 		usageBudget, requireLiveUsage, usageQualified, unlimitedTokens, policyErr := codexRuntimeUsagePolicy(s, expected.Invocation.Profile.Role)
 		if policyErr != nil {
 			return result, policyErr
@@ -326,6 +343,16 @@ func executeExplorer(ctx context.Context, path string, s Snapshot, expected Expl
 		} else {
 			_, err = a.Resume(ctx, expected.Invocation.ID)
 		}
+		if errors.Is(err, codexruntime.ErrUsageReconciliation) && s.Creation.Config.Version == 2 {
+			_, semantic, _, pendingErr := observeSemanticUsagePending(ctx, path, runtimePath, expected.Invocation, "harness.explorer-result.v1")
+			if pendingErr == nil {
+				pendingResult = &semantic
+				usagePending = true
+				err = nil
+			} else {
+				return result, errors.Join(err, pendingErr)
+			}
+		}
 		if err != nil {
 			if s.Creation.Config.Version == 2 {
 				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
@@ -347,7 +374,14 @@ func executeExplorer(ctx context.Context, path string, s Snapshot, expected Expl
 	if run, ok := explorerRunForInvocation(latest, expected.Invocation.ID); !ok || run.Intent != expected || !run.Ready || run.Receipt == nil {
 		return result, errors.New("explorer host observation missing")
 	}
-	if state.Intent == nil || state.Intent.Invocation != expected.Invocation || state.Intent.Directory != filepath.Join(l.Root, "workspace") || state.Result == nil || state.Thread == nil || state.TurnStatus != "completed" || state.Source == nil || *state.Source != s.Creation.Repository {
+	semanticResult := state.Result
+	if usagePending {
+		if state.SemanticResult == nil || pendingResult == nil || !sameCanonical(*state.SemanticResult, *pendingResult) {
+			return result, errors.New("explorer semantic usage pending result is missing or changed")
+		}
+		semanticResult = state.SemanticResult
+	}
+	if state.Intent == nil || state.Intent.Invocation != expected.Invocation || state.Intent.Directory != filepath.Join(l.Root, "workspace") || semanticResult == nil || state.Thread == nil || state.TurnStatus != "completed" || state.Source == nil || *state.Source != s.Creation.Repository {
 		return result, errors.New("explorer runtime evidence incomplete or substituted")
 	}
 	if (state.RI == nil) != (runtimeRI == nil) || (runtimeRI != nil && *state.RI != *runtimeRI) {
@@ -366,7 +400,7 @@ func executeExplorer(ctx context.Context, path string, s Snapshot, expected Expl
 	if err := state.Thread.Validate(expected.Invocation.Profile, filepath.Join(l.Root, "workspace")); err != nil {
 		return result, err
 	}
-	if err := runtime.ValidateResult(expected.Invocation, *state.Result, true); err != nil {
+	if err := runtime.ValidateResult(expected.Invocation, *semanticResult, true); err != nil {
 		return result, err
 	}
 	after, err := worktree.Fingerprint(ctx, *s.Workspace)
@@ -376,11 +410,15 @@ func executeExplorer(ctx context.Context, path string, s Snapshot, expected Expl
 	if after != before {
 		return result, errors.New("explorer source changed during execution")
 	}
-	hash, err := canonical.Hash("harness.explorer-result.v1", *state.Result)
+	hash, err := canonical.Hash("harness.explorer-result.v1", *semanticResult)
 	if err != nil {
 		return result, err
 	}
-	if s.Creation.Config.Version == 2 {
+	if s.Creation.Config.Version == 2 && usagePending {
+		if err := requireModelAccessResult(latest, expected.Invocation, head, hash, state.Thread.ThreadID, state.TurnID, true); err != nil {
+			return result, err
+		}
+	} else if s.Creation.Config.Version == 2 {
 		var terminal ModelAccessTerminal
 		latest, terminal, err = completeModelAccess(ctx, path, runtimePath, expected.Invocation, "harness.explorer-result.v1")
 		if err != nil {
@@ -390,7 +428,7 @@ func executeExplorer(ctx context.Context, path string, s Snapshot, expected Expl
 			return result, errors.New("explorer result differs from terminal model access receipt")
 		}
 	}
-	receipt := ExplorerRuntimeReceipt{expected.Invocation.ID, state.Thread.ThreadID, state.TurnID, head, hash}
+	receipt := ExplorerRuntimeReceipt{InvocationID: expected.Invocation.ID, ThreadID: state.Thread.ThreadID, TurnID: state.TurnID, JournalHead: head, ResultHash: hash, UsagePending: usagePending}
 	if run, ok := explorerRunForInvocation(latest, expected.Invocation.ID); !ok || run.RuntimeReceipt == nil {
 		if err := Append(path, "explorer.runtime-observed", receipt); err != nil {
 			return result, err
@@ -398,5 +436,5 @@ func executeExplorer(ctx context.Context, path string, s Snapshot, expected Expl
 	} else if *run.RuntimeReceipt != receipt {
 		return result, errors.New("explorer runtime journal no longer matches recorded receipt")
 	}
-	return *state.Result, nil
+	return *semanticResult, nil
 }

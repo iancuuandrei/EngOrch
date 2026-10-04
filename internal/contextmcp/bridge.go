@@ -17,6 +17,12 @@ import (
 )
 
 const (
+	// InvocationToolCallBudget matches the durable broker binding used by
+	// provider_dispatch. One running request plus this many-minus-one FIFO
+	// waiters admits every call in a legal burst.
+	InvocationToolCallBudget = 64
+	// ContextCallTimeout bounds one context-tool callback after queue admission.
+	ContextCallTimeout = 15 * time.Second
 	// MaxWireResponseBytes is the exact MCP response-body ceiling shared by
 	// context-only and recorder-owned listeners.
 	MaxWireResponseBytes = 1 << 20
@@ -44,6 +50,37 @@ func New(broker *contextbroker.Broker, bearer string, observe toolbridge.Observe
 // rejection New applies. The served catalog is identical to New, so queue
 // depth changes transport behavior without granting any new tool authority.
 func NewWithQueue(broker *contextbroker.Broker, bearer string, observe toolbridge.ObserveFunc, maxQueuedCalls int) (*toolbridge.Server, error) {
+	if maxQueuedCalls < 0 || maxQueuedCalls > 32 {
+		return nil, errors.New("legacy context MCP queue capacity exceeds v2 bound")
+	}
+	return NewWithQueueDeadlines(broker, bearer, observe, maxQueuedCalls, 0, ContextCallTimeout)
+}
+
+// QueuePolicyForCallBudget converts an invocation-wide bounded call budget to
+// the serial transport's waiting capacity and maximum admission wait. Every
+// queued call receives a fresh callback timeout after it is admitted.
+func QueuePolicyForCallBudget(maxCalls int, callbackTimeout time.Duration) (int, time.Duration, error) {
+	if maxCalls < 1 || maxCalls > InvocationToolCallBudget || callbackTimeout <= 0 || callbackTimeout > time.Minute || callbackTimeout%time.Millisecond != 0 {
+		return 0, 0, errors.New("invalid context tool call budget")
+	}
+	queued := maxCalls - 1
+	return queued, time.Duration(queued) * callbackTimeout, nil
+}
+
+// NewWithQueueDeadlines constructs the context-only bridge with separately
+// bounded admission and callback deadlines. A zero queue timeout retains the
+// legacy single-deadline behavior used by historical runtime bindings.
+func NewWithQueueDeadlines(broker *contextbroker.Broker, bearer string, observe toolbridge.ObserveFunc, maxQueuedCalls int, queueWaitTimeout, callTimeout time.Duration) (*toolbridge.Server, error) {
+	if queueWaitTimeout == 0 {
+		if maxQueuedCalls < 0 || maxQueuedCalls > 32 {
+			return nil, errors.New("legacy context MCP queue capacity exceeds v2 bound")
+		}
+	} else {
+		queued, wait, err := QueuePolicyForCallBudget(maxQueuedCalls+1, callTimeout)
+		if err != nil || queued != maxQueuedCalls || wait != queueWaitTimeout {
+			return nil, errors.New("invalid context MCP queue deadlines")
+		}
+	}
 	projection, err := Projection(broker)
 	if err != nil {
 		return nil, err
@@ -52,8 +89,8 @@ func NewWithQueue(broker *contextbroker.Broker, bearer string, observe toolbridg
 		Token: bearer, Observe: observe, MaxConcurrentCalls: 1,
 		MaxQueuedCalls:  maxQueuedCalls,
 		MaxRequestBytes: 64 << 10, MaxResponseBytes: MaxWireResponseBytes,
-		CallTimeout: 15 * time.Second,
-		Catalog:     projection.Catalog, Call: projection.Call,
+		QueueWaitTimeout: queueWaitTimeout, CallTimeout: callTimeout,
+		Catalog: projection.Catalog, Call: projection.Call,
 	})
 }
 

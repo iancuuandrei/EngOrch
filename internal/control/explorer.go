@@ -63,18 +63,28 @@ func explorerInvocation(s Snapshot, question string) (runtime.Invocation, error)
 		instruction += " candidate_id MUST exactly match the supplied candidate_id. summary MUST be a single nonempty string, never an object or array. paths MUST be an array of sorted unique relative-path strings."
 	}
 	instruction = promptRecipeInstruction(s.Creation.Execution, "explorer", s.Creation.Config.ExplorerContract, instruction)
+	scopeReplan, err := scopeReplanDesignContextForQuestion(s, question)
+	if err != nil {
+		return runtime.Invocation{}, err
+	}
+	cohortScopeReplan, err := scopeReplanCohortDesignContextForQuestion(s, question)
+	if err != nil {
+		return runtime.Invocation{}, err
+	}
 	input, err := promptRecipeBytes(s.Creation.Execution, struct {
-		OutputSchema json.RawMessage     `json:"output_schema,omitempty"`
-		Instruction  string              `json:"instruction"`
-		RunID        string              `json:"run_id"`
-		PlanID       string              `json:"plan_id"`
-		CandidateID  string              `json:"candidate_id"`
-		Objective    string              `json:"objective"`
-		Question     string              `json:"question"`
-		RI           *roleRIContext      `json:"ri,omitempty"`
-		Lexical      *roleLexicalContext `json:"lexical,omitempty"`
-		TaskContext  *TaskContextRecord  `json:"task_context,omitempty"`
-	}{schema, instruction, s.RunID, s.PlanID, candidateID, s.Creation.Objective, question, intelligence, lexical, taskCtx})
+		OutputSchema      json.RawMessage                 `json:"output_schema,omitempty"`
+		Instruction       string                          `json:"instruction"`
+		RunID             string                          `json:"run_id"`
+		PlanID            string                          `json:"plan_id"`
+		CandidateID       string                          `json:"candidate_id"`
+		Objective         string                          `json:"objective"`
+		Question          string                          `json:"question"`
+		RI                *roleRIContext                  `json:"ri,omitempty"`
+		Lexical           *roleLexicalContext             `json:"lexical,omitempty"`
+		TaskContext       *TaskContextRecord              `json:"task_context,omitempty"`
+		ScopeReplan       *ScopeReplanDesignContext       `json:"scope_replan,omitempty"`
+		CohortScopeReplan *ScopeReplanCohortDesignContext `json:"cohort_scope_replan,omitempty"`
+	}{schema, instruction, s.RunID, s.PlanID, candidateID, s.Creation.Objective, question, intelligence, lexical, taskCtx, scopeReplan, cohortScopeReplan})
 	if err != nil {
 		return runtime.Invocation{}, err
 	}

@@ -242,6 +242,41 @@ func TestReviewImpactContextAdmitsAndReplaysExactCandidateProjection(t *testing.
 	if err := validateReviewImpactContextRecord(receiverAwareSnapshot, fallback); err != nil {
 		t.Fatalf("bounded unavailable fallback did not validate: %v", err)
 	}
+	riUnavailable, err := makeReviewImpactRIUnavailableRecord(receiverAwareSnapshot, source, baseGraph, baseInventory)
+	if err != nil || riUnavailable.UnavailableReason != reviewImpactRIUnavailable || riUnavailable.CandidateGraphDigest != "" || riUnavailable.CandidateModuleInventoryDigest != "" {
+		t.Fatalf("RI unavailability did not produce truthful source-free fallback: reason=%q err=%v", riUnavailable.UnavailableReason, err)
+	}
+	if err := validateReviewImpactContextRecord(receiverAwareSnapshot, riUnavailable); err != nil {
+		t.Fatalf("candidate-bound RI-unavailable fallback rejected: %v", err)
+	}
+	var fallbackRoundTrip ReviewImpactContextRecord
+	fallbackJSON, err := canonical.Bytes(riUnavailable)
+	if err != nil || canonical.Decode(fallbackJSON, &fallbackRoundTrip) != nil {
+		t.Fatalf("RI-unavailable fallback did not survive durable encoding: %v", err)
+	}
+	fallbackReplay := receiverAwareSnapshot
+	fallbackReplay.ReviewImpactContexts = nil
+	if err := replayReviewImpactContext(&fallbackReplay, fallbackRoundTrip); err != nil || len(fallbackReplay.ReviewImpactContexts) != 1 {
+		t.Fatalf("RI-unavailable fallback did not replay: count=%d err=%v", len(fallbackReplay.ReviewImpactContexts), err)
+	}
+	forgedFallback := riUnavailable
+	forgedFallback.CandidateGraphDigest = strings.Repeat("5", 64)
+	forgedFallback.RecordID, err = reviewImpactContextRecordID(forgedFallback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateReviewImpactContextRecord(receiverAwareSnapshot, forgedFallback); err == nil {
+		t.Fatal("RI-unavailable fallback accepted an unobserved candidate graph digest")
+	}
+	forgedFallback = riUnavailable
+	forgedFallback.UnavailableReason = "parser error: " + "private details"
+	forgedFallback.RecordID, err = reviewImpactContextRecordID(forgedFallback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateReviewImpactContextRecord(receiverAwareSnapshot, forgedFallback); err == nil {
+		t.Fatal("RI-unavailable fallback accepted arbitrary error text")
+	}
 	encoded, err := json.Marshal(record)
 	if err != nil {
 		t.Fatal(err)

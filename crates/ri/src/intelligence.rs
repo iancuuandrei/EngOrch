@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    io::Read,
-    path::{Path, PathBuf},
+    io::{self, Read},
+    path::{Component, Path, PathBuf},
     time::{Duration, Instant, SystemTime},
 };
 use tree_sitter::{Node, ParseOptions, Parser};
@@ -44,6 +44,27 @@ struct CacheEntry {
 }
 
 struct CacheWriteLock(PathBuf);
+
+#[derive(Debug, PartialEq, Eq)]
+enum CacheDirectoryError {
+    Unsafe(String),
+    Unavailable(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CacheDirectoryNode {
+    Directory,
+    Reparse,
+    NonDirectory,
+}
+
+impl CacheDirectoryError {
+    fn message(self) -> String {
+        match self {
+            Self::Unsafe(message) | Self::Unavailable(message) => message,
+        }
+    }
+}
 
 impl Drop for CacheWriteLock {
     fn drop(&mut self) {
@@ -284,27 +305,75 @@ fn valid_fact(
             .iter()
             .all(|marker| !marker.is_empty() && normalized_source.contains(marker))
 }
-fn validate_cache_dir(dir: &Path) -> Result<(), String> {
+fn validate_cache_dir(dir: &Path) -> Result<(), CacheDirectoryError> {
+    validate_cache_dir_with(dir, |path| {
+        fs::symlink_metadata(path).map(|metadata| {
+            if cache_reparse(&metadata) {
+                CacheDirectoryNode::Reparse
+            } else if metadata.is_dir() {
+                CacheDirectoryNode::Directory
+            } else {
+                CacheDirectoryNode::NonDirectory
+            }
+        })
+    })
+}
+
+fn validate_cache_dir_with<F>(
+    dir: &Path,
+    mut symlink_metadata: F,
+) -> Result<(), CacheDirectoryError>
+where
+    F: FnMut(&Path) -> io::Result<CacheDirectoryNode>,
+{
     if !dir.is_absolute() {
-        return Err("cache directory must be absolute".into());
+        return Err(CacheDirectoryError::Unsafe(
+            "cache directory must be absolute".into(),
+        ));
     }
-    let mut cur = Some(dir);
-    while let Some(p) = cur {
-        match fs::symlink_metadata(p) {
-            Ok(meta) => {
-                if cache_reparse(&meta) {
-                    return Err("cache directory symlink rejected".into());
+
+    if dir
+        .components()
+        .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        return Err(CacheDirectoryError::Unsafe(
+            "cache directory path is not normalized".into(),
+        ));
+    }
+
+    // Walk from the filesystem root toward the requested directory. A
+    // deepest-first walk can stat descendants through an unchecked symlink.
+    let mut ancestors: Vec<_> = dir.ancestors().collect();
+    ancestors.reverse();
+    for p in ancestors {
+        match symlink_metadata(p) {
+            Ok(node) => {
+                if node == CacheDirectoryNode::Reparse {
+                    return Err(CacheDirectoryError::Unsafe(
+                        "cache directory symlink rejected".into(),
+                    ));
                 }
-                if !meta.is_dir() {
-                    return Err("cache ancestor is not a directory".into());
+                if node == CacheDirectoryNode::NonDirectory {
+                    return Err(CacheDirectoryError::Unsafe(
+                        "cache ancestor is not a directory".into(),
+                    ));
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.to_string()),
+            Err(error) if unsafe_cache_path_error(error.kind()) => {
+                return Err(CacheDirectoryError::Unsafe(error.to_string()));
+            }
+            Err(error) => return Err(CacheDirectoryError::Unavailable(error.to_string())),
         }
-        cur = p.parent()
     }
     Ok(())
+}
+
+fn unsafe_cache_path_error(kind: io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        io::ErrorKind::InvalidInput | io::ErrorKind::InvalidData | io::ErrorKind::NotADirectory
+    )
 }
 
 fn cache_reparse(meta: &fs::Metadata) -> bool {
@@ -410,9 +479,9 @@ fn initialize_cache_policy_locked(dir: &Path, limits: CacheLimits) -> Result<(),
 }
 
 fn ensure_cache_policy(dir: &Path, limits: CacheLimits) -> Result<bool, String> {
-    validate_cache_dir(dir)?;
+    validate_cache_dir(dir).map_err(CacheDirectoryError::message)?;
     fs::create_dir_all(dir).map_err(|error| error.to_string())?;
-    validate_cache_dir(dir)?;
+    validate_cache_dir(dir).map_err(CacheDirectoryError::message)?;
     if cache_policy_matches(dir)? {
         return Ok(true);
     }
@@ -555,9 +624,9 @@ fn write_cache_entry_with_limits(
     if !valid_digest(key) || raw.len() > canonical::MAX_BYTES {
         return Err("invalid Go facts cache write".into());
     }
-    validate_cache_dir(dir)?;
+    validate_cache_dir(dir).map_err(CacheDirectoryError::message)?;
     fs::create_dir_all(dir).map_err(|error| error.to_string())?;
-    validate_cache_dir(dir)?;
+    validate_cache_dir(dir).map_err(CacheDirectoryError::message)?;
     let Some(_lock) = acquire_cache_write_lock(dir)? else {
         // Cache contention is a miss for storage purposes, never a parser
         // failure or a reason to repeat/skip a repository effect.
@@ -595,6 +664,22 @@ pub fn go_file_facts(
     producer: &str,
     cache_dir: Option<&Path>,
 ) -> Result<GoFileFacts, String> {
+    go_file_facts_with_cache_validation(path, source, expected, producer, cache_dir, |dir| {
+        validate_cache_dir(dir)
+    })
+}
+
+fn go_file_facts_with_cache_validation<F>(
+    path: &str,
+    source: &[u8],
+    expected: &str,
+    producer: &str,
+    cache_dir: Option<&Path>,
+    validate_cache: F,
+) -> Result<GoFileFacts, String>
+where
+    F: FnOnce(&Path) -> Result<(), CacheDirectoryError>,
+{
     if !valid_path(path)
         || source.len() > 1 << 20
         || std::str::from_utf8(source).is_err()
@@ -605,33 +690,37 @@ pub fn go_file_facts(
         return Err("invalid Go facts source binding".into());
     }
     let k = key(path, expected, producer)?;
-    if let Some(dir) = cache_dir {
-        validate_cache_dir(dir)?;
-        let cache_ready = ensure_cache_policy(dir, GO_FACTS_CACHE_LIMITS).unwrap_or(false);
-        if cache_ready {
-            let p = dir.join(format!("{k}.json"));
-            if let Ok(meta) = fs::symlink_metadata(&p) {
-                if cache_reparse(&meta) || !meta.is_file() {
-                    return Err("cache entry must be a regular file".into());
-                }
-                if meta.file_type().is_file() {
-                    if let Ok(file) = fs::File::open(&p) {
-                        let mut raw = Vec::new();
-                        if file
-                            .take(canonical::MAX_BYTES as u64 + 1)
-                            .read_to_end(&mut raw)
-                            .is_ok()
-                            && raw.len() <= canonical::MAX_BYTES
-                        {
-                            if let Ok(mut fact) = canonical::decode::<GoFileFacts>(&raw) {
-                                let b = body(fact.clone())?;
-                                if valid_fact(&fact, path, expected, producer, &k, source)
-                                    && fact.body_sha256 == b
-                                {
-                                    fact.cache = "hit".into();
-                                    fact.parse_count = 0;
-                                    return Ok(fact);
-                                }
+    let cache_ready = match cache_dir {
+        Some(dir) => match validate_cache(dir) {
+            Ok(()) => ensure_cache_policy(dir, GO_FACTS_CACHE_LIMITS).unwrap_or(false),
+            Err(CacheDirectoryError::Unsafe(error)) => return Err(error),
+            Err(CacheDirectoryError::Unavailable(_)) => false,
+        },
+        None => false,
+    };
+    if let Some(dir) = cache_dir.filter(|_| cache_ready) {
+        let p = dir.join(format!("{k}.json"));
+        if let Ok(meta) = fs::symlink_metadata(&p) {
+            if cache_reparse(&meta) || !meta.is_file() {
+                return Err("cache entry must be a regular file".into());
+            }
+            if meta.file_type().is_file() {
+                if let Ok(file) = fs::File::open(&p) {
+                    let mut raw = Vec::new();
+                    if file
+                        .take(canonical::MAX_BYTES as u64 + 1)
+                        .read_to_end(&mut raw)
+                        .is_ok()
+                        && raw.len() <= canonical::MAX_BYTES
+                    {
+                        if let Ok(mut fact) = canonical::decode::<GoFileFacts>(&raw) {
+                            let b = body(fact.clone())?;
+                            if valid_fact(&fact, path, expected, producer, &k, source)
+                                && fact.body_sha256 == b
+                            {
+                                fact.cache = "hit".into();
+                                fact.parse_count = 0;
+                                return Ok(fact);
                             }
                         }
                     }
@@ -754,7 +843,7 @@ pub fn go_file_facts(
     });
     f.generated_markers.sort();
     f.body_sha256 = body(f.clone())?;
-    if let Some(dir) = cache_dir {
+    if let Some(dir) = cache_dir.filter(|_| cache_ready) {
         // Persistence is best-effort: filesystem contention, malformed cache
         // contents or a full cache cannot change the parsed facts result.
         if let Ok(value) = serde_json::to_value(&f) {
@@ -935,5 +1024,113 @@ mod cache_storage_tests {
                 .is_err()
         );
         assert!(!outside.join("nested").exists());
+
+        let mut checked_link = false;
+        let mut checked_descendant = false;
+        let validation = validate_cache_dir_with(&target, |path| {
+            if path == link {
+                checked_link = true;
+            }
+            if path.starts_with(&link) && path != link {
+                checked_descendant = true;
+            }
+            fs::symlink_metadata(path).map(|metadata| {
+                if cache_reparse(&metadata) {
+                    CacheDirectoryNode::Reparse
+                } else if metadata.is_dir() {
+                    CacheDirectoryNode::Directory
+                } else {
+                    CacheDirectoryNode::NonDirectory
+                }
+            })
+        });
+        assert!(matches!(validation, Err(CacheDirectoryError::Unsafe(_))));
+        assert!(checked_link, "symlink ancestor was not inspected");
+        assert!(
+            !checked_descendant,
+            "validation probed a descendant through a symlink ancestor"
+        );
+    }
+
+    #[test]
+    fn cache_access_permission_failure_degrades_to_uncached_facts() {
+        use std::io::ErrorKind;
+
+        let directory = tempfile::tempdir().unwrap();
+        let cache = directory.path().join("unavailable-cache");
+        let source = b"package p\nfunc F() {}\n";
+        let expected = digest(source);
+        let producer = "a".repeat(64);
+        let uncached = go_file_facts("a.go", source, &expected, &producer, None).unwrap();
+        let validation = validate_cache_dir_with(&cache, |path| {
+            if path == cache {
+                Err(io::Error::from(ErrorKind::PermissionDenied))
+            } else {
+                fs::symlink_metadata(path).map(|metadata| {
+                    if cache_reparse(&metadata) {
+                        CacheDirectoryNode::Reparse
+                    } else if metadata.is_dir() {
+                        CacheDirectoryNode::Directory
+                    } else {
+                        CacheDirectoryNode::NonDirectory
+                    }
+                })
+            }
+        })
+        .unwrap_err();
+        assert!(matches!(validation, CacheDirectoryError::Unavailable(_)));
+
+        let facts = go_file_facts_with_cache_validation(
+            "a.go",
+            source,
+            &expected,
+            &producer,
+            Some(&cache),
+            |_| Err(validation),
+        )
+        .unwrap();
+        assert_eq!(facts.cache, "miss");
+        assert_eq!(facts.parse_count, 1);
+        assert_eq!(facts.source_sha256, uncached.source_sha256);
+        assert_eq!(facts.producer_sha256, uncached.producer_sha256);
+        assert_eq!(facts.body_sha256, uncached.body_sha256);
+        assert!(!cache.exists(), "unavailable cache path was created");
+    }
+
+    #[test]
+    fn cache_path_domain_errors_remain_strict() {
+        assert!(matches!(
+            validate_cache_dir(Path::new("relative-cache")),
+            Err(CacheDirectoryError::Unsafe(_))
+        ));
+        let parent_component = std::env::temp_dir().join("..").join("cache");
+        assert!(matches!(
+            validate_cache_dir(&parent_component),
+            Err(CacheDirectoryError::Unsafe(_))
+        ));
+    }
+
+    #[test]
+    fn cache_validation_stops_at_injected_unsafe_ancestor() {
+        let root = std::env::temp_dir().join("engorch-cache-path-test");
+        let link = root.join("unsafe-link");
+        let target = link.join("nested").join("cache");
+        let mut visited = Vec::new();
+        let result = validate_cache_dir_with(&target, |path| {
+            visited.push(path.to_path_buf());
+            if path == link {
+                Ok(CacheDirectoryNode::Reparse)
+            } else {
+                Ok(CacheDirectoryNode::Directory)
+            }
+        });
+        assert!(matches!(result, Err(CacheDirectoryError::Unsafe(_))));
+        assert_eq!(visited.last().map(PathBuf::as_path), Some(link.as_path()));
+        assert!(
+            !visited
+                .iter()
+                .any(|path| path.starts_with(&link) && path != &link),
+            "validation probed descendants after the unsafe ancestor"
+        );
     }
 }

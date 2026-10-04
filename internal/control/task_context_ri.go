@@ -177,7 +177,28 @@ func validateTaskContextLexicalEvidence(s Snapshot, record TaskContextRecord) er
 		if record.LexicalSearchesID != "" {
 			return errors.New("task context lexical search identity without searches")
 		}
+		if record.LexicalUnavailableReason != "" {
+			if record.Version != taskContextRIUnavailableVersion || record.LexicalUnavailableReason != taskContextLexicalUnavailableReason || s.Candidate == nil {
+				return errors.New("invalid unavailable candidate lexical evidence")
+			}
+			candidateID, err := s.Candidate.ID()
+			if err != nil || candidateID != record.CandidateID {
+				return errors.New("unavailable lexical evidence candidate binding mismatch")
+			}
+			if safepath.RequireDigest(record.LexicalBuildID) != nil || safepath.RequireDigest(record.LexicalOverlayID) != nil {
+				return errors.New("unavailable lexical evidence binding missing")
+			}
+			lex, err := roleLexical(s)
+			if err != nil || lex == nil || lex.Scope != "candidate" || lex.BuildID != record.LexicalBuildID || lex.OverlayID != record.LexicalOverlayID {
+				return errors.New("unavailable lexical evidence is not bound to the current candidate overlay")
+			}
+		} else if record.Version == taskContextRIUnavailableVersion {
+			return errors.New("RI-unavailable task context lacks fallback evidence")
+		}
 		return nil
+	}
+	if record.LexicalUnavailableReason != "" || record.Version != taskContextVersion {
+		return errors.New("task context mixes lexical fallback and search evidence")
 	}
 	if len(record.LexicalSearches) > taskContextLexicalMaxQueries {
 		return errors.New("task context lexical search count exceeded")

@@ -106,7 +106,7 @@ func parseAcceptedGraph(s Snapshot) (engineeringplan.Graph, error) {
 	}
 	g, err := engineeringplan.ParsePlannerGraph([]byte(s.Plan.Output))
 	if err != nil {
-		return engineeringplan.Graph{}, err
+		return engineeringplan.Graph{}, rejectedSemanticOutput(err)
 	}
 	maxInitialImplementations := 1
 	if s.Creation.Execution != nil && s.Creation.Execution.ParallelImplementationVersion == 1 {
@@ -121,7 +121,7 @@ func parseAcceptedGraph(s Snapshot) (engineeringplan.Graph, error) {
 		validationErr = engineeringplan.ValidateAutonomousGraphWithImplementations(g, maxInitialImplementations)
 	}
 	if validationErr != nil {
-		return engineeringplan.Graph{}, validationErr
+		return engineeringplan.Graph{}, rejectedSemanticOutput(validationErr)
 	}
 	if repairPlanningEnabled(s) && s.Creation.Execution.MaxRepairs > 0 {
 		scopeRoots := map[string]struct{}{}
@@ -411,7 +411,15 @@ func validateGraphEvidence(s Snapshot, task engineeringplan.Task, p GraphProgres
 		if err != nil || candidateID != p.CandidateID {
 			return errors.New("implementation candidate substitution")
 		}
-		if record, isBatchMember, validMember := graphWriterResultForTask(s, task.ID, p.WriterInvocationID); isBatchMember {
+		if changes, scopeMember := scopeReplannedWriterChanges(s, task.ID, p.WriterInvocationID); scopeMember {
+			if !graphWriterBatchEffectApplied(s) || !graphWriterChangesWithinTask(task, changes) {
+				return errors.New("scope replanned writer evidence lacks its confirmed parent effect")
+			}
+			afterID, afterErr := s.GraphWriterBatch.Prepared.Proposal.After.ID()
+			if afterErr != nil || afterID != p.CandidateID {
+				return errors.New("scope replanned writer candidate binding mismatch")
+			}
+		} else if record, isBatchMember, validMember := graphWriterResultForTask(s, task.ID, p.WriterInvocationID); isBatchMember {
 			if !validMember || !graphWriterBatchEffectApplied(s) {
 				return errors.New("task-bound writer evidence not recorded")
 			}
@@ -471,7 +479,9 @@ func validateGraphEvidence(s Snapshot, task engineeringplan.Task, p GraphProgres
 
 func requireWriterPathsInScope(task engineeringplan.Task, s Snapshot) error {
 	var changes []fileeffects.Change
-	if record, isBatchMember, validMember := graphWriterResultForTask(s, task.ID, ""); isBatchMember {
+	if retained, scopeMember := scopeReplannedWriterChanges(s, task.ID, ""); scopeMember {
+		changes = retained
+	} else if record, isBatchMember, validMember := graphWriterResultForTask(s, task.ID, ""); isBatchMember {
 		if !validMember {
 			return errors.New("task-bound writer proposal unavailable for scope check")
 		}
@@ -792,7 +802,7 @@ func buildExplorerBatch(ctx context.Context, controllerPath string, s Snapshot, 
 			admitted := false
 			for attempt := 0; attempt < 5 && !admitted; attempt++ {
 				if _, err := AdmitTaskContext(ctx, controllerPath, "explorer", question); err != nil {
-					if strings.Contains(strings.ToLower(err.Error()), "journal lock") {
+					if errors.Is(err, journal.ErrLockUnavailable) {
 						continue
 					}
 					// Reuse without new effects is ok; missing admission is fatal.
@@ -1093,10 +1103,14 @@ func verifyGraphCohortDelta(controllerPath string, claim taskscheduler.Claim) er
 // execution with bounded parallel read-only explorers. It reuses every
 // controller/effect/runtime safeguard and the durable scheduler seams; it
 // introduces no generic recovery or extra authorization.
-func runAutonomousGraph(ctx context.Context, path string, prepareOnly bool) (Snapshot, error) {
-	// A task may require several native transitions; task count is not the
-	// number of loop steps. Keep a finite bound covering all 64 task slots.
-	for steps := 0; steps < 256; steps++ {
+func runAutonomousGraph(ctx context.Context, path string, prepareOnly bool) (result Snapshot, failure error) {
+	defer func() {
+		if failure != nil {
+			failure = ClassifyAutonomousFailure(result, failure)
+		}
+	}()
+	progress := autonomousProgress{}
+	for {
 		if err := ctx.Err(); err != nil {
 			s, inspectErr := Inspect(path)
 			if inspectErr != nil {
@@ -1114,12 +1128,25 @@ func runAutonomousGraph(ctx context.Context, path string, prepareOnly bool) (Sna
 		if err := RequireDispatchAllowed(s); err != nil {
 			return s, err
 		}
+		if err := progress.observe(s); err != nil {
+			return s, err
+		}
 		switch s.State {
 		case "OBJECTIVE", "PLANNING":
 			if _, err := ResumePlanning(ctx, path); err != nil {
 				return InspectOr(s, path, err)
 			}
 		case "AWAITING_APPROVAL":
+			if s.Creation.Execution.SemanticCorrectionVersion == 1 {
+				if _, graphErr := parseAcceptedGraph(s); semanticOutputFailureOnly(graphErr) {
+					if err := startPlannerSemanticCorrection(path, s); err != nil {
+						return InspectOr(s, path, err)
+					}
+					continue
+				} else if graphErr != nil {
+					return s, graphErr
+				}
+			}
 			policyID, err := autonomousPolicyID(s)
 			if err != nil {
 				return s, err
@@ -1197,11 +1224,6 @@ func runAutonomousGraph(ctx context.Context, path string, prepareOnly bool) (Sna
 			return s, fmt.Errorf("autonomous execution cannot advance state %q", s.State)
 		}
 	}
-	s, err := Inspect(path)
-	if err != nil {
-		return s, err
-	}
-	return s, errors.New("autonomous execution step limit reached")
 }
 
 // prepareAutonomousGraphBoundary stops at the only safe lexical-staging seam:
@@ -1406,8 +1428,10 @@ func autonomousGraphImplementing(ctx context.Context, path string, s Snapshot) (
 			}
 		}
 		if isolatedImplementationEnabled(s) {
-			if _, err := isolatedGraphWriterIDs(s, implReadyTasks); err != nil {
-				return s, false, err
+			if s.GraphWriterBatch == nil || s.GraphWriterBatch.Version != 3 {
+				if _, err := isolatedGraphWriterIDs(s, implReadyTasks); err != nil {
+					return s, false, err
+				}
 			}
 			if err := autonomousDispatchBlocked(s); err != nil {
 				return s, false, err
@@ -1430,6 +1454,9 @@ func autonomousGraphImplementing(ctx context.Context, path string, s Snapshot) (
 					if err != nil {
 						return s, false, err
 					}
+				}
+				if s.GraphWriterBatch != nil {
+					return s, true, nil
 				}
 				batch, err := buildIsolatedGraphWriterBatch(ctx, path, taskIDs(implReadyTasks))
 				if err != nil {
@@ -1478,6 +1505,9 @@ func autonomousGraphImplementing(ctx context.Context, path string, s Snapshot) (
 					if err != nil {
 						return s, false, err
 					}
+				}
+				if s.GraphWriterBatch != nil {
+					return s, true, nil
 				}
 				batch, err := buildGraphWriterBatch(s, taskIDs(implReadyTasks))
 				if err != nil {
@@ -1600,7 +1630,7 @@ func autonomousGraphRepairing(ctx context.Context, path string, s Snapshot) (Sna
 			return s, inspectErr
 		}
 		if s.RepairAttempts >= s.Creation.Execution.MaxRepairs {
-			return s, fmt.Errorf("autonomous repair bound reached (%d)", s.RepairAttempts)
+			return s, fmt.Errorf("%w: autonomous repair bound reached (%d)", ErrAutonomousRepairBudget, s.RepairAttempts)
 		}
 		// Allow useful plan evolution before consuming the slot when the
 		// failure carries failed verification/review evidence.
@@ -1754,9 +1784,15 @@ func recordParallelGraphImplementationProgress(path string, s Snapshot) error {
 		if !ok || task.Kind != engineeringplan.Implementation {
 			return errors.New("parallel writer task disappeared from graph")
 		}
-		record, ok := latest.GraphWriterResults[member.TaskID]
-		if !ok || graphWriterRecordInvocation(record).ID != member.InvocationID || !graphWriterChangesWithinTask(task, graphWriterRecordChanges(record)) {
-			return errors.New("parallel writer task evidence is missing or substituted")
+		if changes, scopeMember := scopeReplannedWriterChanges(latest, member.TaskID, member.InvocationID); scopeMember {
+			if !graphWriterChangesWithinTask(task, changes) {
+				return errors.New("scope replanned writer changes escape admitted ownership")
+			}
+		} else {
+			record, ok := latest.GraphWriterResults[member.TaskID]
+			if !ok || graphWriterRecordInvocation(record).ID != member.InvocationID || !graphWriterChangesWithinTask(task, graphWriterRecordChanges(record)) {
+				return errors.New("parallel writer task evidence is missing or substituted")
+			}
 		}
 		attemptID := fmt.Sprintf("attempt-%d", len(task.Attempts)+1)
 		p := GraphProgress{Version: 1, PlanID: latest.Graph.PlanID, Digest: latest.Graph.Digest, TaskID: task.ID, AttemptID: attemptID, Outcome: "completed", CandidateID: candidateID, WriterInvocationID: member.InvocationID}

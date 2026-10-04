@@ -49,6 +49,9 @@ type Creation struct {
 // explorer concurrency between 1 and 8 inclusive; zero preserves legacy
 // identity and means sequential (1) for old runs.
 type ExecutionPolicy struct {
+	// SemanticCorrectionVersion admits at most two new output-correction calls.
+	// Omitted retains historical stop-on-rejection behavior.
+	SemanticCorrectionVersion int `json:"semantic_correction_version,omitempty"`
 	// CapabilityFallbacks records pre-dispatch choices. These observations do
 	// not grant authority or change any previously bound run configuration.
 	CapabilityFallbacks []CapabilityFallback `json:"capability_fallbacks,omitempty"`
@@ -91,7 +94,12 @@ type ExecutionPolicy struct {
 	IsolatedImplementationVersion int                               `json:"isolated_implementation_version,omitempty"`
 	IsolationCapacity             *engineeringplan.ResourceCapacity `json:"isolation_capacity,omitempty"`
 	IsolationEstimate             *IsolationEstimateTemplate        `json:"isolation_estimate,omitempty"`
-	CodexAutoCompact              *runtime.CodexAutoCompactOptions  `json:"codex_auto_compact,omitempty"`
+	// ScopeReplanVersion permits a confirmed writer proposal to request a
+	// bounded WritePaths refinement, only within its immutable ScopePaths.
+	ScopeReplanVersion       int                              `json:"scope_replan_version,omitempty"`
+	ScopeReplanDesignVersion int                              `json:"scope_replan_design_version,omitempty"`
+	MaxScopeReplans          int                              `json:"max_scope_replans,omitempty"`
+	CodexAutoCompact         *runtime.CodexAutoCompactOptions `json:"codex_auto_compact,omitempty"`
 }
 
 func codexAutoCompactForExecution(policy *ExecutionPolicy, profile runtime.Profile) *runtime.CodexAutoCompactOptions {
@@ -110,6 +118,12 @@ func codexAutoCompactForExecution(policy *ExecutionPolicy, profile runtime.Profi
 // RepairPlanningVersion 1 requires graph execution and a matching graph-v3
 // planner contract at creation replay; zero preserves the prior repair recipe.
 func (p ExecutionPolicy) Validate() error {
+	if p.ScopeReplanDesignVersion != 0 && (p.ScopeReplanDesignVersion < 1 || p.ScopeReplanDesignVersion > 2 || p.ScopeReplanDesignVersion != p.ScopeReplanVersion) {
+		return errors.New("unsupported scope replan design policy")
+	}
+	if p.SemanticCorrectionVersion != 0 && (p.SemanticCorrectionVersion != 1 || p.GraphVersion != 1) {
+		return errors.New("unsupported semantic correction policy")
+	}
 	if len(p.CapabilityFallbacks) > 3 {
 		return errors.New("too many capability fallbacks")
 	}
@@ -215,6 +229,21 @@ func (p ExecutionPolicy) Validate() error {
 	if p.IsolatedImplementationVersion == 1 && p.ParallelImplementationVersion == 1 {
 		return errors.New("parallel aggregate and isolated implementation modes are exclusive")
 	}
+	if p.ScopeReplanVersion < 0 || p.ScopeReplanVersion > 2 {
+		return errors.New("invalid scope replan version")
+	}
+	if p.ScopeReplanVersion == 1 {
+		if p.GraphVersion != 1 || p.RepairPlanningVersion != 1 || p.MaxScopeReplans < 1 || p.MaxScopeReplans > 2 || p.ParallelImplementationVersion != 0 || p.IsolatedImplementationVersion != 0 || p.ScopeReplanDesignVersion > 1 {
+			return errors.New("scope replanning requires serial graph repair planning and a budget of one or two")
+		}
+	} else if p.ScopeReplanVersion == 2 {
+		cohortMode := (p.ParallelImplementationVersion == 1) != (p.IsolatedImplementationVersion == 1)
+		if p.GraphVersion != 1 || p.RepairPlanningVersion != 1 || p.MaxScopeReplans < 1 || p.MaxScopeReplans > 2 || !cohortMode || p.ScopeReplanDesignVersion != 2 {
+			return errors.New("cohort scope replanning requires one bounded parallel or isolated graph mode and candidate-bound design v2")
+		}
+	} else if p.MaxScopeReplans != 0 {
+		return errors.New("scope replan budget requires a scope replan version")
+	}
 	return nil
 }
 
@@ -254,6 +283,10 @@ type MachineApproval struct {
 
 // Snapshot is reconstructed state, never independent authority to append effects.
 type Snapshot struct {
+	// ControllerHead and ControllerSequence are populated only after Inspect
+	// validates history and containment. They are not serialized run inputs.
+	ControllerHead            string                             `json:"-"`
+	ControllerSequence        int                                `json:"-"`
 	CandidateIndex            *CandidateIndexObservation         `json:"candidate_index,omitempty"`
 	PlannerAccess             *access.Intent                     `json:"planner_access,omitempty"`
 	ModelAccess               []ModelAccessState                 `json:"model_access,omitempty"`
@@ -264,6 +297,7 @@ type Snapshot struct {
 	ExplorerRuns              map[string]ExplorerHostState       `json:"explorer_runs,omitempty"`
 	Commit                    *CommitState                       `json:"commit,omitempty"`
 	ReviewHost                *ReviewHostState                   `json:"review_host,omitempty"`
+	ScheduledReviewHosts      map[string]ReviewHostState         `json:"scheduled_review_hosts,omitempty"`
 	Review                    *ReviewRecord                      `json:"review,omitempty"`
 	WriterHost                *WriterHostState                   `json:"writer_host,omitempty"`
 	WriterProposal            *WriterRecord                      `json:"writer_proposal,omitempty"`
@@ -297,6 +331,8 @@ type Snapshot struct {
 	PlannerHostReady          bool                               `json:"planner_host_ready"`
 	PlannerHostReceipt        *codexhost.Receipt                 `json:"planner_host_receipt"`
 	PlannerReceipt            *PlannerReceipt                    `json:"planner_receipt"`
+	PlannerCorrections        []PlannerSemanticCorrection        `json:"planner_corrections,omitempty"`
+	RoleCorrections           []RoleSemanticCorrection           `json:"role_corrections,omitempty"`
 	PlannerProvider           *providerDispatchReceipt           `json:"planner_provider,omitempty"`
 	ProviderRuntime           map[string]providerDispatchReceipt `json:"provider_runtime,omitempty"`
 	AgentDispatch             map[string]AgentDispatchState      `json:"agent_dispatch,omitempty"`
@@ -307,6 +343,9 @@ type Snapshot struct {
 	Graph                     *GraphState                        `json:"graph,omitempty"`
 	GraphIsolations           map[string]GraphIsolationState     `json:"graph_isolations,omitempty"`
 	GraphIsolationPreparation *GraphIsolationPreparation         `json:"graph_isolation_preparation,omitempty"`
+	GraphMemoryAdmission      *GraphMemoryAdmissionState         `json:"graph_memory_admission,omitempty"`
+	ScopeReplans              []ScopeReplanRecord                `json:"scope_replans,omitempty"`
+	ScopeReplanRequests       []ScopeReplanRequest               `json:"scope_replan_requests,omitempty"`
 	Lifecycle                 LifecycleState                     `json:"lifecycle"`
 }
 
@@ -375,7 +414,7 @@ func Replay(events []journal.Event) (Snapshot, error) {
 			if err := replayPlanningAccess(&s, e); err != nil {
 				return s, err
 			}
-		case "model.access-intent", "model.access-receipt":
+		case "model.access-intent", "model.access-receipt", "model.access-semantic-pending":
 			if err := replayModelAccess(&s, e); err != nil {
 				return s, err
 			}
@@ -409,7 +448,7 @@ func Replay(events []journal.Event) (Snapshot, error) {
 					return s, errors.New("exact explorer runtime receipt required")
 				}
 				r := host.RuntimeReceipt
-				if err := requireCompletedModelAccess(s, host.Intent.Invocation, r.JournalHead, r.ResultHash); err != nil {
+				if err := requireModelAccessResult(s, host.Intent.Invocation, r.JournalHead, r.ResultHash, r.ThreadID, r.TurnID, r.UsagePending); err != nil {
 					return s, err
 				}
 			}
@@ -443,7 +482,24 @@ func Replay(events []journal.Event) (Snapshot, error) {
 			}
 			if e.Kind == "review.runtime-observed" {
 				r := s.ReviewHost.RuntimeReceipt
-				if err := requireCompletedModelAccess(s, s.ReviewHost.Intent.Invocation, r.JournalHead, r.ResultHash); err != nil {
+				if err := requireModelAccessResult(s, s.ReviewHost.Intent.Invocation, r.JournalHead, r.ResultHash, r.ThreadID, r.TurnID, r.UsagePending); err != nil {
+					return s, err
+				}
+			}
+		case "scheduled.review.host-intent", "scheduled.review.host-ready", "scheduled.review.host-observed", "scheduled.review.runtime-observed":
+			if err := replayScheduledReviewHost(&s, e); err != nil {
+				return s, err
+			}
+			if e.Kind == "scheduled.review.runtime-observed" {
+				var event ScheduledReviewHostEvent
+				if err := canonical.Decode(e.Payload, &event); err != nil {
+					return s, err
+				}
+				host := s.ScheduledReviewHosts[event.TaskID]
+				if host.RuntimeReceipt == nil {
+					return s, errors.New("exact scheduled review runtime receipt required")
+				}
+				if err := requireModelAccessResult(s, host.Intent.Invocation, host.RuntimeReceipt.JournalHead, host.RuntimeReceipt.ResultHash, host.RuntimeReceipt.ThreadID, host.RuntimeReceipt.TurnID, host.RuntimeReceipt.UsagePending); err != nil {
 					return s, err
 				}
 			}
@@ -457,7 +513,7 @@ func Replay(events []journal.Event) (Snapshot, error) {
 			}
 			if e.Kind == "writer.runtime-observed" {
 				r := s.WriterHost.RuntimeReceipt
-				if err := requireCompletedModelAccess(s, s.WriterHost.Intent.Invocation, r.JournalHead, r.ResultHash); err != nil {
+				if err := requireModelAccessResult(s, s.WriterHost.Intent.Invocation, r.JournalHead, r.ResultHash, r.ThreadID, r.TurnID, r.UsagePending); err != nil {
 					return s, err
 				}
 			}
@@ -478,12 +534,19 @@ func Replay(events []journal.Event) (Snapshot, error) {
 				if !ok || host.RuntimeReceipt == nil {
 					return s, errors.New("exact graph writer runtime receipt required")
 				}
-				if err := requireCompletedModelAccess(s, host.Intent.Invocation, host.RuntimeReceipt.JournalHead, host.RuntimeReceipt.ResultHash); err != nil {
+				if err := requireModelAccessResult(s, host.Intent.Invocation, host.RuntimeReceipt.JournalHead, host.RuntimeReceipt.ResultHash, host.RuntimeReceipt.ThreadID, host.RuntimeReceipt.TurnID, host.RuntimeReceipt.UsagePending); err != nil {
 					return s, err
 				}
 			}
 		case "graph.writer.proposed":
 			if err := replayGraphWriterProposal(&s, e, seenEffects); err != nil {
+				return s, err
+			}
+			var record GraphWriterRecord
+			if err := canonical.Decode(e.Payload, &record); err != nil {
+				return s, err
+			}
+			if err := settleGraphMemoryAdmissionProposal(&s, record); err != nil {
 				return s, err
 			}
 		case "graph.writer.batch-proposed":
@@ -800,6 +863,14 @@ func Replay(events []journal.Event) (Snapshot, error) {
 				after := s.FileIntent.Prepared.Proposal.After
 				s.Candidate = &after
 			}
+		case "planning.semantic-correction":
+			if err := replayPlannerSemanticCorrection(&s, e); err != nil {
+				return s, err
+			}
+		case "role.semantic-correction":
+			if err := replayRoleSemanticCorrection(&s, e); err != nil {
+				return s, err
+			}
 		case "planning.host-intent", "planning.host-ready", "planning.host-observed", "planning.runtime-observed":
 			if err := replayPlanner(&s, e); err != nil {
 				return s, err
@@ -850,6 +921,18 @@ func Replay(events []journal.Event) (Snapshot, error) {
 			}
 		case "graph.isolation-prepared", "graph.isolate-intent", "graph.isolate-confirmed":
 			if err := replayGraphIsolation(&s, e); err != nil {
+				return s, err
+			}
+		case "graph.writer.memory-admitted", "graph.writer.memory-released":
+			if err := replayGraphMemoryAdmission(&s, e); err != nil {
+				return s, err
+			}
+		case "graph.scope-replan-requested":
+			if err := replayGraphScopeReplanRequest(&s, e); err != nil {
+				return s, err
+			}
+		case "graph.scope-replanned":
+			if err := replayGraphScopeReplan(&s, e); err != nil {
 				return s, err
 			}
 		default:
@@ -910,6 +993,9 @@ func Append(path, kind string, payload any) error {
 	if kind == "model.access-receipt" {
 		return errors.New("model access receipts require runtime journal reconciliation")
 	}
+	if kind == "model.access-semantic-pending" {
+		return errors.New("semantic usage pending proofs require runtime journal reconciliation")
+	}
 	if kind == "run.created" {
 		if err := validateControllerCreationPath(path, payload); err != nil {
 			return err
@@ -929,11 +1015,18 @@ func Append(path, kind string, payload any) error {
 func Inspect(path string) (Snapshot, error) {
 	events, err := journal.Read(path)
 	if err != nil {
-		return Snapshot{}, err
+		return Snapshot{}, errors.Join(ErrAutonomousUnsafe, err)
 	}
 	s, err := Replay(events)
 	if err != nil {
-		return s, err
+		return s, errors.Join(ErrAutonomousUnsafe, err)
 	}
-	return s, validateControllerJournalPath(path, s.Creation, s.RunID)
+	if err := validateControllerJournalPath(path, s.Creation, s.RunID); err != nil {
+		return s, errors.Join(ErrAutonomousUnsafe, err)
+	}
+	if len(events) > 0 {
+		s.ControllerHead = events[len(events)-1].Hash
+		s.ControllerSequence = events[len(events)-1].Sequence
+	}
+	return s, nil
 }

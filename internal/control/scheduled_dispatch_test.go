@@ -171,6 +171,84 @@ func TestScheduledDispatchParksOnFiniteCapacityDenial(t *testing.T) {
 	}
 }
 
+func TestScheduledUsageQualificationIsNoEffectOnlyWithoutExactAdmission(t *testing.T) {
+	invocation, err := runtime.NewInvocation(runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "fixture", Effort: "high", Role: "writer"}, "bounded writer task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := taskscheduler.Evidence{Status: taskscheduler.StatusReady}
+	if !scheduledUsageQualificationParkable(Snapshot{}, invocation, ready) {
+		t.Fatal("exact no-effect preflight was not eligible to park")
+	}
+	withGraphHost := Snapshot{GraphWriterHosts: map[string]WriterHostState{
+		"impl-a": {Intent: WriterHostIntent{Invocation: invocation}},
+	}}
+	if !scheduledInvocationHasEffect(withGraphHost, invocation) {
+		t.Fatal("matching graph writer intent was not recognized as an effect")
+	}
+	if scheduledUsageQualificationParkable(withGraphHost, invocation, ready) {
+		t.Fatal("matching host intent was incorrectly treated as a no-effect refusal")
+	}
+	withAccess := Snapshot{ModelAccess: []ModelAccessState{{RuntimeInvocationID: invocation.ID}}}
+	if !scheduledInvocationHasEffect(withAccess, invocation) {
+		t.Fatal("matching model-access admission was not recognized as an effect")
+	}
+	if scheduledUsageQualificationParkable(withAccess, invocation, ready) {
+		t.Fatal("matching model-access admission was incorrectly treated as a no-effect refusal")
+	}
+	reviewer, err := runtime.NewInvocation(runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "fixture", Effort: "high", Role: "reviewer"}, "bounded scheduled review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	withScheduledReview := Snapshot{ScheduledReviewHosts: map[string]ReviewHostState{
+		"review-task": {Intent: ReviewHostIntent{Invocation: reviewer}},
+	}}
+	if !scheduledInvocationHasEffect(withScheduledReview, reviewer) {
+		t.Fatal("matching scheduled review host intent was not recognized as an effect")
+	}
+	if scheduledUsageQualificationParkable(withScheduledReview, reviewer, ready) {
+		t.Fatal("matching scheduled review intent was incorrectly treated as no effect")
+	}
+	admitted := ready
+	admitted.AdmissionID = strings.Repeat("a", 64)
+	if scheduledUsageQualificationParkable(Snapshot{}, invocation, admitted) {
+		t.Fatal("scheduler evidence with an admission was treated as no effect")
+	}
+	other, err := runtime.NewInvocation(runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "fixture", Effort: "high", Role: "writer"}, "different writer task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scheduledInvocationHasEffect(withGraphHost, other) {
+		t.Fatal("unrelated host intent was treated as the exact claim effect")
+	}
+}
+
+func TestScheduledReviewHostLookupUsesExactCorrectionTurn(t *testing.T) {
+	base, err := runtime.NewInvocation(runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "fixture", Effort: "high", Role: "reviewer"}, "review correction")
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskID := strings.Repeat("c", 64)
+	scoped, err := scheduledTurnInvocation(base, taskscheduler.OperationReviewer, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wanted := ReviewHostState{Intent: ReviewHostIntent{Invocation: scoped}, Ready: true}
+	s := Snapshot{
+		RoleCorrections: []RoleSemanticCorrection{{Invocation: base, ScheduledTaskID: taskID}},
+		ScheduledReviewHosts: map[string]ReviewHostState{
+			taskID: wanted,
+		},
+	}
+	got := scheduledReviewHostForInvocation(s, scoped)
+	if got == nil || !sameCanonical(*got, wanted) {
+		t.Fatalf("scheduled reviewer correction receipt was not resolved by exact turn: %#v", got)
+	}
+	if got := scheduledReviewHostForInvocation(s, base); got != nil {
+		t.Fatal("base reviewer invocation matched a scheduled correction host")
+	}
+}
+
 func TestScheduledClaimRejectsPathAndHeadSubstitutionBeforeAdmission(t *testing.T) {
 	controllerPath, _, _ := agentDispatchFixture(t)
 	task, err := PrepareScheduledTask(controllerPath, taskscheduler.OperationPlanner, "")

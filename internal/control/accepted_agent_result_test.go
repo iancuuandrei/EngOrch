@@ -158,12 +158,17 @@ func TestAcceptedExplorerResultIndexesInitialAndFollowUpTurns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	evidence, err := scheduledEvidenceWithAcceptedResult(fixture.controllerPath, snapshot, head, fixture.invocation, fixture.task, &fixture.turn)
+	evidence, err := scheduledEvidenceWithAcceptedResult(context.Background(), fixture.controllerPath, snapshot, head, fixture.invocation, fixture.task, &fixture.turn)
 	if err != nil || evidence.Status != taskscheduler.StatusUnknown {
 		t.Fatal("unindexed accepted exploration was presented as terminal", evidence, err)
 	}
 	if _, _, err := acceptedExplorerResultReference(fixture.controllerPath, strings.Repeat("f", 64), snapshot, fixture.invocation, &fixture.turn, &fixture.record); err == nil {
 		t.Fatal("accepted exploration reference ignored a substituted controller prefix")
+	}
+	wrongSequence := snapshot
+	wrongSequence.ControllerSequence++
+	if _, _, err := acceptedExplorerResultReference(fixture.controllerPath, head, wrongSequence, fixture.invocation, &fixture.turn, &fixture.record); err == nil {
+		t.Fatal("accepted exploration reference ignored substituted observation sequence")
 	}
 	indexed, err := ensureAcceptedExplorerResult(context.Background(), fixture.controllerPath, fixture.claim, fixture.invocation, &fixture.record)
 	if err != nil || !indexed {

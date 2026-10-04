@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"harness.local/engorch/internal/contextmcp"
 	"harness.local/engorch/internal/runtime"
 	"harness.local/engorch/internal/taskscheduler"
 )
@@ -61,12 +62,12 @@ func TestStaticExplorerQueueDepthGrantsQueueOnlyToStaticScheduledExplorers(t *te
 			if got != want {
 				t.Fatalf("queue depth %d, want %d", got, want)
 			}
-			if want != 0 && want != 32 {
+			if want != 0 && want != contextmcp.InvocationToolCallBudget-1 {
 				t.Fatalf("queue depth %d is not the frozen serial-fifo bound", want)
 			}
 		})
 	}
-	if compositeToolQueueLimit != 32 {
+	if compositeToolQueueLimit != contextmcp.InvocationToolCallBudget-1 {
 		t.Fatal("serial-fifo queue bound changed without updating static explorer policy")
 	}
 }

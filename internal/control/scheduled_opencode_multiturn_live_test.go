@@ -383,7 +383,7 @@ func testPinnedOpenCodeScheduledExplorerCompositeTools(t *testing.T, parallel bo
 	}
 	acceptedHeadBeforeRecovery := acceptedEventsBeforeRecovery[len(acceptedEventsBeforeRecovery)-1].Hash
 	expectedIntent := scheduledOpenCodeRuntimeIntent(t, controller, prepared.turn.Task.InvocationID, runtimePath)
-	if parallel && (expectedIntent.ToolReceipts.QueuePolicy != toolreceipts.QueuePolicySerialFIFO || expectedIntent.ToolReceipts.MaxQueuedCalls != 32) {
+	if parallel && (expectedIntent.ToolReceipts.QueuePolicy != toolreceipts.QueuePolicySerialFIFOWithDeadlines || expectedIntent.ToolReceipts.MaxQueuedCalls != 63 || expectedIntent.ToolReceipts.Version != 3) {
 		t.Fatal("parallel composite admission queue identity changed", expectedIntent.ToolReceipts)
 	}
 	verify := scheduledOpenCodeCompositeVerifier(t, controllerPath, schedulerPath, runtimePath, controller, prepared.turn)
@@ -568,7 +568,7 @@ func testPinnedOpenCodeScheduledExplorerInterruptStopsOwnedRuntime(t *testing.T,
 		verify := scheduledOpenCodeCompositeVerifier(t, controllerPath, schedulerPath, runtimePath, controller, turn)
 		runtimeState, runtimeErr := opencoderuntime.InspectComposite(runtimePath, intent, verify)
 		receipts, receiptsErr := toolreceipts.Inspect(runtimePath + ".tool-receipts")
-		if runtimeErr != nil || runtimeState.Bound == nil || runtimeState.Bound.Version != 2 || runtimeState.Bound.Composite == nil || intent.ToolReceipts.QueuePolicy != toolreceipts.QueuePolicySerialFIFO || intent.ToolReceipts.MaxQueuedCalls != 32 || receiptsErr != nil || receipts.Binding == nil || receipts.Binding.QueuePolicy != toolreceipts.QueuePolicySerialFIFO || receipts.Binding.MaxQueuedCalls != 32 || len(receipts.Calls) != 0 {
+		if runtimeErr != nil || runtimeState.Bound == nil || runtimeState.Bound.Version != 2 || runtimeState.Bound.Composite == nil || intent.ToolReceipts.QueuePolicy != toolreceipts.QueuePolicySerialFIFOWithDeadlines || intent.ToolReceipts.MaxQueuedCalls != 63 || intent.ToolReceipts.Version != 3 || receiptsErr != nil || receipts.Binding == nil || receipts.Binding.QueuePolicy != toolreceipts.QueuePolicySerialFIFOWithDeadlines || receipts.Binding.MaxQueuedCalls != 63 || receipts.Binding.Version != 3 || len(receipts.Calls) != 0 {
 			t.Fatal("composite interrupt did not bind the unused serial FIFO recorder before provider dispatch", runtimeErr, runtimeState.Bound, receiptsErr, receipts)
 		}
 	}
@@ -624,7 +624,7 @@ func testPinnedOpenCodeScheduledExplorerInterruptStopsOwnedRuntime(t *testing.T,
 		}
 	} else {
 		receipts, receiptsErr := toolreceipts.Inspect(runtimePath + ".tool-receipts")
-		if receiptsErr != nil || receipts.Binding == nil || receipts.Binding.QueuePolicy != toolreceipts.QueuePolicySerialFIFO || receipts.Binding.MaxQueuedCalls != 32 || len(receipts.Calls) != 0 {
+		if receiptsErr != nil || receipts.Binding == nil || receipts.Binding.QueuePolicy != toolreceipts.QueuePolicySerialFIFOWithDeadlines || receipts.Binding.MaxQueuedCalls != 63 || receipts.Binding.Version != 3 || len(receipts.Calls) != 0 {
 			t.Fatal("composite interrupt changed its unused durable recorder", receiptsErr, receipts)
 		}
 	}

@@ -23,6 +23,13 @@ func acceptedExplorerResultReference(controllerPath, controllerHead string, snap
 		return zero, false, err
 	}
 	prefix, err := Replay(events)
+	// Inspect attaches nonserialized observation metadata; Replay returns only
+	// semantic state. Bind that metadata to this exact validated prefix before
+	// comparing the complete snapshots.
+	if len(events) != 0 && (snapshot.ControllerHead != "" || snapshot.ControllerSequence != 0) {
+		prefix.ControllerHead = events[len(events)-1].Hash
+		prefix.ControllerSequence = events[len(events)-1].Sequence
+	}
 	if err != nil || !reflect.DeepEqual(prefix, snapshot) {
 		return zero, false, errors.Join(errors.New("scheduled exploration controller prefix differs"), err)
 	}
@@ -145,8 +152,12 @@ func ensureAcceptedExplorerResult(ctx context.Context, controllerPath string, cl
 	return true, nil
 }
 
-func scheduledEvidenceWithAcceptedResult(controllerPath string, snapshot Snapshot, head string, invocation runtime.Invocation, task taskscheduler.TaskSpec, turn *taskscheduler.AgentTurnBinding) (taskscheduler.Evidence, error) {
+func scheduledEvidenceWithAcceptedResult(ctx context.Context, controllerPath string, snapshot Snapshot, head string, invocation runtime.Invocation, task taskscheduler.TaskSpec, turn *taskscheduler.AgentTurnBinding) (taskscheduler.Evidence, error) {
 	evidence := scheduledEvidence(snapshot, head, invocation, task)
+	evidence, err := settledScheduledSemanticFailureEvidence(ctx, controllerPath, snapshot, evidence, invocation, task, turn)
+	if err != nil {
+		return taskscheduler.Evidence{}, err
+	}
 	if task.Operation != taskscheduler.OperationExplorer || turn == nil || evidence.Status != taskscheduler.StatusSucceeded {
 		return evidence, nil
 	}

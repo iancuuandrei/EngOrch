@@ -21,6 +21,14 @@ const (
 	GateEscalate GateDisposition = "ESCALATE"
 	// GateWarn reports an advisory limitation without granting authority.
 	GateWarn GateDisposition = "WARN"
+	// GateReconcile requires observation of existing effects before new work.
+	GateReconcile GateDisposition = "RECONCILE"
+	// GateReplan requires a newly admitted candidate-bound ownership decision.
+	GateReplan GateDisposition = "REPLAN"
+	// GateAttention retains useful state when the admitted policy cannot advance.
+	GateAttention GateDisposition = "ATTENTION"
+	// GatePause closes admission without claiming unresolved work is settled.
+	GatePause GateDisposition = "PAUSE"
 )
 
 // CapabilityFallback binds an optional capability's absence to its selection.

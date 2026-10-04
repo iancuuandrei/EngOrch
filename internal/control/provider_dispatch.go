@@ -41,7 +41,7 @@ func staticExplorerQueueDepth(ctx context.Context, invocation runtime.Invocation
 	if !boundSchedule || schedulerPath == "" || invocation.Profile.Role != "explorer" || scheduledAgentTurn(ctx) != nil {
 		return 0
 	}
-	return compositeToolQueueLimit
+	return contextmcp.InvocationToolCallBudget - 1
 }
 
 // contextRoleQueueDepth serializes bounded bursts of context reads for every
@@ -51,7 +51,7 @@ func staticExplorerQueueDepth(ctx context.Context, invocation runtime.Invocation
 func contextRoleQueueDepth(invocation runtime.Invocation) int {
 	switch invocation.Profile.Role {
 	case "planner", "explorer", "writer", "fixer", "reviewer":
-		return compositeToolQueueLimit
+		return contextmcp.InvocationToolCallBudget - 1
 	default:
 		return 0
 	}
@@ -224,7 +224,7 @@ func executeOpenCodeProviderRuntime(ctx context.Context, controllerPath string, 
 	} else if candidateLease != nil {
 		return runtime.Result{}, providerDispatchReceipt{}, errors.New("unexpected OpenCode candidate lease")
 	}
-	contextBinding, err := contextbroker.NewBinding(invocation.ID, s.Creation.Repository, candidate, contextbroker.Limits{MaxCalls: 64, MaxRequestBytes: 64 << 10, MaxResponseBytes: contextmcp.MaxContentBytes, MaxTotalResponseBytes: 4 << 20})
+	contextBinding, err := contextbroker.NewBinding(invocation.ID, s.Creation.Repository, candidate, contextbroker.Limits{MaxCalls: contextmcp.InvocationToolCallBudget, MaxRequestBytes: 64 << 10, MaxResponseBytes: contextmcp.MaxContentBytes, MaxTotalResponseBytes: 4 << 20})
 	if err != nil {
 		return runtime.Result{}, providerDispatchReceipt{}, err
 	}
@@ -334,9 +334,17 @@ func executeOpenCodeProviderRuntime(ctx context.Context, controllerPath string, 
 	if mcpQueueDepth == 0 {
 		mcpQueueDepth = contextRoleQueueDepth(invocation)
 	}
+	var mcpQueueWait time.Duration
+	if mcpQueueDepth > 0 {
+		_, mcpQueueWait, err = contextmcp.QueuePolicyForCallBudget(mcpQueueDepth+1, contextmcp.ContextCallTimeout)
+		if err != nil {
+			_ = broker.Close()
+			return runtime.Result{}, providerDispatchReceipt{}, err
+		}
+	}
 	var record opencoderuntime.ResultRecord
 	if recovering {
-		record, err = opencoderuntime.Execute(runtimeCtx, opencoderuntime.ExecuteConfig{RuntimePath: runtimePath, Intent: runtimeIntent, MCPQueueDepth: mcpQueueDepth, VerifyComposite: compositeVerify})
+		record, err = opencoderuntime.Execute(runtimeCtx, opencoderuntime.ExecuteConfig{RuntimePath: runtimePath, Intent: runtimeIntent, MCPQueueDepth: mcpQueueDepth, MCPQueueWait: mcpQueueWait, VerifyComposite: compositeVerify})
 		if err != nil {
 			_ = broker.Close()
 			return runtime.Result{}, providerDispatchReceipt{}, err
@@ -363,7 +371,7 @@ func executeOpenCodeProviderRuntime(ctx context.Context, controllerPath string, 
 			_ = broker.Close()
 			return runtime.Result{}, providerDispatchReceipt{}, err
 		}
-		record, err = opencoderuntime.Execute(runtimeCtx, opencoderuntime.ExecuteConfig{RuntimePath: runtimePath, StateRoot: hostRoot, Paths: paths, Intent: runtimeIntent, AccessJournalPath: accessPath, Policy: selected.Policy, AccessIntent: selected.Intent, Gateway: selected.Gateway, Credential: credential, Transport: transport, Broker: broker, CandidateLease: candidateLease, ProviderRole: selected.ProviderRole, RequestExpectation: expectation, Executable: s.Creation.Config.OpenCode.Executable, ExecutableSHA256: s.Creation.Config.OpenCode.ExecutableHash, Port: port, ParentMessageID: "msg_" + invocation.ID, Output: io.Discard, ReadbackTimeout: openCodeReadbackTimeout(s.Creation.Config.OpenCode), ProviderTimeout: 5 * time.Minute, ToolTimeout: 30 * time.Second, ReadinessTimeout: 5 * time.Minute, SealTimeout: 5 * time.Minute, MCPQueueDepth: mcpQueueDepth, InterruptShutdown: scheduledInterruptShutdownLookup(runtimeCtx), Composite: compositeConfig, VerifyComposite: compositeVerify})
+		record, err = opencoderuntime.Execute(runtimeCtx, opencoderuntime.ExecuteConfig{RuntimePath: runtimePath, StateRoot: hostRoot, Paths: paths, Intent: runtimeIntent, AccessJournalPath: accessPath, Policy: selected.Policy, AccessIntent: selected.Intent, Gateway: selected.Gateway, Credential: credential, Transport: transport, Broker: broker, CandidateLease: candidateLease, ProviderRole: selected.ProviderRole, RequestExpectation: expectation, Executable: s.Creation.Config.OpenCode.Executable, ExecutableSHA256: s.Creation.Config.OpenCode.ExecutableHash, Port: port, ParentMessageID: "msg_" + invocation.ID, Output: io.Discard, ReadbackTimeout: openCodeReadbackTimeout(s.Creation.Config.OpenCode), ProviderTimeout: 5 * time.Minute, ToolTimeout: 30 * time.Second, ReadinessTimeout: 5 * time.Minute, SealTimeout: 5 * time.Minute, MCPQueueDepth: mcpQueueDepth, MCPQueueWait: mcpQueueWait, InterruptShutdown: scheduledInterruptShutdownLookup(runtimeCtx), Composite: compositeConfig, VerifyComposite: compositeVerify})
 		if err != nil {
 			return runtime.Result{}, providerDispatchReceipt{}, err
 		}

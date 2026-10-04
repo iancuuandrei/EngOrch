@@ -215,11 +215,35 @@ func (a *Adapter) observeCompaction(m codexrpc.Message) error {
 	if lifecycle.Phase == "completed" && (item == nil || !item.started) {
 		return a.recordCompactionUnknown(s, "UNMATCHED_COMPLETION")
 	}
-	return appendEvent(a.JournalPath, "runtime.compaction-item", lifecycle)
+	if err := appendEvent(a.JournalPath, "runtime.compaction-item", lifecycle); err != nil {
+		return a.degradeCompactionAppend(err, lifecycle.ThreadID, lifecycle.TurnID)
+	}
+	return nil
 }
 
 func (a *Adapter) recordCompactionUnknown(s State, reason string) error {
-	return appendEvent(a.JournalPath, "runtime.compaction-unknown", CompactionUnknown{Version: compactionLifecycleVersion, ThreadID: s.Thread.ThreadID, TurnID: s.TurnID, Reason: reason})
+	unknown := CompactionUnknown{Version: compactionLifecycleVersion, ThreadID: s.Thread.ThreadID, TurnID: s.TurnID, Reason: reason}
+	if err := appendEvent(a.JournalPath, "runtime.compaction-unknown", unknown); err != nil {
+		return a.degradeCompactionAppend(err, unknown.ThreadID, unknown.TurnID)
+	}
+	return nil
+}
+
+// degradeCompactionAppend treats only a validated-journal append failure as
+// unavailable advisory telemetry. An unreadable or substituted journal stays
+// a hard error and cannot be bypassed by the semantic-result path.
+func (a *Adapter) degradeCompactionAppend(appendErr error, threadID, turnID string) error {
+	s, inspectErr := Inspect(a.JournalPath)
+	if inspectErr != nil {
+		return errors.Join(appendErr, inspectErr)
+	}
+	if s.Thread == nil || s.Thread.ThreadID != threadID || !s.TurnPending || s.Result != nil ||
+		s.TurnID != "" && turnID != "" && s.TurnID != turnID ||
+		s.TurnID == "" && s.ToolTurnID != "" && turnID != "" && s.ToolTurnID != turnID {
+		return appendErr
+	}
+	a.compactionUnavailable = true
+	return nil
 }
 
 func (s *State) compactionEvent(kind string, raw json.RawMessage) error {

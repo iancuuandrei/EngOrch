@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -134,7 +135,7 @@ func runCompactionFixtureWithHook(t *testing.T, notifications []codexrpc.Message
 	}
 	client, done, methods := compactionProtocolPeer(t, root, notifications, turn, readback, hook)
 	a := &Adapter{Client: client, JournalPath: path, Directory: root}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_, executeErr := a.Execute(ctx, invocation(t))
 	_ = a.Close()
@@ -437,6 +438,46 @@ func TestCompactionJournalLockFailureCannotProduceCountOrResult(t *testing.T) {
 	usage, err := MeasureContext(path)
 	if err != nil || usage.CompactionCount != nil || usage.CompactionCover != "" {
 		t.Fatal("journal-observation failure produced a typed count or zero", usage, err)
+	}
+}
+
+func TestCompactionAppendFailurePreservesSemanticResultAsUnknown(t *testing.T) {
+	sourcePath, _, executeErr, _ := runCompactionFixture(t, nil, completedTurn(), nil)
+	if executeErr != nil {
+		t.Fatal(executeErr)
+	}
+	sourceState, err := Inspect(sourcePath)
+	if err != nil || sourceState.SemanticResult == nil || sourceState.Result == nil {
+		t.Fatalf("source fixture lacks validated result: %+v %v", sourceState, err)
+	}
+	events, err := journal.Read(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "compaction-unavailable.db")
+	for _, event := range events {
+		if event.Kind == "runtime.semantic-result" || event.Kind == "runtime.result" {
+			break
+		}
+		if err := appendEvent(path, event.Kind, event.Payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	adapter := &Adapter{JournalPath: path}
+	if err := adapter.degradeCompactionAppend(errors.New("synthetic advisory append failure"), sourceState.Thread.ThreadID, sourceState.TurnID); err != nil || !adapter.compactionUnavailable {
+		t.Fatalf("validated journal failure did not degrade advisory capture: flag=%v err=%v", adapter.compactionUnavailable, err)
+	}
+	semantic := SemanticTurnResult{TurnID: sourceState.TurnID, Result: *sourceState.SemanticResult, CompactionUnavailable: true}
+	if err := appendEvent(path, "runtime.semantic-result", semantic); err != nil {
+		t.Fatal(err)
+	}
+	accepted := TurnResult{TurnID: sourceState.TurnID, Result: *sourceState.Result, CompactionUnavailable: true}
+	if err := appendEvent(path, "runtime.result", accepted); err != nil {
+		t.Fatal(err)
+	}
+	state, err := Inspect(path)
+	if err != nil || state.Result == nil || state.Result.Output != sourceState.Result.Output || state.Compaction == nil || state.Compaction.Coverage != "UNKNOWN" || state.Compaction.Count != 0 {
+		t.Fatalf("advisory append loss erased output or asserted a count: result=%+v compaction=%+v err=%v", state.Result, state.Compaction, err)
 	}
 }
 

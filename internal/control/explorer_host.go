@@ -34,6 +34,7 @@ type ExplorerRuntimeReceipt struct {
 	TurnID       string `json:"turn_id"`
 	JournalHead  string `json:"journal_head"`
 	ResultHash   string `json:"result_hash"`
+	UsagePending bool   `json:"usage_pending,omitempty"`
 }
 
 func expectedExplorerHost(s Snapshot, question string) (ExplorerHostIntent, error) {

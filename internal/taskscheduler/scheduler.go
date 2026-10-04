@@ -216,6 +216,30 @@ type Adapter interface {
 	Reconcile(context.Context, Claim) (Evidence, error)
 }
 
+// ClaimAdmissionGate may be implemented by adapters that need to bound future
+// dispatch claims. BeforeClaim runs only for a READY task and before its
+// durable task.claimed event. A nil callback means the candidate became stale
+// while admission waited and should be re-evaluated on the next Tick. The
+// returned callback receives whether the claim was durably recorded; false
+// lets the gate release a pre-effect reservation. A gate must not revoke an
+// already recorded claim.
+type ClaimAdmissionGate interface {
+	BeforeClaim(context.Context, TaskSpec) (func(AdmissionClaimOutcome) (func(), error), error)
+}
+
+// AdmissionClaimOutcome tells an admission gate whether task.claimed is
+// durably recorded, known absent, or unresolved after an append/inspect error.
+type AdmissionClaimOutcome uint8
+
+const (
+	// AdmissionClaimNotRecorded proves the scheduler append did not persist.
+	AdmissionClaimNotRecorded AdmissionClaimOutcome = iota + 1
+	// AdmissionClaimRecorded proves the exact claim is present in the journal.
+	AdmissionClaimRecorded
+	// AdmissionClaimUnknown preserves the reservation until journal inspection.
+	AdmissionClaimUnknown
+)
+
 // ParkError proves a finite pre-effect reason for parking a claim.
 type ParkError struct{ Reason ParkReason }
 
@@ -579,7 +603,7 @@ func appendObservation(path, claimID string, evidence Evidence) error {
 }
 
 // Tick claims and attempts at most one ready or parked task.
-func Tick(ctx context.Context, path string, adapter Adapter) (Decision, error) {
+func Tick(ctx context.Context, path string, adapter Adapter) (decision Decision, returnErr error) {
 	if ctx == nil || adapter == nil {
 		return Decision{}, errors.New("scheduler context and adapter required")
 	}
@@ -618,20 +642,76 @@ func Tick(ctx context.Context, path string, adapter Adapter) (Decision, error) {
 		if err := evidence.validate(task); err != nil {
 			return Decision{}, err
 		}
+		claimOutcome := AdmissionClaimNotRecorded
+		var finishAdmission func(AdmissionClaimOutcome) (func(), error)
+		var finishAdmissionCalled bool
+		var signalAdmissionCompletion func()
+		if evidence.Status == StatusReady {
+			if gate, ok := adapter.(ClaimAdmissionGate); ok {
+				finishAdmission, err = gate.BeforeClaim(ctx, task)
+				if err != nil {
+					return Decision{}, err
+				}
+				if finishAdmission == nil {
+					return Decision{}, nil
+				}
+			}
+		}
+		if finishAdmission != nil {
+			defer func() {
+				if !finishAdmissionCalled {
+					completion, finishErr := finishAdmission(claimOutcome)
+					signalAdmissionCompletion = completion
+					returnErr = errors.Join(returnErr, finishErr)
+				}
+				if signalAdmissionCompletion != nil {
+					signalAdmissionCompletion()
+				}
+			}()
+			// The gate durably records a controller event. Refresh READY evidence
+			// so the scheduler claim binds the controller head after that event.
+			refreshed, probeErr := adapter.Probe(ctx, ProbeRequest{Task: task, AgentTurn: agentTurnForTask(snapshot, task.ID)})
+			if probeErr != nil {
+				return Decision{}, probeErr
+			}
+			if err := refreshed.validate(task); err != nil {
+				return Decision{}, err
+			}
+			evidence = refreshed
+			if evidence.Status != StatusReady {
+				return Decision{}, nil
+			}
+		}
 		state := snapshot.Tasks[task.ID]
 		claim := Claim{Version: 1, ScheduleID: snapshot.ScheduleID, Task: task, Generation: state.Generation + 1, ControllerHead: evidence.ControllerHead, AgentTurn: agentTurnForTask(snapshot, task.ID)}
 		claimID, err := claim.ID()
 		if err != nil {
 			return Decision{}, err
 		}
-		if err = appendValidated(path, "task.claimed", claimEvent{Claim: claim, ClaimID: claimID}); err != nil {
+		var dispatchNewClaim bool
+		var recordedState TaskState
+		claimOutcome, dispatchNewClaim, recordedState, err = appendClaimWithInspect(claim, func() error {
+			return appendValidated(path, "task.claimed", claimEvent{Claim: claim, ClaimID: claimID})
+		}, func() (TaskState, bool, error) {
 			latest, inspectErr := Inspect(path)
-			if inspectErr == nil {
-				if latestState := latest.Tasks[task.ID]; latestState.Generation >= claim.Generation {
-					return Decision{mustClaimID(latestState), task.ID, latestState.Status}, nil
-				}
+			if inspectErr != nil {
+				return TaskState{}, false, inspectErr
 			}
-			return Decision{}, errors.Join(err, inspectErr)
+			state, ok := latest.Tasks[task.ID]
+			return state, ok, nil
+		})
+		if err != nil {
+			return Decision{}, err
+		}
+		if finishAdmission != nil {
+			signalAdmissionCompletion, err = finishAdmission(AdmissionClaimRecorded)
+			finishAdmissionCalled = true
+			if err != nil {
+				return Decision{}, err
+			}
+		}
+		if !dispatchNewClaim {
+			return Decision{mustClaimID(recordedState), task.ID, recordedState.Status}, nil
 		}
 		if evidence.Status == StatusPaused {
 			err = appendValidated(path, "task.parked", parkEvent{ClaimID: claimID, Reason: ParkLifecycle})
@@ -649,6 +729,33 @@ func Tick(ctx context.Context, path string, adapter Adapter) (Decision, error) {
 		return dispatchClaim(ctx, path, claim, adapter)
 	}
 	return Decision{}, nil
+}
+
+func appendClaimWithInspect(claim Claim, appendClaim func() error, inspectClaim func() (TaskState, bool, error)) (AdmissionClaimOutcome, bool, TaskState, error) {
+	if appendClaim == nil || inspectClaim == nil {
+		return AdmissionClaimUnknown, false, TaskState{}, errors.New("claim append and inspection are required")
+	}
+	if err := appendClaim(); err == nil {
+		return AdmissionClaimRecorded, true, TaskState{}, nil
+	} else {
+		appendErr := err
+		state, exists, inspectErr := inspectClaim()
+		if inspectErr != nil {
+			return AdmissionClaimUnknown, false, TaskState{}, errors.Join(appendErr, inspectErr)
+		}
+		if exists && state.Generation >= claim.Generation {
+			if state.Claim == nil {
+				return AdmissionClaimUnknown, false, state, errors.Join(appendErr, errors.New("claimed generation has no claim record"))
+			}
+			observedID, idErr := state.Claim.ID()
+			wantID, wantErr := claim.ID()
+			if idErr == nil && wantErr == nil && observedID == wantID {
+				return AdmissionClaimRecorded, false, state, nil
+			}
+			return AdmissionClaimUnknown, false, state, errors.Join(appendErr, errors.New("a different claim may own the task generation"), idErr, wantErr)
+		}
+		return AdmissionClaimNotRecorded, false, state, appendErr
+	}
 }
 
 // RecoverClaim observes one exact open claim and uses the adapter's receipt-only

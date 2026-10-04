@@ -40,7 +40,7 @@ func TestCodexPlanRequiresLinkedRuntimeEvidence(t *testing.T) {
 	if err := Append(p, "plan.recorded", r); err == nil {
 		t.Fatal("unbacked real-runtime plan admitted")
 	}
-	if err := Append(p, "planning.runtime-observed", PlannerReceipt{i.ID, "thread", "turn", strings.Repeat("a", 64), strings.Repeat("b", 64)}); err == nil {
+	if err := Append(p, "planning.runtime-observed", PlannerReceipt{InvocationID: i.ID, ThreadID: "thread", TurnID: "turn", JournalHead: strings.Repeat("a", 64), ResultHash: strings.Repeat("b", 64)}); err == nil {
 		t.Fatal("receipt without host admission accepted")
 	}
 	l, err := expectedPlannerHost(s)

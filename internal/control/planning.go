@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,7 @@ type PlannerReceipt struct {
 	TurnID       string `json:"turn_id"`
 	JournalHead  string `json:"journal_head"`
 	ResultHash   string `json:"result_hash"`
+	UsagePending bool   `json:"usage_pending,omitempty"`
 }
 
 func expectedPlannerHost(s Snapshot) (codexhost.Launch, error) {
@@ -34,7 +36,11 @@ func expectedPlannerHost(s Snapshot) (codexhost.Launch, error) {
 	if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return codexhost.Launch{}, errors.New("Codex state root must be outside the source repository")
 	}
-	return codexhost.Expected(filepath.Join(c.StateRoot, s.RunID), c.Executable, c.ExecutableHash)
+	root := filepath.Join(c.StateRoot, s.RunID)
+	if len(s.PlannerCorrections) != 0 {
+		root = filepath.Join(root, fmt.Sprintf("planner-correction-%d", len(s.PlannerCorrections)))
+	}
+	return codexhost.Expected(root, c.Executable, c.ExecutableHash)
 }
 
 func replayPlanner(s *Snapshot, e journal.Event) error {
@@ -102,7 +108,7 @@ func replayPlanner(s *Snapshot, e journal.Event) error {
 				return err
 			}
 		}
-		if err := requireCompletedModelAccess(*s, i, receipt.JournalHead, receipt.ResultHash); err != nil {
+		if err := requireModelAccessResult(*s, i, receipt.JournalHead, receipt.ResultHash, receipt.ThreadID, receipt.TurnID, receipt.UsagePending); err != nil {
 			return err
 		}
 		s.PlannerReceipt = &receipt
@@ -119,6 +125,9 @@ func ResumePlanning(ctx context.Context, path string) (snapshot Snapshot, err er
 	}
 	if s.State != "OBJECTIVE" && s.State != "PLANNING" {
 		return s, nil
+	}
+	if err := preflightInitialVerification(s); err != nil {
+		return s, err
 	}
 	if err := requireCurrentHostAdmission(ctx, s); err != nil {
 		return s, err
@@ -167,6 +176,9 @@ func ResumePlanning(ctx context.Context, path string) (snapshot Snapshot, err er
 	}
 	i, err := plannerInvocationForSnapshot(s)
 	if err != nil {
+		return s, err
+	}
+	if err := requireModelAccessAdmissionAvailable(s, i); err != nil {
 		return s, err
 	}
 	if i.Profile.Runtime == "fake" {
@@ -257,6 +269,9 @@ func ResumePlanning(ctx context.Context, path string) (snapshot Snapshot, err er
 		return s, err
 	}
 	if s.PlannerHost == nil {
+		if _, _, _, _, policyErr := codexRuntimeUsagePolicy(s, i.Profile.Role); policyErr != nil {
+			return s, policyErr
+		}
 		if err := Append(path, "planning.host-intent", l); err != nil {
 			return s, err
 		}
@@ -297,7 +312,18 @@ func ResumePlanning(ctx context.Context, path string) (snapshot Snapshot, err er
 		cancel()
 		return s, errors.Join(errors.New("planner runtime is terminal without a result"), terminalErr)
 	}
-	if readErr != nil || state.Result == nil {
+	var pendingResult *runtime.Result
+	usagePending := false
+	if readErr == nil && s.Creation.Config.Version == 2 && state.SemanticResult != nil && state.Result == nil &&
+		state.UsagePolicy != nil && state.UsagePolicy.Required && (state.UsageReceipt == nil || state.UsageReceipt.Coverage != "OBSERVED") {
+		_, semantic, _, pendingErr := observeSemanticUsagePending(ctx, path, runtimePath, i, "harness.planner-result.v1")
+		if pendingErr != nil {
+			return s, pendingErr
+		}
+		pendingResult = &semantic
+		usagePending = true
+	}
+	if readErr != nil || state.Result == nil && !usagePending {
 		usageBudget, requireLiveUsage, usageQualified, unlimitedTokens, policyErr := codexRuntimeUsagePolicy(s, i.Profile.Role)
 		if policyErr != nil {
 			return s, policyErr
@@ -332,6 +358,16 @@ func ResumePlanning(ctx context.Context, path string) (snapshot Snapshot, err er
 		} else {
 			_, err = a.Resume(ctx, i.ID)
 		}
+		if errors.Is(err, codexruntime.ErrUsageReconciliation) && s.Creation.Config.Version == 2 {
+			_, semantic, _, pendingErr := observeSemanticUsagePending(ctx, path, runtimePath, i, "harness.planner-result.v1")
+			if pendingErr == nil {
+				pendingResult = &semantic
+				usagePending = true
+				err = nil
+			} else {
+				return s, errors.Join(err, pendingErr)
+			}
+		}
 		if err != nil {
 			if s.Creation.Config.Version == 2 {
 				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
@@ -346,7 +382,14 @@ func ResumePlanning(ctx context.Context, path string) (snapshot Snapshot, err er
 	if err != nil {
 		return s, err
 	}
-	if state.Intent == nil || state.Intent.Invocation != i || state.Intent.Directory != filepath.Join(l.Root, "workspace") || state.Result == nil || state.Thread == nil || state.TurnStatus != "completed" || state.Source == nil || *state.Source != s.Creation.Repository {
+	result := state.Result
+	if usagePending {
+		if state.SemanticResult == nil || pendingResult == nil || !sameCanonical(*state.SemanticResult, *pendingResult) {
+			return s, errors.New("planner semantic usage pending result is missing or changed")
+		}
+		result = state.SemanticResult
+	}
+	if state.Intent == nil || state.Intent.Invocation != i || state.Intent.Directory != filepath.Join(l.Root, "workspace") || result == nil || state.Thread == nil || state.TurnStatus != "completed" || state.Source == nil || *state.Source != s.Creation.Repository {
 		return s, errors.New("planner runtime evidence incomplete")
 	}
 	if err := state.Thread.Validate(i.Profile, filepath.Join(l.Root, "workspace")); err != nil {
@@ -355,19 +398,23 @@ func ResumePlanning(ctx context.Context, path string) (snapshot Snapshot, err er
 	if head == "" {
 		return s, errors.New("planner runtime journal head unavailable")
 	}
-	hash, err := canonical.Hash("harness.planner-result.v1", *state.Result)
+	hash, err := canonical.Hash("harness.planner-result.v1", *result)
 	if err != nil {
 		return s, err
 	}
-	receipt := PlannerReceipt{i.ID, state.Thread.ThreadID, state.TurnID, head, hash}
+	receipt := PlannerReceipt{InvocationID: i.ID, ThreadID: state.Thread.ThreadID, TurnID: state.TurnID, JournalHead: head, ResultHash: hash, UsagePending: usagePending}
 	if s.Creation.Config.Version == 2 {
-		var terminal ModelAccessTerminal
-		s, terminal, err = completeModelAccess(ctx, path, runtimePath, i, "harness.planner-result.v1")
+		if usagePending {
+			err = requireModelAccessResult(s, i, head, hash, state.Thread.ThreadID, state.TurnID, true)
+		} else {
+			var terminal ModelAccessTerminal
+			s, terminal, err = completeModelAccess(ctx, path, runtimePath, i, "harness.planner-result.v1")
+			if err == nil && (terminal.Receipt.Status != "completed" || terminal.RuntimeJournalHead != receipt.JournalHead || terminal.Receipt.OutputHash != receipt.ResultHash) {
+				err = errors.New("planner result differs from terminal model access receipt")
+			}
+		}
 		if err != nil {
 			return s, err
-		}
-		if terminal.Receipt.Status != "completed" || terminal.RuntimeJournalHead != receipt.JournalHead || terminal.Receipt.OutputHash != receipt.ResultHash {
-			return s, errors.New("planner result differs from terminal model access receipt")
 		}
 	}
 	s, err = Inspect(path)
@@ -381,7 +428,7 @@ func ResumePlanning(ctx context.Context, path string) (snapshot Snapshot, err er
 	} else if *s.PlannerReceipt != receipt {
 		return s, errors.New("planner receipt no longer matches runtime journal")
 	}
-	if err := Append(path, "plan.recorded", *state.Result); err != nil {
+	if err := Append(path, "plan.recorded", *result); err != nil {
 		return s, err
 	}
 	return Inspect(path)

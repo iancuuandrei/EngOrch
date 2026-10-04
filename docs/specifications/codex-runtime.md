@@ -81,6 +81,15 @@ of input; reasoning output is a subset of output. Missing optional counters are
 unknown, including when a previous snapshot or baseline knew that component.
 
 A finite reservation is an observed threshold, not an exact provider token cap.
+In v1.1 development, a finite role reservation requires `usage_qualified = true`
+even when `require_live_usage` is false. This is a preflight assertion backed by
+real accounting evidence, not a switch to bypass missing counters. The controller
+checks it before a new host or model-access intent; an unqualified reservation
+returns `NEEDS_ATTENTION` with reason `usage_not_qualified`. Existing uncertain
+host/access effects still require reconciliation without resend. An explicit
+unlimited reservation does not require optional accounting qualification unless
+`require_live_usage` itself is enabled.
+
 At or above the reservation the adapter persists `BUDGET_EXHAUSTED`, attempts an
 interrupt and admits no further output/tool response. Overshoot is reported;
 provider termination remains UNKNOWN without terminal evidence.

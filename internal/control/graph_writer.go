@@ -18,6 +18,7 @@ import (
 
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/codexhost"
+	"harness.local/engorch/internal/codexruntime"
 	"harness.local/engorch/internal/engineeringplan"
 	"harness.local/engorch/internal/fileeffects"
 	"harness.local/engorch/internal/journal"
@@ -27,6 +28,20 @@ import (
 	"harness.local/engorch/internal/worktree"
 	"harness.local/engorch/internal/writercontract"
 )
+
+var errGraphWriterScopeViolation = errors.New("graph writer proposal exceeds declared task write paths")
+
+type graphWriterScopeViolationError struct {
+	Changes []fileeffects.Change
+}
+
+// Error reports that a proposal escaped its exact graph-task write paths.
+func (e *graphWriterScopeViolationError) Error() string { return errGraphWriterScopeViolation.Error() }
+
+// Is matches the stable scope-violation sentinel for safe error classification.
+func (e *graphWriterScopeViolationError) Is(target error) bool {
+	return target == errGraphWriterScopeViolation
+}
 
 type graphWriterTaskContextKey struct{}
 
@@ -84,8 +99,12 @@ func graphWriterTaskFromContext(ctx context.Context) string {
 }
 
 func graphWriterProjectedSnapshot(s Snapshot, taskID string) Snapshot {
-	if taskID != "" {
-		s.WriterHost = graphWriterHostState(s, taskID)
+	return graphWriterProjectedSnapshotWithHost(s, taskID, taskID)
+}
+
+func graphWriterProjectedSnapshotWithHost(s Snapshot, taskID, hostTaskID string) Snapshot {
+	if hostTaskID != "" {
+		s.WriterHost = graphWriterHostState(s, hostTaskID)
 	}
 	return s
 }
@@ -232,6 +251,7 @@ type GraphWriterBatchRecord struct {
 	Members                []GraphWriterMember `json:"members"`
 	Prepared               PreparedFiles       `json:"prepared"`
 	IsolationPreparationID string              `json:"isolation_preparation_id,omitempty"`
+	ScopeReplanRequestID   string              `json:"scope_replan_request_id,omitempty"`
 }
 
 type graphWriterAggregateIdentity struct {
@@ -244,10 +264,21 @@ type graphWriterAggregateIdentity struct {
 }
 
 func expectedWriterHostForTask(s Snapshot, taskID string) (WriterHostIntent, error) {
+	if correction, ok := scheduledCorrectionForTask(s, taskID); ok {
+		invocation, err := scheduledTurnInvocation(correction.Invocation, taskscheduler.OperationWriter, correction.ScheduledTaskID)
+		if err != nil {
+			return WriterHostIntent{}, err
+		}
+		return expectedWriterHostForInvocation(s, invocation)
+	}
 	i, err := writerInvocationForTask(s, taskID)
 	if err != nil {
 		return WriterHostIntent{}, err
 	}
+	return expectedWriterHostForInvocation(s, i)
+}
+
+func expectedWriterHostForInvocation(s Snapshot, i runtime.Invocation) (WriterHostIntent, error) {
 	c := s.Creation.Config.Codex
 	if i.Profile.Runtime != "codex-app-server" || c == nil {
 		return WriterHostIntent{}, errors.New("configured Codex graph writer required")
@@ -367,7 +398,7 @@ func replayGraphWriterProposal(s *Snapshot, e journal.Event, seen map[string]boo
 	if err := runtime.ValidateResult(i, record.Writer.Result, true); err != nil {
 		return err
 	}
-	host, ok := s.GraphWriterHosts[record.TaskID]
+	host, ok := s.GraphWriterHosts[roleReceiptTaskID(*s, i, record.TaskID)]
 	if i.Profile.Runtime != "codex-app-server" || !ok || host.Intent.Invocation != i || host.RuntimeReceipt == nil {
 		return errors.New("graph writer proposal requires exact runtime receipt")
 	}
@@ -455,7 +486,7 @@ func replayIsolatedGraphWriterProposal(s *Snapshot, record GraphWriterRecord, se
 	if err != nil || resolved != record.Isolated.Invocation {
 		return errors.Join(errors.New("isolated graph writer proposal invocation differs from schedule"), err)
 	}
-	host, ok := s.GraphWriterHosts[record.TaskID]
+	host, ok := s.GraphWriterHosts[roleReceiptTaskID(*s, record.Isolated.Invocation, record.TaskID)]
 	if !ok || host.Intent.Invocation != invocation || host.RuntimeReceipt == nil || invocation.Profile.Runtime != "codex-app-server" {
 		return errors.New("isolated graph writer proposal requires exact runtime receipt")
 	}
@@ -501,6 +532,9 @@ func replayGraphWriterBatch(s *Snapshot, e journal.Event) error {
 	}
 	if batch.Version == 2 {
 		return replayIsolatedGraphWriterBatch(s, batch)
+	}
+	if batch.Version == 3 {
+		return replayScopeReplannedGraphWriterBatch(s, batch)
 	}
 	if batch.Version != 1 || s.Graph == nil || s.Candidate == nil || s.GraphWriterBatch != nil || batch.GraphDigest != s.Graph.Digest || batch.Revision != s.Graph.Revision {
 		return errors.New("graph writer batch identity or transition rejected")
@@ -1004,6 +1038,13 @@ func graphWriterInvocation(s Snapshot, taskID string) (runtime.Invocation, error
 	return writerInvocationForTask(s, taskID)
 }
 
+func graphWriterInvocationForContext(ctx context.Context, s Snapshot, taskID string) (runtime.Invocation, error) {
+	if correction, ok := scheduledRoleCorrectionFromContext(ctx); ok && correction.TaskID == taskID && correction.ScheduledTaskID != "" {
+		return scheduledTurnInvocation(correction.Invocation, taskscheduler.OperationWriter, correction.ScheduledTaskID)
+	}
+	return graphWriterInvocation(s, taskID)
+}
+
 func graphWriterTaskQuestion(s Snapshot, taskID string) (string, error) {
 	if s.Graph == nil {
 		return "", errors.New("graph unavailable")
@@ -1024,7 +1065,7 @@ func prepareGraphWriterFiles(ctx context.Context, path string, taskID string, in
 	if err != nil {
 		return WriterRecord{}, err
 	}
-	expected, err := graphWriterInvocation(s, taskID)
+	expected, err := graphWriterInvocationForContext(ctx, s, taskID)
 	if err != nil || expected != invocation {
 		return WriterRecord{}, errors.Join(errors.New("graph writer invocation is stale or substituted"), err)
 	}
@@ -1051,7 +1092,7 @@ func prepareGraphWriterFiles(ctx context.Context, path string, taskID string, in
 		}
 	}
 	if !graphWriterChangesWithinTask(task, reply.Changes) {
-		return WriterRecord{}, errors.New("graph writer proposal exceeds declared task write paths")
+		return WriterRecord{}, errGraphWriterScopeViolation
 	}
 	return WriterRecord{Invocation: invocation, Result: result, Prepared: prepared, EditPreimages: preimages}, nil
 }
@@ -1156,12 +1197,53 @@ func verifyGraphWriterCohortDelta(controllerPath string, claim taskscheduler.Cla
 	if len(cohort) < 1 || len(cohort) > maxCohort || cohort[claim.Task.ID].ID == "" || invocations[claim.Task.InvocationID] != claim.Task.ID {
 		return errors.New("writer claim is outside frozen implementation cohort")
 	}
-	allowed := map[string]bool{"task.context-admitted": true, "graph.writer.host-intent": true, "graph.writer.host-ready": true, "graph.writer.host-observed": true, "graph.writer.runtime-observed": true, "graph.writer.proposed": true, "model.access-intent": true, "model.access-receipt": true}
+	boundCandidateID, err := bound.Candidate.ID()
+	if err != nil {
+		return err
+	}
+	allowed := map[string]bool{"task.context-admitted": true, "graph.writer.host-intent": true, "graph.writer.host-ready": true, "graph.writer.host-observed": true, "graph.writer.runtime-observed": true, "graph.writer.proposed": true, "model.access-intent": true, "model.access-receipt": true, "model.access-semantic-pending": true}
+	if isolatedImplementationEnabled(bound) && bound.State == "IMPLEMENTING" {
+		allowed["graph.writer.memory-admitted"] = true
+		allowed["graph.writer.memory-released"] = true
+	}
+	memoryActive := map[string]GraphMemoryAdmissionActive{}
+	if bound.GraphMemoryAdmission != nil {
+		for taskID, active := range bound.GraphMemoryAdmission.ActiveTaskIDs {
+			memoryActive[taskID] = active
+		}
+	}
 	for _, event := range events[idx+1:] {
 		if !allowed[event.Kind] {
 			return fmt.Errorf("writer cohort sibling event %q is not attributable", event.Kind)
 		}
 		switch event.Kind {
+		case "graph.writer.memory-admitted":
+			var record GraphMemoryAdmissionRecord
+			if err := canonical.Decode(event.Payload, &record); err != nil {
+				return err
+			}
+			if !isolatedImplementationEnabled(bound) || record.RunID != bound.RunID || record.GraphDigest != bound.Graph.Digest || record.Revision != bound.Graph.Revision || record.CandidateID != boundCandidateID || bound.GraphIsolationPreparation == nil || record.PreparationID != bound.GraphIsolationPreparation.PreparationID || cohort[record.TaskID].ID == "" || invocations[record.InvocationID] != record.TaskID {
+				return errors.New("memory admission is outside frozen writer cohort")
+			}
+			if !sameGraphMemoryAdmissionActiveSet(record.ActiveTaskIDs, memoryActive) {
+				return errors.New("memory admission active set differs from writer cohort history")
+			}
+			if record.Granted {
+				if _, exists := memoryActive[record.TaskID]; exists {
+					return errors.New("memory admission duplicates an active writer task")
+				}
+				memoryActive[record.TaskID] = GraphMemoryAdmissionActive{AdmissionID: record.AdmissionID, InvocationID: record.InvocationID}
+			}
+		case "graph.writer.memory-released":
+			var release GraphMemoryAdmissionRelease
+			if err := canonical.Decode(event.Payload, &release); err != nil {
+				return err
+			}
+			active, ok := memoryActive[release.TaskID]
+			if !ok || cohort[release.TaskID].ID == "" || active.AdmissionID != release.AdmissionID {
+				return errors.New("memory release is outside frozen writer admission")
+			}
+			delete(memoryActive, release.TaskID)
 		case "task.context-admitted":
 			var record TaskContextRecord
 			if err := canonical.Decode(event.Payload, &record); err != nil {
@@ -1233,6 +1315,11 @@ func verifyGraphWriterCohortDelta(controllerPath string, claim taskscheduler.Cla
 				if record.Isolated == nil || validateIsolatedGraphWriterProposal(current, *record.Isolated) != nil {
 					return errors.New("isolated writer proposal differs from confirmed child binding")
 				}
+				if active, ok := memoryActive[record.TaskID]; !ok || active.InvocationID != invocation.ID {
+					return errors.New("isolated writer proposal lacks its exact memory admission")
+				} else {
+					delete(memoryActive, record.TaskID)
+				}
 			} else if isolatedImplementationEnabled(bound) {
 				if bound.State != "REPAIRING" || task.ParentID == "" || record.Isolated != nil || record.Writer.Prepared.Proposal.Before != *bound.Candidate {
 					return errors.New("isolated graph repair proposal is not parent-bound")
@@ -1269,9 +1356,74 @@ func verifyGraphWriterCohortDelta(controllerPath string, claim taskscheduler.Cla
 			if index < 0 || current.ModelAccess[index].Terminal == nil || !sameCanonical(*current.ModelAccess[index].Terminal, record) {
 				return errors.New("model access receipt differs from replayed cohort receipt")
 			}
+		case "model.access-semantic-pending":
+			var record ModelAccessSemanticPending
+			if err := canonical.Decode(event.Payload, &record); err != nil {
+				return err
+			}
+			taskID, ok := invocations[record.RuntimeInvocationID]
+			if !ok {
+				return errors.New("semantic usage pending event outside frozen writer cohort")
+			}
+			invocation, err := writerInvocationForTask(bound, taskID)
+			if err != nil || invocation.ID != record.RuntimeInvocationID {
+				return errors.Join(errors.New("semantic usage pending invocation differs from frozen task"), err)
+			}
+			index := modelAccessIndex(current, record.RuntimeInvocationID)
+			if index < 0 || current.ModelAccess[index].SemanticPending == nil || !sameCanonical(*current.ModelAccess[index].SemanticPending, record) {
+				return errors.New("semantic usage pending proof differs from replayed cohort proof")
+			}
+			runtimePath, ok := runtimeJournalForSemanticInvocation(current, invocation)
+			if !ok {
+				return errors.New("semantic usage pending runtime journal is outside the cohort")
+			}
+			runtimeState, head, err := codexruntime.InspectWithHead(runtimePath)
+			if err != nil || head != record.RuntimeJournalHead {
+				return errors.Join(errors.New("semantic usage pending runtime head differs from frozen member"), err)
+			}
+			observed, _, err := semanticUsagePendingFromRuntime(current, runtimeState, head, invocation, "harness.writer-result.v1")
+			if err != nil || !sameCanonical(observed, record) {
+				return errors.Join(errors.New("semantic usage pending runtime result differs from frozen member"), err)
+			}
 		}
 	}
+	if current.GraphMemoryAdmission == nil {
+		if len(memoryActive) != 0 {
+			return errors.New("writer memory admission history differs from replay")
+		}
+	} else if !sameGraphMemoryAdmissionActiveMap(memoryActive, current.GraphMemoryAdmission.ActiveTaskIDs) {
+		return errors.New("writer memory admission active set differs from replay")
+	}
 	return nil
+}
+
+func sameGraphMemoryAdmissionActiveSet(ids []string, active map[string]GraphMemoryAdmissionActive) bool {
+	if len(ids) != len(active) {
+		return false
+	}
+	taskIDs := make([]string, 0, len(active))
+	for taskID := range active {
+		taskIDs = append(taskIDs, taskID)
+	}
+	sort.Strings(taskIDs)
+	for index, taskID := range taskIDs {
+		if ids[index] != taskID {
+			return false
+		}
+	}
+	return true
+}
+
+func sameGraphMemoryAdmissionActiveMap(left, right map[string]GraphMemoryAdmissionActive) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for taskID, value := range left {
+		if right[taskID] != value {
+			return false
+		}
+	}
+	return true
 }
 
 func buildGraphWriterBatchSpecs(controllerPath string, s Snapshot, tasks []engineeringplan.Task) ([]taskscheduler.TaskSpec, error) {
@@ -1351,77 +1503,7 @@ func runGraphWriterBatch(ctx context.Context, controllerPath string, initial Sna
 	if _, err := taskscheduler.Bind(schedulePath, definition); err != nil {
 		return err
 	}
-	pumpCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	pumpResult := make(chan error, 1)
-	go func() {
-		pumpResult <- taskscheduler.Pump(pumpCtx, schedulePath, ScheduledDispatchAdapter{JournalPath: schedulePath}, taskscheduler.PumpOptions{Workers: workers, PollInterval: 10 * time.Millisecond})
-	}()
-	deadline := time.Now().Add(5 * time.Minute)
-	for {
-		schedule, err := taskscheduler.Inspect(schedulePath)
-		if err != nil {
-			cancel()
-			return errors.Join(err, waitGraphPump(pumpResult, 5*time.Second))
-		}
-		ctrl, err := Inspect(controllerPath)
-		if err != nil {
-			cancel()
-			return errors.Join(err, waitGraphPump(pumpResult, 5*time.Second))
-		}
-		done, failed := true, ""
-		for _, spec := range specs {
-			state, ok := schedule.Tasks[spec.ID]
-			if !ok {
-				done = false
-				break
-			}
-			switch state.Status {
-			case taskscheduler.StatusSucceeded:
-				record, found := ctrl.GraphWriterResults[spec.ID]
-				if !found || record.Writer.Invocation.ID != spec.InvocationID || state.Evidence == nil || state.Evidence.InvocationID != spec.InvocationID {
-					done = false
-				}
-			case taskscheduler.StatusFailed, taskscheduler.StatusCancelled:
-				failed = spec.ID
-			default:
-				done = false
-			}
-			if failed != "" {
-				break
-			}
-		}
-		if failed != "" {
-			cancel()
-			return errors.Join(fmt.Errorf("writer batch task %q failed", failed), waitGraphPump(pumpResult, 5*time.Second))
-		}
-		if done {
-			cancel()
-			break
-		}
-		if time.Now().After(deadline) {
-			cancel()
-			return errors.Join(errors.New("writer batch timed out"), waitGraphPump(pumpResult, 5*time.Second))
-		}
-		select {
-		case <-ctx.Done():
-			cancel()
-			return errors.Join(ctx.Err(), waitGraphPump(pumpResult, 5*time.Second))
-		case <-time.After(20 * time.Millisecond):
-		}
-		select {
-		case err := <-pumpResult:
-			if err != nil {
-				return err
-			}
-			return errors.New("writer pump exited before terminal evidence")
-		default:
-		}
-	}
-	if err := waitGraphPump(pumpResult, 5*time.Second); err != nil {
-		return err
-	}
-	return nil
+	return runScheduledGraphWriterCohort(ctx, controllerPath, schedulePath, specs, workers, false)
 }
 
 func runIsolatedGraphWriterBatch(ctx context.Context, controllerPath string, initial Snapshot, tasks []engineeringplan.Task) error {
@@ -1483,13 +1565,26 @@ func runIsolatedGraphWriterBatch(ctx context.Context, controllerPath string, ini
 	if _, err := taskscheduler.Bind(schedulePath, definition); err != nil {
 		return err
 	}
+	return runScheduledGraphWriterCohort(ctx, controllerPath, schedulePath, specs, workers, true)
+}
+
+// runScheduledGraphWriterCohort keeps every initial member alive until the
+// complete current schedule is settled. A known semantic rejection may then
+// receive a new dynamic claim; no correction is admitted while any sibling or
+// predecessor claim is pending or UNKNOWN.
+func runScheduledGraphWriterCohort(ctx context.Context, controllerPath, schedulePath string, specs []taskscheduler.TaskSpec, workers int, isolated bool) error {
 	pumpCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	pumpResult := make(chan error, 1)
 	go func() {
-		pumpResult <- taskscheduler.Pump(pumpCtx, schedulePath, ScheduledDispatchAdapter{JournalPath: schedulePath}, taskscheduler.PumpOptions{Workers: workers, PollInterval: 10 * time.Millisecond})
+		var adapter taskscheduler.Adapter = ScheduledDispatchAdapter{JournalPath: schedulePath}
+		if isolated {
+			adapter = memoryGatedScheduledDispatchAdapter{ScheduledDispatchAdapter: ScheduledDispatchAdapter{JournalPath: schedulePath}, gate: newGraphMemoryAdmissionGate(controllerPath, nil)}
+		}
+		pumpResult <- taskscheduler.Pump(pumpCtx, schedulePath, adapter, taskscheduler.PumpOptions{Workers: workers, PollInterval: 10 * time.Millisecond})
 	}()
 	deadline := time.Now().Add(5 * time.Minute)
+	handledClaims := map[string]bool{}
 	for {
 		schedule, err := taskscheduler.Inspect(schedulePath)
 		if err != nil {
@@ -1501,39 +1596,77 @@ func runIsolatedGraphWriterBatch(ctx context.Context, controllerPath string, ini
 			cancel()
 			return errors.Join(err, waitGraphPump(pumpResult, 5*time.Second))
 		}
-		done, failed := true, ""
-		for _, spec := range specs {
-			state, ok := schedule.Tasks[spec.ID]
-			if !ok {
-				done = false
-				break
-			}
+		allTerminal, unknownTask := true, ""
+		for taskID, state := range schedule.Tasks {
 			switch state.Status {
-			case taskscheduler.StatusSucceeded:
-				record, found := ctrl.GraphWriterResults[spec.ID]
-				if !found || record.Isolated == nil || graphWriterRecordInvocation(record).ID != spec.InvocationID || state.Evidence == nil || state.Evidence.InvocationID != spec.InvocationID {
-					done = false
-				}
-			case taskscheduler.StatusFailed, taskscheduler.StatusCancelled:
-				failed = spec.ID
+			case taskscheduler.StatusSucceeded, taskscheduler.StatusFailed, taskscheduler.StatusCancelled:
+			case taskscheduler.StatusUnknown:
+				unknownTask = taskID
+				allTerminal = false
 			default:
-				done = false
-			}
-			if failed != "" {
-				break
+				allTerminal = false
 			}
 		}
-		if failed != "" {
+		if unknownTask != "" {
 			cancel()
-			return errors.Join(fmt.Errorf("isolated writer batch task %q failed", failed), waitGraphPump(pumpResult, 5*time.Second))
+			return errors.Join(fmt.Errorf("writer cohort task %q has an UNKNOWN effect", unknownTask), waitGraphPump(pumpResult, 5*time.Second))
 		}
-		if done {
-			cancel()
-			break
+		if allTerminal {
+			if cohortScopeReplanningEnabled(ctrl) && hasFailedWriterClaim(schedule) {
+				cohort, cohortErr := InspectSettledGraphWriterCohort(controllerPath, schedulePath)
+				if cohortErr == nil && settledCohortHasScopeViolation(cohort) {
+					bound, inspectErr := Inspect(controllerPath)
+					if inspectErr != nil {
+						cancel()
+						return errors.Join(inspectErr, waitGraphPump(pumpResult, 5*time.Second))
+					}
+					updated, replanErr := recordGraphScopeReplanCohort(ctx, controllerPath, bound, cohort)
+					if replanErr == nil && len(updated.ScopeReplanRequests) > 0 && len(updated.ScopeReplanRequests) == len(updated.ScopeReplans) {
+						_, replanErr = PrepareScopeReplannedGraphWriterBatch(ctx, controllerPath)
+					}
+					cancel()
+					return errors.Join(replanErr, waitGraphPump(pumpResult, 5*time.Second))
+				}
+			}
+			admittedSuccessor := false
+			for taskID, state := range schedule.Tasks {
+				if state.Status != taskscheduler.StatusFailed || state.Claim == nil || state.Evidence == nil {
+					continue
+				}
+				claimID, claimErr := state.Claim.ID()
+				if claimErr != nil {
+					cancel()
+					return errors.Join(claimErr, waitGraphPump(pumpResult, 5*time.Second))
+				}
+				if handledClaims[claimID] {
+					continue
+				}
+				handledClaims[claimID] = true
+				admitted, correctionErr := AfterSettledScheduledClaim(ctx, controllerPath, schedulePath, taskID)
+				if correctionErr != nil {
+					cancel()
+					return errors.Join(fmt.Errorf("scheduled writer correction for %q could not be admitted: %w", taskID, correctionErr), waitGraphPump(pumpResult, 5*time.Second))
+				}
+				admittedSuccessor = admittedSuccessor || admitted
+			}
+			if admittedSuccessor {
+				// The schedule value above is a terminal pre-admission snapshot.
+				// Reinspect on the next pass so a just-added correction cannot be
+				// mistaken for an incomplete settled cohort.
+				continue
+			}
+			if !hasNonterminalScheduleTasks(schedule) {
+				if !graphWriterCohortResultsReady(ctrl, schedule, specs, isolated) {
+					cancel()
+					return errors.Join(errors.New("writer cohort settled without a complete candidate-bound proposal set"), waitGraphPump(pumpResult, 5*time.Second))
+				}
+				cancel()
+				return waitGraphPump(pumpResult, 5*time.Second)
+			}
 		}
 		if time.Now().After(deadline) {
 			cancel()
-			return errors.Join(errors.New("isolated writer batch timed out"), waitGraphPump(pumpResult, 5*time.Second))
+			return errors.Join(errors.New("writer cohort timed out before settled evidence"), waitGraphPump(pumpResult, 5*time.Second))
 		}
 		select {
 		case <-ctx.Done():
@@ -1546,12 +1679,66 @@ func runIsolatedGraphWriterBatch(ctx context.Context, controllerPath string, ini
 			if err != nil {
 				return err
 			}
-			return errors.New("isolated writer pump exited before terminal evidence")
+			return errors.New("writer cohort pump exited before terminal evidence")
 		default:
 		}
 	}
-	if err := waitGraphPump(pumpResult, 5*time.Second); err != nil {
-		return err
+}
+
+func hasFailedWriterClaim(schedule taskscheduler.Snapshot) bool {
+	for _, state := range schedule.Tasks {
+		if state.Status == taskscheduler.StatusFailed {
+			return true
+		}
 	}
-	return nil
+	return false
+}
+
+func hasNonterminalScheduleTasks(schedule taskscheduler.Snapshot) bool {
+	for _, state := range schedule.Tasks {
+		switch state.Status {
+		case taskscheduler.StatusSucceeded, taskscheduler.StatusFailed, taskscheduler.StatusCancelled:
+		default:
+			return true
+		}
+	}
+	return false
+}
+
+func settledCohortHasScopeViolation(cohort SettledGraphWriterCohort) bool {
+	for _, member := range cohort.Members {
+		if member.ScopeViolation {
+			return true
+		}
+	}
+	return false
+}
+
+func graphWriterCohortResultsReady(s Snapshot, schedule taskscheduler.Snapshot, specs []taskscheduler.TaskSpec, isolated bool) bool {
+	for _, spec := range specs {
+		record, ok := s.GraphWriterResults[spec.ID]
+		if !ok || (record.Isolated != nil) != isolated {
+			return false
+		}
+		wantInvocation := spec.InvocationID
+		var latest *RoleSemanticCorrection
+		for index := range s.RoleCorrections {
+			correction := &s.RoleCorrections[index]
+			if correction.TaskID == spec.ID && correction.ScheduledTaskID != "" && correction.Invocation.Profile.Role == "writer" {
+				latest = correction
+			}
+		}
+		if latest != nil {
+			invocation, err := scheduledTurnInvocation(latest.Invocation, taskscheduler.OperationWriter, latest.ScheduledTaskID)
+			state, ok := schedule.Tasks[latest.ScheduledTaskID]
+			if err != nil || !ok || state.Status != taskscheduler.StatusSucceeded {
+				return false
+			}
+			wantInvocation = invocation.ID
+		}
+		if graphWriterRecordInvocation(record).ID != wantInvocation {
+			return false
+		}
+	}
+	return true
 }

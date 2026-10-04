@@ -12,8 +12,63 @@ import (
 	"time"
 
 	"harness.local/engorch/internal/codexrpc"
+	"harness.local/engorch/internal/journal"
 	"harness.local/engorch/internal/runtime"
 )
+
+func TestRetainedSemanticResultRejectsSubstitutionAndPreservesLegacyReplay(t *testing.T) {
+	root := t.TempDir()
+	client, done := peer(t, func(m codexrpc.Message) (any, bool) {
+		if m.Method == "thread/start" {
+			return threadResponse(root, "explicit-model"), false
+		}
+		return map[string]any{"turn": completedTurn()}, false
+	})
+	a := &Adapter{Client: client, Directory: root, JournalPath: filepath.Join(root, "source.db")}
+	result, err := a.Execute(context.Background(), invocation(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Close()
+	<-done
+	events, err := journal.Read(a.JournalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, legacy := range []bool{false, true} {
+		path := filepath.Join(t.TempDir(), "copy.db")
+		for _, event := range events {
+			if event.Kind == "runtime.result" || legacy && event.Kind == "runtime.semantic-result" {
+				continue
+			}
+			if event.Kind == "runtime.semantic-result" {
+				claimed := result
+				cost := int64(1)
+				claimed.Usage.CostMinorUnits = &cost
+				if err := appendEvent(path, event.Kind, TurnResult{TurnID: "turn-1", Result: claimed}); err == nil {
+					t.Fatal("retained output accepted unobserved cost")
+				}
+			}
+			if err := appendEvent(path, event.Kind, event.Payload); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if !legacy {
+			changed := result
+			changed.Output = "substituted output"
+			if err := appendEvent(path, "runtime.result", TurnResult{TurnID: "turn-1", Result: changed}); err == nil {
+				t.Fatal("accepted result substituted retained output")
+			}
+		}
+		if err := appendEvent(path, "runtime.result", TurnResult{TurnID: "turn-1", Result: result}); err != nil {
+			t.Fatalf("valid legacy=%v result rejected: %v", legacy, err)
+		}
+		state, err := Inspect(path)
+		if err != nil || state.Result == nil || state.Result.Output != result.Output {
+			t.Fatalf("valid replay lost output: %+v %v", state, err)
+		}
+	}
+}
 
 func TestInvalidAutoCompactionInvocationFailsBeforeRuntimeIntent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "runtime.jsonl")

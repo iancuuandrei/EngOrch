@@ -87,6 +87,17 @@ func writerInvocation(s Snapshot) (runtime.Invocation, error) {
 }
 
 func writerInvocationForTask(s Snapshot, taskID string) (runtime.Invocation, error) {
+	base, err := writerInvocationForTaskBase(s, taskID)
+	if err != nil {
+		return runtime.Invocation{}, err
+	}
+	if taskID == "" {
+		return correctedRoleInvocation(s, base), nil
+	}
+	return base, nil
+}
+
+func writerInvocationForTaskBase(s Snapshot, taskID string) (runtime.Invocation, error) {
 	isolated, err := isolatedInitialWriterForTask(s, taskID)
 	if err != nil {
 		return runtime.Invocation{}, err
@@ -393,10 +404,10 @@ func prepareWriterFilesForTask(ctx context.Context, path, taskID string, invocat
 	if writercontract.IsAnchoredEdits(s.Creation.Config.WriterContract) {
 		anchored, decodeErr := decodeAnchoredProposal(result.Output)
 		if decodeErr != nil {
-			return PreparedFiles{}, nil, decodeErr
+			return PreparedFiles{}, nil, rejectedSemanticOutput(decodeErr)
 		}
 		if anchored.CandidateID != candidate {
-			return PreparedFiles{}, nil, errors.New("writer candidate substitution")
+			return PreparedFiles{}, nil, errors.Join(ErrAutonomousUnsafe, errors.New("writer candidate substitution"))
 		}
 		manifest, captured, readErr := readAnchoredPreimages(ctx, path, s, anchored)
 		if readErr != nil {
@@ -411,10 +422,10 @@ func prepareWriterFilesForTask(ctx context.Context, path, taskID string, invocat
 	} else {
 		proposal, err = decodeWriterProposal(s.Creation.Config.WriterContract, result.Output)
 		if err != nil {
-			return PreparedFiles{}, nil, err
+			return PreparedFiles{}, nil, rejectedSemanticOutput(err)
 		}
 		if proposal.CandidateID != candidate {
-			return PreparedFiles{}, nil, errors.New("writer candidate substitution")
+			return PreparedFiles{}, nil, errors.Join(ErrAutonomousUnsafe, errors.New("writer candidate substitution"))
 		}
 	}
 	var prepared PreparedFiles
@@ -433,7 +444,7 @@ func prepareWriterFilesForTask(ctx context.Context, path, taskID string, invocat
 		return PreparedFiles{}, nil, err
 	}
 	if actual != candidate {
-		return PreparedFiles{}, nil, errors.New("writer candidate changed during preparation")
+		return PreparedFiles{}, nil, errors.Join(ErrAutonomousUnsafe, errors.New("writer candidate changed during preparation"))
 	}
 	return prepared, preimages, nil
 }

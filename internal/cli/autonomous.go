@@ -107,6 +107,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	promptRecipe := fs.String("prompt-recipe", "", "opt in to cache-prefix-v1 prompt ordering")
 	autoCompactTokenLimit := fs.Int64("auto-compact-token-limit", 0, "opt in to Codex automatic in-turn compaction at this positive token threshold")
 	prepareOnly := fs.Bool("prepare-only", false, "accept the graph and confirm its workspace, then return before explorer or writer dispatch")
+	inspectPlan := fs.Bool("inspect-plan", false, "show effective options without creating a run or calling providers")
 	goalFile := fs.String("file", "", "read objective from file")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -166,6 +167,15 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	}
 	if *promptRecipe != "" && *promptRecipe != "cache-prefix-v1" {
 		return errors.New("prompt-recipe must be empty or cache-prefix-v1")
+	}
+	if *inspectPlan {
+		if fs.NArg() != 0 || *goalFile != "" {
+			return errors.New("inspect-plan takes run options without an objective")
+		}
+		options := autonomousCapabilities{parallel: *parallelWriters, isolation: isolationPolicy,
+			plannerContext: *plannerContext, parser: *plannerContextRIExecutable, parserHash: *plannerContextRIExecutableSHA256,
+			parseCache: plannerParseCacheVersion, reviewImpact: reviewImpactContextVersion, candidateCache: candidateFactsCacheVersion, autoCompact: *autoCompactTokenLimit}
+		return inspectAutonomousPlan(ctx, root, options, *maxParallel, out)
 	}
 	if *goalFile != "" {
 		if fs.NArg() != 0 {
@@ -420,8 +430,9 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 		Objective:  objective,
 		Config:     cfg,
 		Execution: &control.ExecutionPolicy{
-			CapabilityFallbacks: capabilities.fallbacks,
-			Mode:                "autonomous-v1", MaxRepairs: maxRepairs, PromptRecipe: promptRecipe, Context: "bounded-v1",
+			SemanticCorrectionVersion: 1,
+			CapabilityFallbacks:       capabilities.fallbacks,
+			Mode:                      "autonomous-v1", MaxRepairs: maxRepairs, PromptRecipe: promptRecipe, Context: "bounded-v1",
 			PlannerContext: plannerContext, PlannerContextRIExecutable: plannerContextRIExecutable,
 			PlannerContextRIExecutableSHA256: plannerContextRIExecutableSHA256,
 			PlannerParseCacheVersion:         plannerParseCacheVersion,
@@ -433,6 +444,7 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 			CodexAutoCompact: autoCompact,
 		},
 	}
+	configureAutonomousScopeReplan(&creation)
 	creation, err = bindCurrentHost(ctx, creation)
 	if err != nil {
 		return err
@@ -467,6 +479,19 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 		return reportAutonomousFailure(out, p, id, err)
 	}
 	return output(out, s)
+}
+
+func configureAutonomousScopeReplan(creation *control.Creation) {
+	if creation.Execution == nil || creation.Config.Explorer == nil || creation.Config.Writer == nil {
+		return
+	}
+	version := 1
+	if creation.Execution.ParallelImplementationVersion != 0 || creation.Execution.IsolatedImplementationVersion != 0 {
+		version = 2
+	}
+	creation.Execution.ScopeReplanVersion = version
+	creation.Execution.MaxScopeReplans = 2
+	creation.Execution.ScopeReplanDesignVersion = version
 }
 
 type autonomousPrepared struct {
@@ -545,7 +570,11 @@ type autonomousFailure struct {
 // raw cause is never returned to the main stderr channel. Cancellation still
 // reports through errors.Is by wrapping the corresponding sentinel.
 func reportAutonomousFailure(out io.Writer, path, fallbackID string, cause error) error {
-	summary := autonomousFailure{RunID: fallbackID, State: "UNKNOWN", Phase: "blocked", BlockedReason: autonomousBlockReason(cause), Status: "NEEDS_OPERATOR", Disposition: control.GateEscalate, NextAction: "inspect_run"}
+	if cause == nil {
+		cause = errors.New("autonomous failure has no supplied outcome")
+	}
+	summary := autonomousFailure{RunID: fallbackID, State: "UNKNOWN", Phase: "blocked"}
+	outcome := control.ClassifyAutonomousFailure(control.Snapshot{}, cause)
 	if s, err := control.Inspect(path); err == nil {
 		if s.RunID != "" {
 			summary.RunID = s.RunID
@@ -553,14 +582,12 @@ func reportAutonomousFailure(out io.Writer, path, fallbackID string, cause error
 		summary.State = s.State
 		summary.Phase = autonomousPhase(s.State)
 		summary.CandidateRetained = s.Candidate != nil
-		if summary.BlockedReason == "effect_requires_reconciliation" {
-			summary.Status, summary.Disposition, summary.NextAction = "UNKNOWN", control.GateDeny, "reconcile_existing_effect_without_resend"
-		} else if summary.BlockedReason == "repair_budget_exhausted" {
-			summary.Status, summary.NextAction = "NEEDS_ATTENTION", "inspect_candidate_and_remaining_gates"
-		} else if errors.Is(cause, control.ErrScopeReplanRequired) {
-			summary.Status, summary.NextAction = "NEEDS_REPLAN", "request_candidate_bound_scope_replan"
-		}
+		outcome = control.ClassifyAutonomousFailure(s, cause)
+	} else {
+		outcome = control.ClassifyAutonomousFailure(control.Snapshot{}, errors.Join(cause, err))
 	}
+	summary.BlockedReason, summary.Status = outcome.PublicReason(), outcome.Status()
+	summary.Disposition, summary.NextAction = outcome.Disposition(), outcome.NextAction()
 	boundary := sanitizedAutonomousError(summary, cause)
 	if err := output(out, summary); err != nil {
 		return errors.Join(boundary, err)
@@ -606,30 +633,12 @@ func autonomousBlockReason(err error) string {
 	if err == nil {
 		return "unknown"
 	}
-	if errors.Is(err, control.ErrAutonomousVerificationNotRun) {
-		return "verification_not_run"
-	}
-	if errors.Is(err, control.ErrScopeReplanRequired) {
-		return "scope_replan_required"
-	}
-	message := strings.ToLower(err.Error())
-	switch {
-	case strings.Contains(message, "unknown"), strings.Contains(message, "uncertain"), strings.Contains(message, "unresolved"):
-		return "effect_requires_reconciliation"
-	case strings.Contains(message, "repair bound"), strings.Contains(message, "repair budget"):
-		return "repair_budget_exhausted"
-	case strings.Contains(message, "cancel"):
-		return "execution_interrupted"
-	case strings.Contains(message, "pending"):
-		return "pending_work_requires_observation"
-	default:
-		return "execution_blocked"
-	}
+	return control.ClassifyAutonomousFailure(control.Snapshot{}, err).PublicReason()
 }
 
 func requireRunBinding(s control.Snapshot, root, id string) error {
 	if s.RunID != id || filepath.Clean(s.Creation.Repository.Root) != filepath.Clean(root) {
-		return errors.New("journal/run repository binding mismatch")
+		return errors.Join(control.ErrAutonomousUnsafe, errors.New("journal/run repository binding mismatch"))
 	}
 	return nil
 }

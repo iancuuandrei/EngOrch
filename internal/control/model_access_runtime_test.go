@@ -116,8 +116,51 @@ func runFixtureAppServer() int {
 					ID string `json:"id"`
 				} `json:"implementation_task"`
 			}
-			if json.Unmarshal([]byte(params.Input[0].Text), &input) != nil || input.CandidateID == "" {
+			requestInput := []byte(params.Input[0].Text)
+			var candidateID string
+			var implementationTask *struct {
+				ID string `json:"id"`
+			}
+			for depth := 0; depth < 4; depth++ {
+				if json.Unmarshal(requestInput, &input) != nil {
+					return 5
+				}
+				if candidateID == "" && input.CandidateID != "" {
+					candidateID = input.CandidateID
+				}
+				if implementationTask == nil && input.ImplementationTask != nil {
+					implementationTask = input.ImplementationTask
+				}
+				var nested struct {
+					BaseInput     string `json:"base_input"`
+					OriginalInput string `json:"original_input"`
+				}
+				if json.Unmarshal(requestInput, &nested) != nil {
+					return 5
+				}
+				if nested.BaseInput != "" {
+					requestInput = []byte(nested.BaseInput)
+					continue
+				}
+				if nested.OriginalInput != "" {
+					requestInput = []byte(nested.OriginalInput)
+					continue
+				}
+				break
+			}
+			input.CandidateID = candidateID
+			input.ImplementationTask = implementationTask
+			if input.CandidateID == "" {
 				return 5
+			}
+			// Synthetic accounting belongs to this fixture turn, not a live
+			// provider qualification. Emit it before the completion response so
+			// finite-budget lifecycle tests exercise real notification binding.
+			counts := map[string]any{"inputTokens": 17, "cachedInputTokens": 5, "outputTokens": 9, "reasoningOutputTokens": 2, "totalTokens": 26}
+			if encoder.Encode(map[string]any{"method": "thread/tokenUsage/updated", "params": map[string]any{
+				"threadId": "thread-v2", "turnId": "turn-v2", "tokenUsage": map[string]any{"last": counts, "total": counts},
+			}}) != nil {
+				return 20
 			}
 			if strings.Contains(input.Instruction, "candidate_validate_anchored_edits") {
 				before := sha256.Sum256([]byte("base\n"))
@@ -211,6 +254,11 @@ func runFixtureAppServer() int {
 				result = map[string]any{"turn": map[string]any{"id": "turn-v2", "status": "completed", "itemsView": "full", "error": nil, "items": []any{map[string]any{"type": "agentMessage", "id": "message-v2", "phase": "final_answer", "text": string(output)}}}}
 				break
 			}
+			if strings.Contains(input.Question, scopeReplanQuestionPrefix) {
+				output, _ := json.Marshal(Exploration{CandidateID: input.CandidateID, Summary: "scope correction fixture", Paths: []string{"alpha.txt"}})
+				result = map[string]any{"turn": map[string]any{"id": "turn-v2", "status": "completed", "itemsView": "full", "error": nil, "items": []any{map[string]any{"type": "agentMessage", "id": "message-v2", "phase": "final_answer", "text": string(output)}}}}
+				break
+			}
 			if strings.Contains(input.Question, "REPAIR DESIGN") {
 				output, _ := json.Marshal(Exploration{CandidateID: input.CandidateID, Summary: "repair fixture path", Paths: []string{"repair.go"}})
 				result = map[string]any{"turn": map[string]any{"id": "turn-v2", "status": "completed", "itemsView": "full", "error": nil, "items": []any{map[string]any{"type": "agentMessage", "id": "message-v2", "phase": "final_answer", "text": string(output)}}}}
@@ -218,6 +266,20 @@ func runFixtureAppServer() int {
 			}
 			if input.ImplementationTask != nil && input.ImplementationTask.ID != "" {
 				stateRoot := filepath.Dir(filepath.Dir(filepath.Dir(os.Getenv("CODEX_HOME"))))
+				if input.ImplementationTask.ID == "impl-alpha" {
+					modePath := filepath.Join(stateRoot, "scheduled-scope-correction-mode")
+					if _, statErr := os.Stat(modePath); statErr == nil {
+						firstPath := filepath.Join(stateRoot, "scheduled-scope-correction-malformed-once")
+						marker, markerErr := os.OpenFile(firstPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+						if markerErr == nil {
+							_ = marker.Close()
+							result = map[string]any{"turn": map[string]any{"id": "turn-v2", "status": "completed", "itemsView": "full", "error": nil, "items": []any{map[string]any{"type": "agentMessage", "id": "message-v2", "phase": "final_answer", "text": "not-json"}}}}
+							break
+						} else if !errors.Is(markerErr, os.ErrExist) {
+							return 21
+						}
+					}
+				}
 				if _, err := os.Stat(filepath.Join(stateRoot, "graph-writer-barrier")); err == nil {
 					marker := filepath.Join(stateRoot, "ready-"+input.ImplementationTask.ID)
 					if err := os.WriteFile(marker, []byte("ready"), 0600); err != nil {
@@ -649,6 +711,15 @@ func TestMixedFakePlannerAndCodexWriterShareRunBudget(t *testing.T) {
 }
 
 func TestV2MixedWriterRunsThroughCodexHostAndAccessLifecycle(t *testing.T) {
+	assertV2MixedWriterUsageLifecycle(t, true)
+}
+
+func TestV2FiniteWriterUsageRefusesBeforeAccessAdmission(t *testing.T) {
+	assertV2MixedWriterUsageLifecycle(t, false)
+}
+
+func assertV2MixedWriterUsageLifecycle(t *testing.T, qualified bool) {
+	t.Helper()
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -666,7 +737,7 @@ func TestV2MixedWriterRunsThroughCodexHostAndAccessLifecycle(t *testing.T) {
 	if err := os.WriteFile(authSource, []byte(`{"tokens":{"access_token":"fixture-token","account_id":"fixture-account"}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	c.Config.Codex = &config.Codex{Executable: executable, ExecutableHash: executableHash, StateRoot: stateRoot, AuthSource: authSource}
+	c.Config.Codex = &config.Codex{Executable: executable, ExecutableHash: executableHash, StateRoot: stateRoot, AuthSource: authSource, UsageQualified: qualified}
 	c.Config.Access = &config.Access{
 		Class: access.Private, Limits: access.Limits{Tokens: 1000, Concurrency: 1},
 		Profiles: []access.Profile{
@@ -728,6 +799,23 @@ func TestV2MixedWriterRunsThroughCodexHostAndAccessLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	record, err := RunWriter(context.Background(), path)
+	if !qualified {
+		if !errors.Is(err, ErrUsageQualification) {
+			t.Fatalf("unqualified finite budget lost pre-dispatch refusal: %v", err)
+		}
+		stopped, inspectErr := Inspect(path)
+		if inspectErr != nil || len(stopped.ModelAccess) != 0 || stopped.WriterProposal != nil || stopped.WriterHost != nil {
+			t.Fatalf("qualification refusal admitted model work: %+v %v", stopped.ModelAccess, inspectErr)
+		}
+		if _, statErr := os.Stat(modelAccessJournal(path)); !os.IsNotExist(statErr) {
+			t.Fatalf("qualification refusal created access sidecar: %v", statErr)
+		}
+		outcome := ClassifyAutonomousFailure(stopped, err)
+		if outcome.Status() != "NEEDS_ATTENTION" || outcome.PublicReason() != "usage_not_qualified" {
+			t.Fatalf("pre-dispatch refusal became uncertain: %s %s", outcome.Status(), outcome.PublicReason())
+		}
+		return
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

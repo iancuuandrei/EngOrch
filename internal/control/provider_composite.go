@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"errors"
+	"time"
 
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/contextbroker"
@@ -17,12 +18,20 @@ import (
 
 // The bound transport remains serial; this is waiting HTTP requests, not agent
 // execution slots or permission for additional tool effects.
-const compositeToolQueueLimit = 32
+const compositeToolQueueLimit = contextmcp.InvocationToolCallBudget - 1
 
 func prepareProviderComposite(ctx context.Context, controllerPath, runtimePath string, invocation runtime.Invocation, broker *contextbroker.Broker, contextBinding contextbroker.Binding, events []journal.Event) (*contextmcp.RecorderOwnedConfig, *toolreceipts.Binding, opencode.CompositeBackendVerifier, error) {
 	schedulerPath, boundSchedule := scheduledDispatchJournalPath(ctx)
 	recovering := len(events) != 0
-	maxQueuedCalls := compositeToolQueueLimit
+	maxCalls := contextBinding.Limits.MaxCalls
+	if maxCalls > contextmcp.InvocationToolCallBudget {
+		maxCalls = contextmcp.InvocationToolCallBudget
+	}
+	maxQueuedCalls := maxCalls - 1
+	queueWaitTimeout, callbackTimeout := time.Duration(maxQueuedCalls)*contextmcp.RecorderOwnedBridgeCallTimeout, contextmcp.RecorderOwnedBridgeCallTimeout
+	if maxQueuedCalls < 1 {
+		maxQueuedCalls, queueWaitTimeout, callbackTimeout = 0, 0, 0
+	}
 	if recovering {
 		var prior opencoderuntime.Intent
 		if err := canonical.Decode(events[0].Payload, &prior); err != nil {
@@ -38,6 +47,8 @@ func prepareProviderComposite(ctx context.Context, controllerPath, runtimePath s
 		// Recovery preserves the original bound admission policy, including the
 		// legacy zero-queue binding. It never upgrades a recorded invocation.
 		maxQueuedCalls = prior.ToolReceipts.MaxQueuedCalls
+		queueWaitTimeout = time.Duration(prior.ToolReceipts.QueueWaitMillis) * time.Millisecond
+		callbackTimeout = time.Duration(prior.ToolReceipts.CallbackTimeoutMillis) * time.Millisecond
 		if !boundSchedule {
 			return nil, nil, nil, errors.New("composite recovery requires exact scheduler context")
 		}
@@ -74,7 +85,12 @@ func prepareProviderComposite(ctx context.Context, controllerPath, runtimePath s
 			return nil, nil, nil, err
 		}
 	}
-	binding, err := contextmcp.PrepareRecorderBindingWithQueue(broker, invocation.ID, callerID, projection, maxQueuedCalls)
+	var binding toolreceipts.Binding
+	if queueWaitTimeout > 0 || callbackTimeout > 0 {
+		binding, err = contextmcp.PrepareRecorderBindingWithTimeouts(broker, invocation.ID, callerID, projection, maxQueuedCalls, queueWaitTimeout, callbackTimeout)
+	} else {
+		binding, err = contextmcp.PrepareRecorderBindingWithQueue(broker, invocation.ID, callerID, projection, maxQueuedCalls)
+	}
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -82,6 +98,6 @@ func prepareProviderComposite(ctx context.Context, controllerPath, runtimePath s
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	config := &contextmcp.RecorderOwnedConfig{Path: runtimePath + ".tool-receipts", InvocationID: invocation.ID, CallerBindingSHA256: callerID, CatalogSHA256: binding.CatalogSHA256, AgentProjection: projection, MaxQueuedCalls: maxQueuedCalls}
+	config := &contextmcp.RecorderOwnedConfig{Path: runtimePath + ".tool-receipts", InvocationID: invocation.ID, CallerBindingSHA256: callerID, CatalogSHA256: binding.CatalogSHA256, AgentProjection: projection, MaxQueuedCalls: maxQueuedCalls, QueueWaitTimeout: queueWaitTimeout, CallbackTimeout: callbackTimeout}
 	return config, &binding, verify, nil
 }

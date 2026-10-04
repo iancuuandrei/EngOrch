@@ -19,6 +19,7 @@ const (
 	reviewImpactMaxRecordBytes  = 900 << 10
 	reviewImpactMaxGroupFiles   = 8
 	reviewImpactMaxHistory      = 9 // initial review plus the maximum eight repairs
+	reviewImpactRIUnavailable   = "candidate_review_ri_unavailable"
 )
 
 // reviewImpactCorpusInput is the source-free deterministic input needed to
@@ -236,7 +237,37 @@ func maybeAdmitReviewImpactContext(ctx context.Context, path string) error {
 		}
 		corpus, err := ri.CollectCandidateGoCorpus(ctx, s.Creation.Repository, *s.Workspace, *s.Candidate, baseGraph, baseInventory, client, cacheDir)
 		if err != nil {
-			return err
+			if !ri.IsProcessUnavailableOnly(err) {
+				return err
+			}
+			record, recordErr := makeReviewImpactRIUnavailableRecord(s, source, baseGraph, baseInventory)
+			if recordErr != nil {
+				return recordErr
+			}
+			if recordErr = validateReviewImpactContextRecord(s, record); recordErr != nil {
+				return recordErr
+			}
+			// Re-capture after the optional RI failure before persisting fallback
+			// evidence. The admitted baseline review must still bind this exact
+			// candidate; process unavailability never relaxes candidate identity.
+			current, _, captureErr := worktree.Capture(ctx, *s.Workspace)
+			if captureErr != nil || current != *s.Candidate {
+				if captureErr != nil {
+					return captureErr
+				}
+				return errors.New("review impact candidate changed after RI became unavailable")
+			}
+			if appendErr := Append(path, "review.impact-context-admitted", record); appendErr != nil {
+				return appendErr
+			}
+			after, _, captureErr := worktree.Capture(ctx, *s.Workspace)
+			if captureErr != nil || after != *s.Candidate {
+				if captureErr != nil {
+					return captureErr
+				}
+				return errors.New("review impact candidate changed during fallback admission")
+			}
+			return nil
 		}
 		if err := ri.ValidateCandidateGoModuleInventory(corpus.ModuleInventory, s.Creation.Repository, *s.Candidate, baseInventory); err != nil {
 			return err
@@ -268,6 +299,25 @@ func maybeAdmitReviewImpactContext(ctx context.Context, path string) error {
 		return nil
 	})
 	return errors.Join(admissionErr, lease.Close())
+}
+
+func makeReviewImpactRIUnavailableRecord(s Snapshot, source ri.Source, baseGraph ri.GoEngineeringGraph, baseInventory ri.GoModuleInventory) (ReviewImpactContextRecord, error) {
+	if s.Candidate == nil || s.PlannerGoContext == nil || s.Creation.Execution == nil {
+		return ReviewImpactContextRecord{}, errors.New("review impact fallback lacks candidate or planner binding")
+	}
+	candidateID, err := s.Candidate.ID()
+	if err != nil {
+		return ReviewImpactContextRecord{}, err
+	}
+	return sealReviewImpactRecord(ReviewImpactContextRecord{
+		Version: reviewImpactContextVersion1, RunID: s.RunID, Source: source, Candidate: *s.Candidate,
+		CandidateID: candidateID, CandidateFilesHash: s.Candidate.FilesHash,
+		PlannerGoContextRecordID: s.PlannerGoContext.RecordID,
+		RIExecutableSHA256:       s.Creation.Execution.PlannerContextRIExecutableSHA256,
+		BaseGraphDigest:          baseGraph.Digest, BaseModuleInventoryDigest: baseInventory.Digest,
+		UnavailableReason: reviewImpactRIUnavailable,
+		Omissions:         []taskcontext.Omission{},
+	})
 }
 
 func makeReviewImpactContextRecord(s Snapshot, source ri.Source, baseGraph ri.GoEngineeringGraph, baseInventory ri.GoModuleInventory, corpus ri.GoCandidateCorpus) (ReviewImpactContextRecord, error) {
@@ -443,8 +493,15 @@ func validateReviewImpactContextRecord(s Snapshot, record ReviewImpactContextRec
 	if err != nil {
 		return err
 	}
-	if record.Version != reviewImpactContextVersion1 || record.RunID != s.RunID || record.Source != source || record.Candidate != *s.Candidate || record.CandidateID != candidateID || record.CandidateFilesHash != s.Candidate.FilesHash || record.PlannerGoContextRecordID != s.PlannerGoContext.RecordID || record.RIExecutableSHA256 != s.Creation.Execution.PlannerContextRIExecutableSHA256 || record.BaseGraphDigest != baseGraph.Digest || record.BaseModuleInventoryDigest != baseInventory.Digest || safepath.RequireDigest(record.CandidateGraphDigest) != nil || safepath.RequireDigest(record.CandidateModuleInventoryDigest) != nil || record.ChangedPathCount < 0 || record.AdmittedPathCount < 0 || record.DeletedPathCount < 0 || record.OmittedCount < 0 || record.OmittedCount < len(record.Omissions) || len(record.Omissions) > 64 || record.OmissionsTrimmed != (record.OmittedCount > len(record.Omissions)) {
+	if record.Version != reviewImpactContextVersion1 || record.RunID != s.RunID || record.Source != source || record.Candidate != *s.Candidate || record.CandidateID != candidateID || record.CandidateFilesHash != s.Candidate.FilesHash || record.PlannerGoContextRecordID != s.PlannerGoContext.RecordID || record.RIExecutableSHA256 != s.Creation.Execution.PlannerContextRIExecutableSHA256 || record.BaseGraphDigest != baseGraph.Digest || record.BaseModuleInventoryDigest != baseInventory.Digest || record.ChangedPathCount < 0 || record.AdmittedPathCount < 0 || record.DeletedPathCount < 0 || record.OmittedCount < 0 || record.OmittedCount < len(record.Omissions) || len(record.Omissions) > 64 || record.OmissionsTrimmed != (record.OmittedCount > len(record.Omissions)) {
 		return errors.New("review impact context binding mismatch")
+	}
+	if record.UnavailableReason == reviewImpactRIUnavailable {
+		if record.CandidateGraphDigest != "" || record.CandidateModuleInventoryDigest != "" || record.Corpus != nil || record.Projection != nil || record.CandidateModuleInventory != nil || record.ChangedPathCount != 0 || record.AdmittedPathCount != 0 || record.DeletedPathCount != 0 || record.OmittedCount != 0 || len(record.Omissions) != 0 || record.OmissionsTrimmed {
+			return errors.New("RI-unavailable review impact record contains unobserved candidate analysis")
+		}
+	} else if safepath.RequireDigest(record.CandidateGraphDigest) != nil || safepath.RequireDigest(record.CandidateModuleInventoryDigest) != nil {
+		return errors.New("review impact context candidate graph binding missing")
 	}
 	if err := record.Candidate.ValidateBinding(*s.Workspace); err != nil {
 		return errors.New("review impact candidate workspace binding mismatch")
@@ -476,11 +533,16 @@ func validateReviewImpactContextRecord(s Snapshot, record ReviewImpactContextRec
 			return err
 		}
 	} else {
-		if record.UnavailableReason != "candidate_review_record_budget" || record.Corpus != nil || record.Projection != nil || record.CandidateModuleInventory == nil {
+		if record.UnavailableReason == reviewImpactRIUnavailable {
+			if record.Corpus != nil || record.Projection != nil || record.CandidateModuleInventory != nil {
+				return errors.New("RI-unavailable review impact record contains candidate projection data")
+			}
+		} else if record.UnavailableReason != "candidate_review_record_budget" || record.Corpus != nil || record.Projection != nil || record.CandidateModuleInventory == nil {
 			return errors.New("invalid unavailable review impact record")
-		}
-		if err := ri.ValidateCandidateGoModuleInventory(*record.CandidateModuleInventory, s.Creation.Repository, *s.Candidate, baseInventory); err != nil {
-			return err
+		} else {
+			if err := ri.ValidateCandidateGoModuleInventory(*record.CandidateModuleInventory, s.Creation.Repository, *s.Candidate, baseInventory); err != nil {
+				return err
+			}
 		}
 	}
 	id, err := reviewImpactContextRecordID(record)

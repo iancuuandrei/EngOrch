@@ -146,6 +146,7 @@ func composeAnchoredProposal(proposal writercontract.AnchoredProposal, manifest 
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Path < ordered[j].Path })
 	changes := make([]fileeffects.Change, 0, len(ordered))
 	used := make(map[string]bool, len(ordered))
+	var contentFailure error
 	for i, change := range ordered {
 		if i > 0 && ordered[i-1].Path == change.Path {
 			return nil, errors.New("anchored change paths must be unique")
@@ -175,7 +176,9 @@ func composeAnchoredProposal(proposal writercontract.AnchoredProposal, manifest 
 			var err error
 			content, err = anchoredit.Apply([]byte(original), toAnchorEdits(change.Edits))
 			if err != nil {
-				return nil, fmt.Errorf("anchored edit %q: %w", change.Path, err)
+				if contentFailure == nil {
+					contentFailure = fmt.Errorf("anchored edit %q: %w", change.Path, err)
+				}
 			}
 			used[change.Path] = true
 		}
@@ -190,6 +193,9 @@ func composeAnchoredProposal(proposal writercontract.AnchoredProposal, manifest 
 	if len(used) != len(before) {
 		return nil, errors.New("anchored edit preimages include unused paths")
 	}
+	if contentFailure != nil {
+		return nil, rejectedSemanticOutput(contentFailure)
+	}
 	return changes, nil
 }
 
@@ -201,7 +207,14 @@ func toAnchorEdits(edits []writercontract.AnchoredEdit) []anchoredit.Edit {
 	return out
 }
 
-func readAnchoredPreimages(ctx context.Context, path string, s Snapshot, proposal writercontract.AnchoredProposal) (manifest []worktree.FileState, preimages []WriterEditPreimage, err error) {
+func readAnchoredPreimages(ctx context.Context, path string, s Snapshot, proposal writercontract.AnchoredProposal, taskIDs ...string) (manifest []worktree.FileState, preimages []WriterEditPreimage, err error) {
+	if len(taskIDs) > 1 {
+		return nil, nil, ErrAutonomousUnsafe
+	}
+	taskID := ""
+	if len(taskIDs) == 1 {
+		taskID = taskIDs[0]
+	}
 	if s.Workspace == nil || s.Candidate == nil {
 		return nil, nil, errors.New("anchored edits require a confirmed workspace candidate")
 	}
@@ -211,6 +224,10 @@ func readAnchoredPreimages(ctx context.Context, path string, s Snapshot, proposa
 	}
 	defer func() { err = errors.Join(err, lease.Close()) }()
 	latest, err := Inspect(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	latest, err = anchoredCorrectionSnapshot(latest, taskID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -292,6 +309,10 @@ func readAnchoredPreimages(ctx context.Context, path string, s Snapshot, proposa
 		return nil, nil, err
 	}
 	current, err := Inspect(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	current, err = anchoredCorrectionSnapshot(current, taskID)
 	if err != nil {
 		return nil, nil, err
 	}

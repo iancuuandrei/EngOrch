@@ -1,6 +1,7 @@
 package codexruntime
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,12 +9,14 @@ import (
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/codexrpc"
 	"harness.local/engorch/internal/codexusage"
+	"harness.local/engorch/internal/journal"
 	"harness.local/engorch/internal/runtime"
 )
 
 // UsagePolicy is fixed before turn dispatch. Zero baseline is only legitimate
 // here because Execute always creates a new thread, never resumes one.
 type UsagePolicy struct {
+	Version         int                   `json:"version,omitempty"`
 	UnlimitedTokens bool                  `json:"unlimited_tokens,omitempty"`
 	ThreadID        string                `json:"thread_id"`
 	Baseline        codexusage.TokenUsage `json:"baseline"`
@@ -50,7 +53,15 @@ func (s *UsageStop) InterruptTarget() (string, string) { return s.ThreadID, s.Tu
 
 func (a *Adapter) beginUsage(thread codexrpc.ThreadSettings) error {
 	zero := int64(0)
-	return appendEvent(a.JournalPath, "runtime.usage-baseline", UsagePolicy{UnlimitedTokens: a.UnlimitedTokens, Baseline: codexusage.TokenUsage{CacheWriteInputTokens: &zero}, ThreadID: thread.ThreadID, Budget: a.UsageBudget, Required: a.RequireLiveUsage, Qualified: a.UsageQualified, Origin: "FRESH_THREAD"})
+	return appendEvent(a.JournalPath, "runtime.usage-baseline", UsagePolicy{Version: 1, UnlimitedTokens: a.UnlimitedTokens, Baseline: codexusage.TokenUsage{CacheWriteInputTokens: &zero}, ThreadID: thread.ThreadID, Budget: a.UsageBudget, Required: a.requiresUsageAdmission(), Qualified: a.UsageQualified, Origin: "FRESH_THREAD"})
+}
+
+func (a *Adapter) requiresUsageAdmission() bool {
+	return a.RequireLiveUsage || a.UsageBudget > 0
+}
+
+func usageRequired(policy *UsagePolicy) bool {
+	return policy != nil && policy.Required
 }
 
 func normalizeUsage(s *State) UsageNormalized {
@@ -71,6 +82,8 @@ func normalizeUsageWithDecoder(s *State, version int, decode func([]byte) (codex
 		n.Failure = "USAGE_INVALID_EVENT"
 		if s.usageTracker != nil {
 			n.Receipt = s.usageTracker.Receipt()
+		} else if version != 0 {
+			n.Receipt = unknownUsageReceipt(s)
 		}
 		return n
 	}
@@ -89,6 +102,9 @@ func normalizeUsageWithDecoder(s *State, version int, decode func([]byte) (codex
 		s.usageTracker, err = codexusage.NewTracker(s.Thread.ThreadID, event.TurnID, s.UsagePolicy.Baseline, budget)
 		if err != nil {
 			n.Failure = err.Error()
+			if version != 0 {
+				n.Receipt = unknownUsageReceipt(s)
+			}
 			return n
 		}
 		s.UsageTurnID = event.TurnID
@@ -103,6 +119,27 @@ func normalizeUsageWithDecoder(s *State, version int, decode func([]byte) (codex
 	return n
 }
 
+func unknownUsageReceipt(s *State) codexusage.Receipt {
+	threadID := ""
+	if s != nil && s.UsagePolicy != nil {
+		threadID = s.UsagePolicy.ThreadID
+	}
+	turnID := ""
+	if s != nil {
+		turnID = s.UsageTurnID
+		if turnID == "" {
+			turnID = s.TurnID
+		}
+	}
+	return codexusage.Receipt{
+		ThreadID:  threadID,
+		TurnID:    turnID,
+		Source:    codexusage.SourceCodexAppServer,
+		Coverage:  codexusage.CoverageUnknown,
+		Anomalies: []string{},
+	}
+}
+
 // observeUsage executes on the serial RPC reader before another tool reply.
 // The raw params are durable before normalization or budget mutation.
 func (a *Adapter) observeUsage(m codexrpc.Message) error {
@@ -112,8 +149,26 @@ func (a *Adapter) observeUsage(m codexrpc.Message) error {
 	if m.Method != "thread/tokenUsage/updated" {
 		return nil
 	}
-	if err := appendEvent(a.JournalPath, "runtime.usage-raw", m); err != nil {
+	before, err := Inspect(a.JournalPath)
+	if err != nil {
 		return err
+	}
+	if err := appendEvent(a.JournalPath, "runtime.usage-raw", m); err != nil {
+		if !usageRequired(before.UsagePolicy) {
+			committed, fallback, inspectErr := inspectOptionalUsageRawFailure(a.JournalPath, before, m, err)
+			if inspectErr != nil {
+				return inspectErr
+			}
+			if fallback {
+				a.usageMetadataUnavailable = true
+				return nil
+			}
+			if !committed {
+				return err
+			}
+		} else {
+			return err
+		}
 	}
 	s, err := Inspect(a.JournalPath)
 	if err != nil {
@@ -121,9 +176,27 @@ func (a *Adapter) observeUsage(m codexrpc.Message) error {
 	}
 	n := normalizeUsage(&s)
 	if err := appendEvent(a.JournalPath, "runtime.usage-normalized", n); err != nil {
-		return err
+		if !usageRequired(s.UsagePolicy) {
+			committed, fallback, inspectErr := inspectOptionalUsageNormalizationFailure(a.JournalPath, s, n, err)
+			if inspectErr != nil {
+				return inspectErr
+			}
+			if fallback {
+				a.usageMetadataUnavailable = true
+				return nil
+			}
+			if !committed {
+				return err
+			}
+		}
+		if usageRequired(s.UsagePolicy) {
+			return err
+		}
 	}
 	if n.Failure != "" {
+		if !usageRequired(s.UsagePolicy) && n.Failure != "BUDGET_EXHAUSTED" {
+			return nil
+		}
 		stop := UsageStop{n.Failure, s.Thread.ThreadID, s.UsageTurnID}
 		if stop.TurnID == "" {
 			return errors.New(n.Failure)
@@ -136,11 +209,97 @@ func (a *Adapter) observeUsage(m codexrpc.Message) error {
 	return nil
 }
 
+// inspectOptionalUsageRawFailure permits optional degradation only when the
+// readable journal still proves the same invocation and the raw notification
+// was not appended. A lock failure or changed journal identity stops capture.
+func inspectOptionalUsageRawFailure(path string, before State, message codexrpc.Message, appendErr error) (committed, fallback bool, err error) {
+	if errors.Is(appendErr, journal.ErrLockUnavailable) {
+		return false, false, appendErr
+	}
+	current, inspectErr := Inspect(path)
+	if inspectErr != nil {
+		return false, false, errors.Join(appendErr, inspectErr)
+	}
+	if err := sameUsageJournalIdentity(before, current); err != nil {
+		return false, false, errors.Join(appendErr, err)
+	}
+	if before.UsagePending != nil || before.UsageFailure != "" || before.Result != nil || before.SemanticResult != nil {
+		return false, false, errors.Join(appendErr, errors.New("usage raw append did not start from an empty pending state"))
+	}
+	if current.UsagePending != nil {
+		if current.UsagePending.Method != message.Method || !bytes.Equal(current.UsagePending.Params, message.Params) || current.UsageFailure != "" {
+			return false, false, errors.Join(appendErr, errors.New("usage raw append outcome is not attributable"))
+		}
+		return true, false, nil
+	}
+	if current.UsageFailure != before.UsageFailure || current.TurnStatus != before.TurnStatus || current.TurnPending != before.TurnPending {
+		return false, false, errors.Join(appendErr, errors.New("usage journal changed during raw notification append"))
+	}
+	return false, true, nil
+}
+
+func sameUsageJournalIdentity(before, current State) error {
+	if before.Intent == nil || current.Intent == nil || before.Intent.Invocation.ID != current.Intent.Invocation.ID || before.Intent.Directory != current.Intent.Directory ||
+		before.Thread == nil || current.Thread == nil || before.Thread.ThreadID != current.Thread.ThreadID ||
+		before.TurnID != current.TurnID || before.UsageTurnID != current.UsageTurnID || before.UsagePolicy == nil || current.UsagePolicy == nil {
+		return errors.New("usage journal identity changed")
+	}
+	beforePolicy, beforeErr := canonical.Hash("harness.codex-usage-policy.v1", *before.UsagePolicy)
+	currentPolicy, currentErr := canonical.Hash("harness.codex-usage-policy.v1", *current.UsagePolicy)
+	if beforeErr != nil || currentErr != nil || beforePolicy != currentPolicy {
+		return errors.Join(beforeErr, currentErr, errors.New("usage policy changed"))
+	}
+	return nil
+}
+
+// inspectOptionalUsageNormalizationFailure permits optional degradation only
+// when the readable journal still proves the same invocation, thread, turn,
+// usage policy, and raw notification. A lock failure remains an observer stop;
+// it is not evidence that the normalizer append was safely skipped.
+func inspectOptionalUsageNormalizationFailure(path string, before State, normalized UsageNormalized, appendErr error) (committed, fallback bool, err error) {
+	current, inspectErr := Inspect(path)
+	if inspectErr != nil {
+		return false, false, errors.Join(appendErr, inspectErr)
+	}
+	if identityErr := sameUsageJournalIdentity(before, current); identityErr != nil {
+		return false, false, errors.Join(appendErr, identityErr)
+	}
+	if before.UsagePending == nil {
+		return false, false, errors.Join(appendErr, errors.New("usage normalization lacks its pending raw notification"))
+	}
+	if current.UsagePending == nil {
+		wantReceipt := &normalized.Receipt
+		if current.UsagePolicy.Version == 1 && normalized.Failure != "" && normalized.Failure != "BUDGET_EXHAUSTED" {
+			wantReceipt = nil
+		}
+		if current.UsageFailure != normalized.Failure || !sameUsageReceipt(current.UsageReceipt, wantReceipt) {
+			return false, false, errors.Join(appendErr, errors.New("usage normalization append outcome is not attributable"))
+		}
+		return true, false, nil
+	}
+	if current.UsagePending.Method != before.UsagePending.Method || !bytes.Equal(current.UsagePending.Params, before.UsagePending.Params) || current.UsageFailure != before.UsageFailure {
+		return false, false, errors.Join(appendErr, errors.New("usage raw notification changed during normalization"))
+	}
+	if errors.Is(appendErr, journal.ErrLockUnavailable) {
+		return false, false, appendErr
+	}
+	return false, true, nil
+}
+
+func sameUsageReceipt(a, b *codexusage.Receipt) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	left, leftErr := canonical.Hash("harness.codex-usage-receipt.v1", *a)
+	right, rightErr := canonical.Hash("harness.codex-usage-receipt.v1", *b)
+	return leftErr == nil && rightErr == nil && left == right
+}
+
 func (s *State) usageEvent(kind string, raw json.RawMessage) error {
 	switch kind {
 	case "runtime.usage-baseline":
 		var p UsagePolicy
-		if s.Thread == nil || s.TurnPending || s.UsagePolicy != nil || canonical.Decode(raw, &p) != nil || p.ThreadID != s.Thread.ThreadID || p.Origin != "FRESH_THREAD" || p.Budget < 0 || p.UnlimitedTokens && p.Budget != 0 || p.Required && (!p.Qualified || p.Budget < 1 && !p.UnlimitedTokens) {
+		if s.Thread == nil || s.TurnPending || s.UsagePolicy != nil || canonical.Decode(raw, &p) != nil || p.Version < 0 || p.Version > 1 || p.ThreadID != s.Thread.ThreadID || p.Origin != "FRESH_THREAD" || p.Budget < 0 || p.UnlimitedTokens && p.Budget != 0 || p.Required && (!p.Qualified || p.Budget < 1 && !p.UnlimitedTokens) || p.Version == 1 && p.Budget > 0 && !p.Required {
 			return errors.New("invalid usage baseline")
 		}
 		zeroCount := int64(0)
@@ -175,12 +334,19 @@ func (s *State) usageEvent(kind string, raw json.RawMessage) error {
 		}
 		s.usageTracker = t
 		s.UsageTurnID = start.TurnID
-		receipt := t.Receipt()
-		s.UsageReceipt = &receipt
+		if s.UsagePolicy.Version != 1 || s.UsageFailure == "" && s.UsagePending == nil {
+			receipt := t.Receipt()
+			s.UsageReceipt = &receipt
+		}
 	case "runtime.usage-raw":
 		var m codexrpc.Message
-		if s.UsagePolicy == nil || s.UsagePending != nil || s.UsageFailure != "" || s.Result != nil || canonical.Decode(raw, &m) != nil || m.Method != "thread/tokenUsage/updated" || len(m.Params) > 16384 {
+		if s.UsagePolicy == nil || s.UsagePending != nil || s.UsageFailure != "" || s.SemanticResult != nil || s.Result != nil || canonical.Decode(raw, &m) != nil || m.Method != "thread/tokenUsage/updated" || len(m.Params) > 16384 {
 			return errors.New("invalid usage raw transition")
+		}
+		// Until the newest notification is validated, earlier totals are not a
+		// final accounting observation for this turn.
+		if s.UsagePolicy.Version == 1 {
+			s.UsageReceipt = nil
 		}
 		s.UsagePending = &m
 	case "runtime.usage-normalized":
@@ -206,6 +372,9 @@ func (s *State) usageEvent(kind string, raw json.RawMessage) error {
 			return errors.New("usage normalization differs from raw evidence")
 		}
 		s.UsageReceipt = &got.Receipt
+		if s.UsagePolicy.Version == 1 && got.Failure != "" && got.Failure != "BUDGET_EXHAUSTED" {
+			s.UsageReceipt = nil
+		}
 		s.UsageFailure = got.Failure
 		s.UsagePending = nil
 		if s.RouteResumes > 0 && got.Failure == "" {
@@ -235,25 +404,28 @@ func (s *State) usageEvent(kind string, raw json.RawMessage) error {
 	return nil
 }
 
+// ErrUsageReconciliation blocks admission while required accounting is unresolved.
+var ErrUsageReconciliation = errors.New("usage requires reconciliation")
+
 func (a *Adapter) attachUsage(result *runtime.Result) error {
 	s, err := Inspect(a.JournalPath)
 	if err != nil {
 		return err
 	}
 	if s.UsageFailure != "" || s.UsagePending != nil {
-		return errors.New("usage admission blocked")
+		return ErrUsageReconciliation
 	}
 	if s.UsagePolicy == nil {
 		return nil
 	} // legacy recovery retains old evidence
 	if s.UsagePolicy.Required && s.RouteResumes > 0 && !s.UsageHydrated {
 		err := appendEvent(a.JournalPath, "runtime.usage-blocked", UsageStop{"USAGE_HYDRATION_MISSING", s.Thread.ThreadID, s.TurnID})
-		return errors.Join(errors.New("USAGE_HYDRATION_MISSING"), err)
+		return errors.Join(ErrUsageReconciliation, errors.New("USAGE_HYDRATION_MISSING"), err)
 	}
 	if s.UsageReceipt == nil || s.UsageReceipt.Coverage != "OBSERVED" {
 		if s.UsagePolicy.Required {
 			err := appendEvent(a.JournalPath, "runtime.usage-blocked", UsageStop{"USAGE_MISSING", s.Thread.ThreadID, s.TurnID})
-			return errors.Join(errors.New("USAGE_MISSING"), err)
+			return errors.Join(ErrUsageReconciliation, errors.New("USAGE_MISSING"), err)
 		}
 		return nil
 	}

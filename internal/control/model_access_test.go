@@ -1,6 +1,7 @@
 package control
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -55,6 +56,20 @@ func modelAccessSnapshot(t *testing.T, kind string) Snapshot {
 }
 
 func modelAccessProfilePointer(profile runtime.Profile) *runtime.Profile { return &profile }
+
+func TestCodexFiniteUsageRequiresQualificationWithoutStrictFlag(t *testing.T) {
+	s := modelAccessSnapshot(t, "subscription")
+	s.Creation.Config.Codex = &config.Codex{}
+	for _, role := range []string{"planner", "explorer", "writer", "fixer", "reviewer"} {
+		if _, _, _, _, err := codexRuntimeUsagePolicy(s, role); !errors.Is(err, ErrUsageQualification) {
+			t.Fatalf("finite %s budget must refuse before admission: %v", role, err)
+		}
+	}
+	s.Creation.Config.Codex.UsageQualified = true
+	if budget, strict, qualified, unlimited, err := codexRuntimeUsagePolicy(s, "writer"); err != nil || budget != 300 || strict || !qualified || unlimited {
+		t.Fatalf("qualified finite reservation changed: %d %v %v %v %v", budget, strict, qualified, unlimited, err)
+	}
+}
 
 func TestDeriveModelAccessIntentAllRoles(t *testing.T) {
 	s := modelAccessSnapshot(t, "subscription")

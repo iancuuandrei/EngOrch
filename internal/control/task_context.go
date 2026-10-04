@@ -11,6 +11,7 @@ import (
 
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/journal"
+	"harness.local/engorch/internal/ri"
 	"harness.local/engorch/internal/safepath"
 	"harness.local/engorch/internal/taskcontext"
 	"harness.local/engorch/internal/worktree"
@@ -21,11 +22,13 @@ import (
 const taskContextBoundedV1 = "bounded-v1"
 
 const (
-	taskContextVersion      = 1
-	taskContextMaxReadFiles = 24
-	taskContextMaxFileBytes = 32768
-	taskContextMaxInput     = 768 << 10
-	taskContextQueryCap     = 16 << 10
+	taskContextVersion                  = 1
+	taskContextRIUnavailableVersion     = 2
+	taskContextLexicalUnavailableReason = "candidate_lexical_search_unavailable"
+	taskContextMaxReadFiles             = 24
+	taskContextMaxFileBytes             = 32768
+	taskContextMaxInput                 = 768 << 10
+	taskContextQueryCap                 = 16 << 10
 	// taskContextFullQueryMax aligns the full question/objective admission bound
 	// with the CLI 256KiB limit. Selection text stays capped at 16KiB; the full
 	// digest and length remain bound in the record. Serialized role invocation
@@ -53,20 +56,21 @@ type TaskContextRecord struct {
 	Role    string `json:"role"`
 	// IsolationTaskID binds writer context to one confirmed child candidate.
 	// Empty preserves the historical record shape.
-	IsolationTaskID   string                     `json:"isolation_task_id,omitempty"`
-	SourceID          string                     `json:"source_id"`
-	CandidateID       string                     `json:"candidate_id"`
-	Query             string                     `json:"query"`
-	QueryTruncated    bool                       `json:"query_truncated,omitempty"`
-	QueryHash         string                     `json:"query_hash"`
-	QueryLen          int                        `json:"query_len"`
-	Manifest          taskcontext.Manifest       `json:"manifest"`
-	ManifestID        string                     `json:"manifest_id,omitempty"`
-	LexicalBuildID    string                     `json:"lexical_build_id,omitempty"`
-	LexicalOverlayID  string                     `json:"lexical_overlay_id,omitempty"`
-	LexicalSearches   []TaskContextLexicalSearch `json:"lexical_searches,omitempty"`
-	LexicalSearchesID string                     `json:"lexical_searches_id,omitempty"`
-	Unavailable       string                     `json:"unavailable,omitempty"`
+	IsolationTaskID          string                     `json:"isolation_task_id,omitempty"`
+	SourceID                 string                     `json:"source_id"`
+	CandidateID              string                     `json:"candidate_id"`
+	Query                    string                     `json:"query"`
+	QueryTruncated           bool                       `json:"query_truncated,omitempty"`
+	QueryHash                string                     `json:"query_hash"`
+	QueryLen                 int                        `json:"query_len"`
+	Manifest                 taskcontext.Manifest       `json:"manifest"`
+	ManifestID               string                     `json:"manifest_id,omitempty"`
+	LexicalBuildID           string                     `json:"lexical_build_id,omitempty"`
+	LexicalOverlayID         string                     `json:"lexical_overlay_id,omitempty"`
+	LexicalSearches          []TaskContextLexicalSearch `json:"lexical_searches,omitempty"`
+	LexicalSearchesID        string                     `json:"lexical_searches_id,omitempty"`
+	LexicalUnavailableReason string                     `json:"lexical_unavailable_reason,omitempty"`
+	Unavailable              string                     `json:"unavailable,omitempty"`
 }
 
 // taskContextValidRole reports whether role is a native task-context consumer.
@@ -330,11 +334,21 @@ func admitTaskContext(ctx context.Context, path, role, question, isolationTaskID
 	writerPaths := taskContextWriterPaths(s)
 	var lexicalSearches []TaskContextLexicalSearch
 	var lexicalPaths []string
+	lexicalUnavailableReason := ""
 	if isolated == nil {
 		lexicalSearches, lexicalPaths, err = taskContextCandidateLexicalEvidence(ctx, path, s, boundQuery)
 		if err != nil {
-			_ = lease.Close()
-			return TaskContextRecord{}, err
+			if ri.IsProcessUnavailableOnly(err) {
+				// Candidate identity and overlay selection have already been
+				// checked. Only failure of the optional RI child process degrades
+				// to the ordinary bounded source excerpts below.
+				lexicalUnavailableReason = taskContextLexicalUnavailableReason
+				lexicalSearches = nil
+				lexicalPaths = nil
+			} else {
+				_ = lease.Close()
+				return TaskContextRecord{}, err
+			}
 		}
 	}
 	prioritized := prioritizeTaskPaths(fileStates, explorationPaths, writerPaths, lexicalPaths, boundQuery)
@@ -456,7 +470,7 @@ func admitTaskContext(ctx context.Context, path, role, question, isolationTaskID
 	}
 	if len(reads) == 0 {
 		rec := TaskContextRecord{
-			Version:         taskContextVersion,
+			Version:         taskContextRecordVersion(lexicalUnavailableReason),
 			Role:            role,
 			IsolationTaskID: isolationTaskID,
 			SourceID:        sourceID,
@@ -472,11 +486,12 @@ func admitTaskContext(ctx context.Context, path, role, question, isolationTaskID
 				Selected:  []taskcontext.SelectedFile{},
 				Omissions: []taskcontext.Omission{},
 			},
-			LexicalBuildID:    lexicalBuild,
-			LexicalOverlayID:  lexicalOverlay,
-			LexicalSearches:   lexicalSearches,
-			LexicalSearchesID: lexicalSearchesID,
-			Unavailable:       "no_eligible_files",
+			LexicalBuildID:           lexicalBuild,
+			LexicalOverlayID:         lexicalOverlay,
+			LexicalSearches:          lexicalSearches,
+			LexicalSearchesID:        lexicalSearchesID,
+			LexicalUnavailableReason: lexicalUnavailableReason,
+			Unavailable:              "no_eligible_files",
 		}
 		if err := Append(path, "task.context-admitted", rec); err != nil {
 			// Reuse on concurrent admission of the identical unavailable context.
@@ -526,21 +541,22 @@ func admitTaskContext(ctx context.Context, path, role, question, isolationTaskID
 		return TaskContextRecord{}, err
 	}
 	rec := TaskContextRecord{
-		Version:           taskContextVersion,
-		Role:              role,
-		IsolationTaskID:   isolationTaskID,
-		SourceID:          sourceID,
-		CandidateID:       candidateID,
-		Query:             boundQuery,
-		QueryTruncated:    truncated,
-		QueryHash:         queryHash,
-		QueryLen:          queryLen,
-		Manifest:          manifest,
-		ManifestID:        manifestID,
-		LexicalBuildID:    lexicalBuild,
-		LexicalOverlayID:  lexicalOverlay,
-		LexicalSearches:   lexicalSearches,
-		LexicalSearchesID: lexicalSearchesID,
+		Version:                  taskContextRecordVersion(lexicalUnavailableReason),
+		Role:                     role,
+		IsolationTaskID:          isolationTaskID,
+		SourceID:                 sourceID,
+		CandidateID:              candidateID,
+		Query:                    boundQuery,
+		QueryTruncated:           truncated,
+		QueryHash:                queryHash,
+		QueryLen:                 queryLen,
+		Manifest:                 manifest,
+		ManifestID:               manifestID,
+		LexicalBuildID:           lexicalBuild,
+		LexicalOverlayID:         lexicalOverlay,
+		LexicalSearches:          lexicalSearches,
+		LexicalSearchesID:        lexicalSearchesID,
+		LexicalUnavailableReason: lexicalUnavailableReason,
 	}
 	if err := Append(path, "task.context-admitted", rec); err != nil {
 		latest, inspectErr := Inspect(path)
@@ -555,6 +571,13 @@ func admitTaskContext(ctx context.Context, path, role, question, isolationTaskID
 		return TaskContextRecord{}, err
 	}
 	return rec, nil
+}
+
+func taskContextRecordVersion(lexicalUnavailableReason string) int {
+	if lexicalUnavailableReason == taskContextLexicalUnavailableReason {
+		return taskContextRIUnavailableVersion
+	}
+	return taskContextVersion
 }
 
 func appendTaskOmission(out *[]taskcontext.Omission, cap int, path, reason string) {
@@ -701,8 +724,11 @@ func replayTaskContext(s *Snapshot, e journal.Event) error {
 	if err := canonical.Decode(e.Payload, &rec); err != nil {
 		return err
 	}
-	if rec.Version != taskContextVersion || !taskContextValidRole(rec.Role) {
+	if (rec.Version != taskContextVersion && rec.Version != taskContextRIUnavailableVersion) || !taskContextValidRole(rec.Role) {
 		return errors.New("invalid task context record")
+	}
+	if (rec.Version == taskContextVersion && rec.LexicalUnavailableReason != "") || (rec.Version == taskContextRIUnavailableVersion && rec.LexicalUnavailableReason != taskContextLexicalUnavailableReason) {
+		return errors.New("invalid task context lexical fallback version")
 	}
 	if err := safepath.RequireDigest(rec.SourceID); err != nil {
 		return errors.New("invalid task context source")

@@ -79,7 +79,10 @@ type ExecuteConfig struct {
 	// transport admission bound, not tool authority: the served catalog is
 	// unchanged. Composite turns ignore it; their queue comes from the
 	// receipts binding.
-	MCPQueueDepth     int
+	MCPQueueDepth int
+	// MCPQueueWait is a separately bounded admission deadline for fresh
+	// context-only servers. Zero retains the historical single deadline.
+	MCPQueueWait      time.Duration
 	Diagnostic        bool
 	InterruptShutdown InterruptShutdownLookup
 	Composite         *contextmcp.RecorderOwnedConfig

@@ -39,6 +39,10 @@ func plannerInvocation(c config.Config, objective string) (runtime.Invocation, e
 // plannerInvocationForSnapshot binds an admitted planner context only for the
 // explicit opt-in. Empty policy retains the historic builder byte-for-byte.
 func plannerInvocationForSnapshot(s Snapshot) (runtime.Invocation, error) {
+	if len(s.PlannerCorrections) != 0 {
+		invocation := s.PlannerCorrections[len(s.PlannerCorrections)-1].Invocation
+		return invocation, invocation.Validate()
+	}
 	if !plannerContextEnabled(s) && !plannerGoContextEnabled(s) {
 		if s.PlannerContext != nil || s.PlannerGoContext != nil {
 			return runtime.Invocation{}, errors.New("planner context present without policy")

@@ -13,6 +13,34 @@ work. Source-level estimates below are not measured speedups or memory usage.
 
 ## Priorities
 
+### Whole-workflow efficiency qualification for v1.1
+
+RAM is one dimension of qualification. Compare the same pinned task, model,
+candidate, acceptance checks and concurrency settings in fresh run roots;
+record cold and warm cache conditions separately. An improvement must retain
+the verified result and external-effect guarantees. A faster failed run is
+not an improvement in productive throughput.
+
+| Dimension | Record for each real workflow |
+| --- | --- |
+| Latency | End-to-end wall time, time to first useful result, planning/execution/review/verification durations, queue and provider wait time. |
+| CPU | CPU time and profiles for Fabric; separately observe child processes. Distinguish computation from waiting. |
+| Memory | Allocated bytes, allocations, GC count/pause, peak resident/private memory and child-process peaks. End heap is not peak RAM. |
+| I/O | File bytes/operations, candidate scans, journal reads/appends, process starts and transport bytes where measured. Unobserved counters remain UNKNOWN. |
+| Scheduling | Useful concurrency, queue delay, idle capacity, contention and completed verified tasks per unit time. |
+| Cache/context | Cold/warm behavior, observed cache hits/misses, invalidation correctness, retained context size and repeated source reads. Provider caching is reported separately from local caches. |
+| Model usage | Unique invocations, corrections/retries, input, cached input, uncached input, output and reasoning output. Preserve provider-specific counter semantics and missing usage. |
+| Cost | Actual supported provider prices or billing receipts and currency; UNKNOWN when unavailable. Cached input and reasoning subsets are not counted twice. |
+| Reliability | Acceptance outcome, useful work retained after failure, recovery latency and additional model calls needed to obtain the verified result. |
+
+The optional Fabric process profile does not measure child CPU/RSS, provider
+latency, disk traffic or billing. Combine it with existing runtime receipts,
+journal phase evidence and host observations. Profile successful, bounded
+repair and isolated parallel workflows before prioritizing further changes.
+Use repeated comparable samples when claiming gains; report measurement
+overhead and host contention. These workflow measurements remain NOT RUN
+until fresh real-task evidence is recorded.
+
 | Area | Finding | Action | Evidence boundary |
 | --- | --- | --- | --- |
 | Candidate context | Each selected-file `ReadSource` captures the whole candidate before and after the read; up to 24 files multiply whole-tree hashing. It also base64-encodes bytes immediately decoded by the caller. | Batch bounded reads under the existing lease, validate every selected file against its manifest, verify the complete candidate before and after. Benchmark and test drift rejection. | Retain the public single-file read API and candidate identity checks. |
@@ -92,6 +120,30 @@ Difflib diagnosis confirms that the original newline case was visible to the
 writer, but the candidate changed its expected result. Native tests passed
 after that change, while unchanged held-out acceptance rejected it. No excerpt
 budget increase or documentation exclusion is justified by this evidence.
+
+## Deferred process-profile prototype
+
+The opt-in process profiler was removed from the delivered v1.1 code after
+profiling was deferred and Sonar flagged its debug instrumentation. Prototype
+source and prior measurements remain local development evidence. Production
+Fabric does not enable profiling through `FABRIC_PROFILE_DIR`. The following
+notes describe the retained prototype, not the published executable.
+
+Analyze the sampled stacks with `go tool pprof -top cpu.pprof` and
+`go tool pprof -top -alloc_space allocs.pprof`. The CPU profile covers the opted-in
+execution. The allocation profile is Go's cumulative process sample and may lag
+recent allocations; `runtime.json` records execution-interval allocation/count,
+GC count/pause and end-of-interval heap counters. The default runtime allocation
+sampling rate is retained. End heap is neither peak memory nor RSS. Every metric
+excludes child processes and external providers. CPU profiling and profile
+serialization add overhead; compare runs under the same profiling conditions.
+
+Bind profiles to the exact executable/source and workload receipt. Combine
+stack attribution with journal stage times, external process resource counters,
+verification/subprocess measurements and separately observed model token types.
+Do not add overlapping nested stages or cumulative usage notifications twice.
+Successful, repaired and isolated real workloads remain required before
+claiming a hotspot or an optimization gain; profiling fixtures alone prove none.
 
 ## Measurement policy
 

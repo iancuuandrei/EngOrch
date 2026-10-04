@@ -75,7 +75,7 @@ func TestRunAutonomousCreatesBoundPolicyAndReportsResumableBlocker(t *testing.T)
 	var out bytes.Buffer
 	err := Execute(context.Background(), []string{"run", "--autonomous", "--max-repairs", "3", "Make a bounded fixture change"}, root, &out)
 	if err == nil {
-		t.Fatal("fixture config has no implementation roles; autonomous run should report its blocker")
+		t.Fatal("fixture planner emits a non-graph response; autonomous run should retain its semantic blocker")
 	}
 	var result autonomousFailure
 	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
@@ -99,8 +99,11 @@ func TestRunAutonomousCreatesBoundPolicyAndReportsResumableBlocker(t *testing.T)
 	if s.Creation.Execution.PlannerContext != "" {
 		t.Fatalf("planner context must remain disabled by default: %#v", s.Creation.Execution)
 	}
-	if s.State != "IMPLEMENTING" || result.RunID != s.RunID || result.State != s.State || result.Phase != "implementation" || result.BlockedReason == "" {
+	if s.State != "AWAITING_APPROVAL" || result.RunID != s.RunID || result.State != s.State || result.Phase != "approval" || result.BlockedReason != "semantic_correction_budget_exhausted" {
 		t.Fatalf("failure summary or durable state mismatch: result=%#v snapshot=%#v", result, s)
+	}
+	if len(s.PlannerCorrections) != 2 || s.RepairAttempts != 0 || s.Workspace != nil || s.MachineApproval != nil {
+		t.Fatal("malformed planner exhausted the wrong budget or advanced into implementation")
 	}
 
 	// The CLI resolves an omitted RUN only from a validated journal bound to
@@ -108,14 +111,15 @@ func TestRunAutonomousCreatesBoundPolicyAndReportsResumableBlocker(t *testing.T)
 	var resumeOut bytes.Buffer
 	err = Execute(context.Background(), []string{"resume", "--autonomous"}, root, &resumeOut)
 	if err == nil {
-		t.Fatal("resume should retain the missing-role blocker")
+		t.Fatal("resume should retain the exhausted semantic-correction blocker")
 	}
 	var resumed autonomousFailure
 	if err := json.Unmarshal(resumeOut.Bytes(), &resumed); err != nil || resumed.RunID != s.RunID || resumed.State != s.State {
 		t.Fatalf("resume did not report the same durable run: %#v err=%v", resumed, err)
 	}
+	priorHead := s.ControllerHead
 	s, err = control.Inspect(entries[0])
-	if err != nil || s.State != "IMPLEMENTING" || s.Creation.Execution.MaxRepairs != 3 {
+	if err != nil || s.State != "AWAITING_APPROVAL" || s.Creation.Execution.MaxRepairs != 3 || s.ControllerHead != priorHead || len(s.PlannerCorrections) != 2 {
 		t.Fatalf("resume changed the immutable policy or state: %#v, %v", s, err)
 	}
 }
@@ -531,7 +535,7 @@ func TestAutonomousCLIRejectsInvalidOptionsAndNonAutonomousResume(t *testing.T) 
 func TestAutonomousUncertaintySummaryIsSanitized(t *testing.T) {
 	path, s, out := planAutonomousFailureFixture(t, "uncertainty fixture")
 	secretDetail := "file effect UNKNOWN credential=must-not-be-printed"
-	err := reportAutonomousFailure(&out, path, s.RunID, errors.New(secretDetail))
+	err := reportAutonomousFailure(&out, path, s.RunID, errors.Join(control.ErrAutonomousReconciliation, errors.New(secretDetail)))
 	if err == nil {
 		t.Fatal("sanitized boundary error missing")
 	}
@@ -578,7 +582,7 @@ func TestAutonomousVerificationNotRunSummaryUsesTrustedSentinel(t *testing.T) {
 	if decodeErr := json.Unmarshal(out.Bytes(), &summary); decodeErr != nil {
 		t.Fatal(decodeErr)
 	}
-	if summary.BlockedReason != "execution_blocked" {
+	if summary.BlockedReason != "operator_attention_required" {
 		t.Fatalf("ordinary message spoofed trusted verification classification: %#v", summary)
 	}
 }
@@ -610,9 +614,9 @@ func TestAutonomousFailureReportsDispositionWithoutGrantingAcceptance(t *testing
 		disposition control.GateDisposition
 		next        string
 	}{
-		{control.ErrScopeReplanRequired, "NEEDS_REPLAN", control.GateEscalate, "request_candidate_bound_scope_replan"},
-		{errors.New("repair budget exhausted"), "NEEDS_ATTENTION", control.GateEscalate, "inspect_candidate_and_remaining_gates"},
-		{errors.New("uncertain external effect"), "UNKNOWN", control.GateDeny, "reconcile_existing_effect_without_resend"},
+		{control.ErrScopeReplanRequired, "NEEDS_REPLAN", control.GateReplan, "request_candidate_bound_scope_replan"},
+		{control.ErrAutonomousRepairBudget, "NEEDS_ATTENTION", control.GateAttention, "inspect_candidate_and_remaining_gates"},
+		{control.ErrAutonomousReconciliation, "UNKNOWN", control.GateReconcile, "reconcile_existing_effect_without_resend"},
 	} {
 		out.Reset()
 		if err := reportAutonomousFailure(&out, path, s.RunID, tc.cause); err == nil {
@@ -1022,6 +1026,11 @@ func TestAutonomousIsolatedWritersBindExplicitCapacityAndDerivedWriterRoute(t *t
 		t.Fatal(err)
 	}
 	plannerResult := *s.Plan
+	if len(s.PlannerCorrections) != 0 {
+		// The clone starts before correction admission, so use the original
+		// identity rather than a successor bound to the first run's receipt.
+		plannerResult = s.PlannerCorrections[0].Predecessor
+	}
 	plannerResult.Output = `{"version":1,"mode":"direct","summary":"isolated route regression","tasks":[{"id":"impl","kind":"implementation","title":"change fixture","scope_paths":["source.txt"],"write_paths":["source.txt"],"expected_evidence":[{"kind":"file","description":"source change"}],"estimated_seconds":10}]}`
 	if err := control.Append(clonePath, "plan.recorded", plannerResult); err != nil {
 		t.Fatal(err)

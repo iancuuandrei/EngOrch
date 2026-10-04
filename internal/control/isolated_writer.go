@@ -237,7 +237,7 @@ func prepareIsolatedGraphWriterProposal(ctx context.Context, path, taskID string
 		return IsolatedGraphWriterProposal{}, err
 	}
 	if !graphWriterChangesWithinTask(binding.Task.toEngineeringTask(), changes) {
-		return IsolatedGraphWriterProposal{}, errors.New("isolated writer proposal exceeds declared task write paths")
+		return IsolatedGraphWriterProposal{}, &graphWriterScopeViolationError{Changes: append([]fileeffects.Change(nil), changes...)}
 	}
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
@@ -278,8 +278,9 @@ func validateIsolatedGraphWriterProposal(s Snapshot, proposal IsolatedGraphWrite
 		return err
 	}
 	expected, err := writerInvocationForIsolatedTask(s, binding)
-	if err != nil || proposal.Invocation != expected {
-		return errors.Join(errors.New("isolated writer proposal invocation mismatch"), err)
+	resolved, resolveErr := resolveScheduledRecordedInvocation(s, expected, proposal.Invocation)
+	if err != nil || resolveErr != nil || resolved != proposal.Invocation {
+		return errors.Join(errors.New("isolated writer proposal invocation mismatch"), err, resolveErr)
 	}
 	if proposal.IsolationID != binding.IsolationID || proposal.Workspace != binding.Workspace || proposal.Candidate != binding.Candidate {
 		return errors.New("isolated writer proposal child binding mismatch")

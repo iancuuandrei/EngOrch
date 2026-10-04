@@ -33,6 +33,7 @@ type WriterRuntimeReceipt struct {
 	TurnID       string `json:"turn_id"`
 	JournalHead  string `json:"journal_head"`
 	ResultHash   string `json:"result_hash"`
+	UsagePending bool   `json:"usage_pending,omitempty"`
 }
 
 func expectedWriterHost(s Snapshot) (WriterHostIntent, error) {

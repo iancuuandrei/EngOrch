@@ -13,6 +13,7 @@ import (
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/config"
 	"harness.local/engorch/internal/engineeringplan"
+	"harness.local/engorch/internal/journal"
 	"harness.local/engorch/internal/repository"
 	"harness.local/engorch/internal/runtime"
 	"harness.local/engorch/internal/taskscheduler"
@@ -461,7 +462,7 @@ func TestTwoV1ExplorersOverlapSeparateIdentities(t *testing.T) {
 			// read-only appends overlap rather than flaking.
 			for attempt := 0; attempt < 3; attempt++ {
 				rec, err := RunExplorer(context.Background(), path, questions[idx])
-				if err != nil && strings.Contains(strings.ToLower(err.Error()), "journal lock") {
+				if err != nil && errors.Is(err, journal.ErrLockUnavailable) {
 					continue
 				}
 				if err != nil {

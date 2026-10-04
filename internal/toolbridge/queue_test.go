@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -128,6 +129,38 @@ func TestQueuedCallsRunInValidatedAdmissionOrder(t *testing.T) {
 	assertStatus(t, awaitHTTPResult(t, third), http.StatusOK)
 }
 
+func TestLegalSixtyFourCallBurstFitsInvocationQueue(t *testing.T) {
+	started := make(chan string, 64)
+	releaseFirst := make(chan struct{})
+	config := queueTestConfig(func(_ context.Context, call Call) (Result, error) {
+		started <- string(call.RequestID)
+		if string(call.RequestID) == `"active"` {
+			<-releaseFirst
+		}
+		return Result{JSON: json.RawMessage(`{"ok":true}`)}, nil
+	}, 63)
+	config.CallTimeout = 5 * time.Second
+	config.QueueWaitTimeout = 5 * time.Second
+	server := newTestServer(t, config)
+	active := postToolCallAsync(t, server, "active")
+	awaitStartedCall(t, started, `"active"`)
+	queued := make([]<-chan asyncHTTPResult, 63)
+	for index := range queued {
+		queued[index] = postToolCallAsync(t, server, "queued-"+strconv.Itoa(index))
+	}
+	awaitQueuedCalls(t, server, 63)
+	close(releaseFirst)
+	assertStatus(t, awaitHTTPResult(t, active), http.StatusOK)
+	for index, result := range queued {
+		response := awaitHTTPResult(t, result)
+		if response.StatusCode != http.StatusOK {
+			body := readResponse(t, response)
+			t.Fatalf("legal burst request %d rejected: status=%d body=%s", index, response.StatusCode, string(body))
+		}
+		_ = readResponse(t, response)
+	}
+}
+
 func TestQueuedCallCapacityIsBounded(t *testing.T) {
 	started := make(chan string, 2)
 	release := make(chan struct{})
@@ -183,7 +216,7 @@ func TestDuplicateQueuedRequestIDIsRejected(t *testing.T) {
 func TestQueuedCancellationDoesNotInvokeCallback(t *testing.T) {
 	started := make(chan string, 2)
 	release := make(chan struct{})
-	server := newTestServer(t, queueTestConfig(func(ctx context.Context, call Call) (Result, error) {
+	config := queueTestConfig(func(ctx context.Context, call Call) (Result, error) {
 		started <- string(call.RequestID)
 		select {
 		case <-release:
@@ -191,7 +224,9 @@ func TestQueuedCancellationDoesNotInvokeCallback(t *testing.T) {
 		case <-ctx.Done():
 			return Result{}, ctx.Err()
 		}
-	}, 1))
+	}, 1)
+	config.QueueWaitTimeout = time.Second
+	server := newTestServer(t, config)
 
 	first := postToolCallAsync(t, server, "first")
 	awaitStartedCall(t, started, `"first"`)
@@ -217,12 +252,14 @@ func TestQueuedCancellationDoesNotInvokeCallback(t *testing.T) {
 func TestCloseCancelsAndDrainsRunningAndQueuedCalls(t *testing.T) {
 	started := make(chan struct{})
 	var calls atomic.Int32
-	server := newTestServer(t, queueTestConfig(func(ctx context.Context, _ Call) (Result, error) {
+	config := queueTestConfig(func(ctx context.Context, _ Call) (Result, error) {
 		calls.Add(1)
 		close(started)
 		<-ctx.Done()
 		return Result{}, ctx.Err()
-	}, 1))
+	}, 1)
+	config.QueueWaitTimeout = time.Second
+	server := newTestServer(t, config)
 	active := postToolCallAsync(t, server, "active")
 	select {
 	case <-started:
@@ -279,6 +316,48 @@ func TestQueuedDeadlineIncludesWaitingWithoutCallingBackend(t *testing.T) {
 	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"code":-32800`) || calls.Load() != 1 {
 		t.Fatal("queue wait escaped deadline or invoked backend", response.StatusCode, string(body), calls.Load())
 	}
+}
+
+func TestQueueWaitDoesNotConsumeFreshCallbackTimeout(t *testing.T) {
+	started := make(chan string, 2)
+	releaseFirst := make(chan struct{})
+	config := queueTestConfig(func(ctx context.Context, call Call) (Result, error) {
+		if string(call.RequestID) == `"first"` {
+			started <- "first"
+			<-releaseFirst // Hold the slot past this callback's own deadline.
+			return Result{JSON: json.RawMessage(`{"ok":true}`)}, nil
+		}
+		started <- "second"
+		return Result{JSON: json.RawMessage(`{"ok":true}`)}, ctx.Err()
+	}, 1)
+	config.CallTimeout = 250 * time.Millisecond
+	config.QueueWaitTimeout = time.Second
+	server := newTestServer(t, config)
+	first := postToolCallAsync(t, server, "first")
+	awaitStartedCall(t, started, "first")
+	second := postToolCallAsync(t, server, "second")
+	awaitQueuedCalls(t, server, 1)
+	time.Sleep(325 * time.Millisecond) // Exceeds callback timeout, remains within queue wait.
+	select {
+	case result := <-second:
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		t.Fatal("queued call expired with callback deadline before admission", result.response.StatusCode)
+	default:
+	}
+	close(releaseFirst)
+	firstResponse := awaitHTTPResult(t, first)
+	firstBody := readResponse(t, firstResponse)
+	if !strings.Contains(string(firstBody), `"code":-32800`) {
+		t.Fatal("first callback deadline was not enforced", string(firstBody))
+	}
+	awaitStartedCall(t, started, "second")
+	secondResponse := awaitHTTPResult(t, second)
+	if secondResponse.StatusCode != http.StatusOK {
+		t.Fatal("fresh callback deadline did not start after admission", secondResponse.StatusCode, string(readResponse(t, secondResponse)))
+	}
+	_ = readResponse(t, secondResponse)
 }
 
 func TestMaxQueuedCallsZeroPreservesImmediateRejection(t *testing.T) {

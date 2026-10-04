@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"harness.local/engorch/internal/contextmcp"
 	"harness.local/engorch/internal/journal"
@@ -16,6 +17,60 @@ import (
 func TestExecutionCompositeCatalogRequiresExactAdmittedBinding(t *testing.T) {
 	t.Run("legacy", func(t *testing.T) { testExecutionCompositeBinding(t, 0) })
 	t.Run("queued", func(t *testing.T) { testExecutionCompositeBinding(t, 32) })
+}
+
+func TestExecutionCompositeDeadlineBindingIsExactAndDurable(t *testing.T) {
+	f := newRuntimeFixture(t)
+	called := false
+	agent := toolbridge.Projection{
+		Catalog: func() ([]toolbridge.ToolDefinition, error) {
+			return []toolbridge.ToolDefinition{{Name: "list_agents", InputSchema: []byte(`{"type":"object","properties":{},"additionalProperties":false}`)}}, nil
+		},
+		Call: func(context.Context, toolbridge.Call) (toolbridge.Result, error) {
+			called = true
+			return toolbridge.Result{JSON: []byte(`{"ok":true}`)}, nil
+		},
+	}
+	maxQueued := contextmcp.InvocationToolCallBudget - 1
+	callbackTimeout := contextmcp.RecorderOwnedBridgeCallTimeout
+	queueWait := time.Duration(maxQueued) * callbackTimeout
+	binding, err := contextmcp.PrepareRecorderBindingWithTimeouts(f.broker, f.intent.Invocation.ID, strings.Repeat("d", 64), agent, maxQueued, queueWait, callbackTimeout)
+	if err != nil || binding.Version != 3 || binding.QueuePolicy != toolreceipts.QueuePolicySerialFIFOWithDeadlines || binding.MaxQueuedCalls != maxQueued {
+		t.Fatal("prepare deadline-bound composite binding", binding, err)
+	}
+	intent := compositeIntent(t, f.intent)
+	intent.ToolReceipts = &binding
+	intent.SessionPlan.CatalogSHA256 = binding.CatalogSHA256
+	intent.SessionPlan.ToolNames = make([]string, len(binding.Tools))
+	for index, tool := range binding.Tools {
+		intent.SessionPlan.ToolNames[index] = tool.Tool
+	}
+	sort.Strings(intent.SessionPlan.ToolNames)
+	intent.IntentID, err = intent.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := f.paths
+	paths.Version = 2
+	paths.ToolReceipts = filepath.Join(t.TempDir(), "deadline-receipts")
+	config := &contextmcp.RecorderOwnedConfig{Path: paths.ToolReceipts, InvocationID: intent.Invocation.ID, CallerBindingSHA256: binding.CallerBindingSHA256, CatalogSHA256: binding.CatalogSHA256, AgentProjection: agent, MaxQueuedCalls: maxQueued, QueueWaitTimeout: queueWait, CallbackTimeout: callbackTimeout}
+	verify := func(toolreceipts.Owner, toolbridge.Call, toolbridge.Result) error { called = true; return nil }
+	cfg := ExecuteConfig{Intent: intent, Paths: paths, Broker: f.broker, Composite: config, VerifyComposite: verify}
+	if tools, err := executionProviderTools(cfg, *intent.SessionPlan); err != nil || len(tools) != len(binding.Tools) {
+		t.Fatal("exact deadline-bound catalog rejected", err)
+	}
+	changed := *config
+	changed.QueueWaitTimeout--
+	if _, err := executionProviderTools(ExecuteConfig{Intent: intent, Paths: paths, Broker: f.broker, Composite: &changed, VerifyComposite: verify}, *intent.SessionPlan); err == nil {
+		t.Fatal("changed queue wait admitted")
+	}
+	if _, err := newExecutionMCP(cfg, strings.Repeat("b", 32)); err != nil {
+		t.Fatal("deadline-bound listener rejected", err)
+	}
+	state, err := toolreceipts.Inspect(paths.ToolReceipts)
+	if err != nil || state.Binding == nil || !equalCanonical(*state.Binding, binding) || state.Binding.QueueWaitMillis != queueWait.Milliseconds() || state.Binding.CallbackTimeoutMillis != callbackTimeout.Milliseconds() || len(state.Calls) != 0 || called {
+		t.Fatal("deadline binding changed or performed an effect", state, err, called)
+	}
 }
 
 // queuedCompositeFixture binds one queued recorder-owned composite intent and

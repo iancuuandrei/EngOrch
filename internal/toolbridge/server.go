@@ -34,6 +34,9 @@ const (
 	defaultMaxResponseBytes  = 768 << 10
 	defaultMaxConcurrentCall = 1
 	defaultCallTimeout       = 15 * time.Second
+	maxLegacyQueuedCalls     = 32
+	maxQueuedCalls           = 63 // One running call plus 63 waiters covers the 64-call invocation budget.
+	maxQueueWaitTimeout      = time.Duration(maxQueuedCalls) * time.Minute
 	maximumBodyBound         = 1 << 20
 )
 
@@ -98,7 +101,11 @@ type Config struct {
 	MaxResponseBytes   int
 	MaxConcurrentCalls int
 	MaxQueuedCalls     int
-	CallTimeout        time.Duration
+	// QueueWaitTimeout is a separate admission deadline; zero preserves the
+	// legacy behavior where CallTimeout also covers queue wait.
+	QueueWaitTimeout time.Duration
+	// CallTimeout bounds callback execution after admission in split mode.
+	CallTimeout time.Duration
 }
 
 // Server is safe for concurrent use and may be listened once.
@@ -115,6 +122,7 @@ type Server struct {
 	maxRequestBytes    int64
 	maxResponseBytes   int
 	callTimeout        time.Duration
+	queueWaitTimeout   time.Duration
 	maxConcurrentCalls int
 	maxQueuedCalls     int
 
@@ -164,7 +172,8 @@ func New(config Config) (*Server, error) {
 	if callTimeout == 0 {
 		callTimeout = defaultCallTimeout
 	}
-	if maxRequest < 1024 || maxRequest > maximumBodyBound || maxResponse < 1024 || maxResponse > maximumBodyBound || maxConcurrent < 1 || maxConcurrent > 32 || config.MaxQueuedCalls < 0 || config.MaxQueuedCalls > 32 || callTimeout <= 0 || callTimeout > time.Minute {
+	queueWaitTimeout := config.QueueWaitTimeout
+	if maxRequest < 1024 || maxRequest > maximumBodyBound || maxResponse < 1024 || maxResponse > maximumBodyBound || maxConcurrent < 1 || maxConcurrent > 32 || config.MaxQueuedCalls < 0 || config.MaxQueuedCalls > maxQueuedCalls || queueWaitTimeout == 0 && config.MaxQueuedCalls > maxLegacyQueuedCalls || callTimeout <= 0 || callTimeout > time.Minute || queueWaitTimeout < 0 || queueWaitTimeout > maxQueueWaitTimeout || (queueWaitTimeout > 0 && config.MaxQueuedCalls == 0) {
 		return nil, errors.New("invalid tool bridge bounds")
 	}
 
@@ -189,6 +198,7 @@ func New(config Config) (*Server, error) {
 		endpoint: endpoint, token: token, tokenHash: sha256.Sum256(token), allowedOrigins: origins,
 		tools: tools, toolNames: names, catalogHash: catalogHash, call: config.Call, observe: config.Observe,
 		maxRequestBytes: maxRequest, maxResponseBytes: maxResponse, callTimeout: callTimeout,
+		queueWaitTimeout:   queueWaitTimeout,
 		maxConcurrentCalls: maxConcurrent, maxQueuedCalls: config.MaxQueuedCalls, active: map[string]context.CancelFunc{},
 	}, nil
 }
@@ -262,7 +272,7 @@ func (s *Server) Listen() (*Running, error) {
 		Handler:           s,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      s.callTimeout + 5*time.Second,
+		WriteTimeout:      s.queueWaitTimeout + s.callTimeout + 5*time.Second,
 		IdleTimeout:       30 * time.Second,
 		MaxHeaderBytes:    16 << 10,
 	}
@@ -477,32 +487,64 @@ func (s *Server) callTool(w http.ResponseWriter, request *http.Request, message 
 		s.writeRPCError(w, http.StatusOK, message.ID, -32602, "unknown tool")
 		return
 	}
-	ctx, cancel := context.WithTimeout(request.Context(), s.callTimeout)
+	// Legacy bindings use one deadline across admission and callback, preserving
+	// their exact historical behavior. The versioned queue policy supplies a
+	// separate admission deadline; its stable parent remains the cancellation
+	// handle for disconnects, MCP notifications, and shutdown.
+	callParent, cancelParent := context.WithTimeout(request.Context(), s.callTimeout)
+	queueCtx := callParent
+	var cancelQueue context.CancelFunc
+	if s.queueWaitTimeout > 0 {
+		cancelParent()
+		callParent, cancelParent = context.WithCancel(request.Context())
+		queueCtx, cancelQueue = context.WithTimeout(callParent, s.queueWaitTimeout)
+	}
 	key := string(canonicalID)
-	admission, status := s.admitCall(key, cancel, ctx)
+	admission, status := s.admitCall(key, cancelParent, queueCtx)
 	if status == callAdmissionFull {
-		cancel()
+		cancelParent()
+		if cancelQueue != nil {
+			cancelQueue()
+		}
 		s.writeRPCError(w, http.StatusTooManyRequests, message.ID, -32000, "tool call concurrency limit reached")
 		return
 	}
 	if status == callAdmissionDuplicate {
-		cancel()
+		cancelParent()
+		if cancelQueue != nil {
+			cancelQueue()
+		}
 		s.writeRPCError(w, http.StatusOK, message.ID, -32600, "duplicate active request id")
 		return
 	}
 	if status == callAdmissionClosing {
-		cancel()
+		cancelParent()
+		if cancelQueue != nil {
+			cancelQueue()
+		}
 		http.Error(w, "server closing", http.StatusServiceUnavailable)
 		return
 	}
-	defer func() { s.finishCall(admission); cancel() }()
+	defer func() {
+		s.finishCall(admission)
+		cancelParent()
+		if cancelQueue != nil {
+			cancelQueue()
+		}
+	}()
 	if !s.waitForCall(admission) {
 		s.writeRPCError(w, http.StatusOK, message.ID, -32800, "request cancelled or timed out")
 		return
 	}
+	callCtx := callParent
+	var cancelCallback context.CancelFunc
+	if s.queueWaitTimeout > 0 {
+		callCtx, cancelCallback = context.WithTimeout(callParent, s.callTimeout)
+		defer cancelCallback()
+	}
 	s.observed(Observation{Method: message.Method})
-	result, err := s.call(ctx, Call{RequestID: append(json.RawMessage(nil), canonicalID...), Tool: params.Name, Arguments: append(json.RawMessage(nil), params.Arguments...)})
-	if ctx.Err() != nil {
+	result, err := s.call(callCtx, Call{RequestID: append(json.RawMessage(nil), canonicalID...), Tool: params.Name, Arguments: append(json.RawMessage(nil), params.Arguments...)})
+	if callCtx.Err() != nil {
 		s.writeRPCError(w, http.StatusOK, message.ID, -32800, "request cancelled or timed out")
 		return
 	}

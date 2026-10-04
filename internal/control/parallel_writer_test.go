@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,6 +63,76 @@ func parallelWriterCreation(t *testing.T, maxParallel int) Creation {
 
 func TestParallelGraphWritersAggregateOnceAndReachReady(t *testing.T) {
 	assertParallelGraphWriters(t, parallelWriterCreation(t, 2), true)
+}
+
+func TestStaticGraphWriterProbeBeforeHostIntentIsReadOnly(t *testing.T) {
+	controllerPath, snapshot := graphAwaitingApprovalWithGraph(t, parallelWriterCreation(t, 2), parallelWriterGraphFixture())
+	var err error
+	snapshot, err = Inspect(controllerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	machineAuthorizePlan(t, controllerPath, snapshot)
+	snapshot, err = Inspect(controllerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = ensureGraphRecorded(controllerPath, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StartWorkspace(context.Background(), controllerPath); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = Inspect(controllerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready, err := graphReadyTasks(snapshot)
+	if err != nil || len(ready) == 0 {
+		t.Fatalf("graph writer was not ready: tasks=%d err=%v", len(ready), err)
+	}
+	question, err := graphWriterTaskQuestion(snapshot, ready[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := maybeAdmitTaskContext(context.Background(), controllerPath, "writer", question); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = Inspect(controllerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready, err = graphReadyTasks(snapshot)
+	if err != nil || len(ready) == 0 {
+		t.Fatalf("graph writer was not ready after context admission: tasks=%d err=%v", len(ready), err)
+	}
+	specs, err := buildGraphWriterBatchSpecs(controllerPath, snapshot, ready[:1])
+	if err != nil || len(specs) != 1 {
+		t.Fatalf("graph writer task could not be bound: specs=%d err=%v", len(specs), err)
+	}
+	expected, err := expectedWriterHostForTask(snapshot, specs[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimePath := filepath.Join(expected.Launch.Root, "writer.jsonl")
+	if _, err := os.Stat(runtimePath); !os.IsNotExist(err) {
+		t.Fatalf("fixture unexpectedly has a writer runtime journal before intent: %v", err)
+	}
+	evidence, err := (ScheduledDispatchAdapter{}).Probe(context.Background(), taskscheduler.ProbeRequest{Task: specs[0]})
+	if err != nil || evidence.Status != taskscheduler.StatusReady || evidence.AdmissionID != "" {
+		t.Fatalf("initial static writer probe was not ready without an intent: evidence=%+v err=%v", evidence, err)
+	}
+	after, err := Inspect(controllerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.GraphWriterHosts) != 0 {
+		t.Fatalf("read-only probe created a graph writer host intent: %d", len(after.GraphWriterHosts))
+	}
+	if _, err := os.Stat(runtimePath); !os.IsNotExist(err) {
+		t.Fatalf("read-only probe created a writer runtime journal: %v", err)
+	}
 }
 
 func TestParallelPolicySerialWorkerUsesOneAggregate(t *testing.T) {
@@ -167,6 +238,7 @@ func parallelWriterV2Creation(t *testing.T, maxParallel int) Creation {
 	}
 	c.Config.Codex.Executable = executable
 	c.Config.Codex.ExecutableHash = hash
+	c.Config.Codex.UsageQualified = true // The app-server fixture emits bounded, identity-bound usage.
 	if err := os.WriteFile(c.Config.Codex.AuthSource, []byte(`{"tokens":{"access_token":"fixture-token","account_id":"fixture-account"}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -227,6 +299,9 @@ func assertParallelGraphWriters(t *testing.T, c Creation, overlap bool) {
 
 	ready, err := RunAutonomous(context.Background(), graphPath)
 	if err != nil {
+		for cause := errors.Unwrap(err); cause != nil; cause = errors.Unwrap(cause) {
+			t.Logf("parallel graph failure cause: %v", cause)
+		}
 		schedules, _ := filepath.Glob(graphPath + ".graph-writers-*.jsonl")
 		for _, schedulePath := range schedules {
 			if schedule, scheduleErr := taskscheduler.Inspect(schedulePath); scheduleErr == nil {

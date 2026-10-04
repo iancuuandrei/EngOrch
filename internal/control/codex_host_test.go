@@ -139,6 +139,9 @@ func TestResumePlanningStrictConfinementCreatesNoAccessOrRuntimeIntent(t *testin
 	spec.Config.Codex.ExecutableHash = executableHash
 	spec.Config.Codex.StateRoot = stateRoot
 	spec.Config.Codex.AuthSource = filepath.Join(t.TempDir(), "unused-auth.json")
+	// Keep this test focused on strict confinement; usage qualification is an
+	// independent pre-host gate and is qualified for this synthetic fixture.
+	spec.Config.Codex.UsageQualified = true
 	spec.Config.Codex.CapabilityConfinement = codexhost.CapabilityConfinementRequired
 	if err := spec.Config.Validate(); err != nil {
 		t.Fatal(err)

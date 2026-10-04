@@ -19,6 +19,17 @@ records qualification separately from published release acceptance.
 
 ## Current development status
 
+**v1.1.0 adds resilient autonomous execution.** The changes
+add bounded semantic corrections and ownership replanning, typed autonomous
+outcomes, progress-aware execution, optional context/metadata degradation,
+future-worker memory admission and an effective read-only doctor plan.
+Completed semantic results are preserved when accounting is unavailable;
+required accounting still gates subsequent model calls. See the
+[v1.1 implementation and release ledger](docs/roadmap/v1.1-resilience.md)
+for development evidence and release checks; published qualification is recorded
+separately with the GitHub release. Further comparative performance
+benchmarking is deferred so this increment can ship.
+
 **v1.0.29** adds Muse Go execution fixes and graceful optional-capability
 fallbacks. The prior qualified capability checkpoint is v1.0.27 (`6205de9`);
 v1.0.28 updates documentation only. A separate frozen

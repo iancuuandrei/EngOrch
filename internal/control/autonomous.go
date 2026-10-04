@@ -79,7 +79,12 @@ func autonomousVerificationCovered(s Snapshot, candidateID string) bool {
 // autonomousDispatchBlocked refuses to admit new provider or role work while
 // earlier work remains pending or UNKNOWN. Reconciliation observes state; it
 // never resends an uncertain effect.
-func autonomousDispatchBlocked(s Snapshot) error {
+func autonomousDispatchBlocked(s Snapshot) (blocked error) {
+	defer func() {
+		if blocked != nil {
+			blocked = errors.Join(ErrAutonomousReconciliation, blocked)
+		}
+	}()
 	if s.Verification != nil && s.Verification.Pending {
 		return errors.New("verification is pending and cannot be resent automatically")
 	}
@@ -92,34 +97,51 @@ func autonomousDispatchBlocked(s Snapshot) error {
 		}
 	}
 	for _, m := range s.ModelAccess {
-		if m.Terminal == nil {
+		if m.Terminal == nil && m.SemanticPending == nil {
 			return errors.New("model access remains unresolved and cannot be resent automatically")
 		}
 	}
 	if s.PlannerAccess != nil && s.Plan == nil {
-		return errors.New("planner invocation unresolved; automatic retry denied")
+		invocation, err := plannerInvocationForSnapshot(s)
+		if err != nil || semanticUsagePendingFor(s, invocation.ID) == nil {
+			return errors.New("planner invocation unresolved; automatic retry denied")
+		}
 	}
 	if s.ExplorerHost != nil && s.ExplorerHost.RuntimeReceipt == nil {
-		return errors.New("explorer runtime remains unresolved and cannot be resent automatically")
+		if semanticUsagePendingFor(s, s.ExplorerHost.Intent.Invocation.ID) == nil {
+			return errors.New("explorer runtime remains unresolved and cannot be resent automatically")
+		}
 	}
 	for id, r := range s.ExplorerRuns {
-		if r.RuntimeReceipt == nil {
+		if r.RuntimeReceipt == nil && semanticUsagePendingFor(s, id) == nil {
 			return fmt.Errorf("parallel explorer %s remains unresolved and cannot be resent automatically", id)
 		}
 	}
 	if s.WriterHost != nil && s.WriterHost.RuntimeReceipt == nil {
-		return errors.New("writer runtime remains unresolved and cannot be resent automatically")
+		if semanticUsagePendingFor(s, s.WriterHost.Intent.Invocation.ID) == nil {
+			return errors.New("writer runtime remains unresolved and cannot be resent automatically")
+		}
 	}
 	for taskID, host := range s.GraphWriterHosts {
-		if host.RuntimeReceipt == nil {
+		if host.RuntimeReceipt == nil && semanticUsagePendingFor(s, host.Intent.Invocation.ID) == nil {
 			return fmt.Errorf("graph writer task %s runtime remains unresolved and cannot be resent automatically", taskID)
 		}
 	}
 	if s.ReviewHost != nil && s.ReviewHost.RuntimeReceipt == nil {
-		return errors.New("review runtime remains unresolved and cannot be resent automatically")
+		if semanticUsagePendingFor(s, s.ReviewHost.Intent.Invocation.ID) == nil {
+			return errors.New("review runtime remains unresolved and cannot be resent automatically")
+		}
+	}
+	for invocationID, host := range s.ScheduledReviewHosts {
+		if host.RuntimeReceipt == nil && semanticUsagePendingFor(s, host.Intent.Invocation.ID) == nil {
+			return fmt.Errorf("scheduled review %s remains unresolved and cannot be resent automatically", invocationID)
+		}
 	}
 	if s.PlannerHost != nil && s.PlannerReceipt == nil {
-		return errors.New("planner runtime remains unresolved and cannot be resent automatically")
+		invocation, err := plannerInvocationForSnapshot(s)
+		if err != nil || semanticUsagePendingFor(s, invocation.ID) == nil {
+			return errors.New("planner runtime remains unresolved and cannot be resent automatically")
+		}
 	}
 	if s.FileOutcome == "UNKNOWN" {
 		return errors.New("file effect remains UNKNOWN and requires reconciliation")
@@ -165,6 +187,13 @@ func autonomousWriterEffect(ctx context.Context, path string, s Snapshot) (Snaps
 		// scoped repair writes remain admissible while out-of-scope writes
 		// are rejected before any authorization.
 		if err := requireWriterPathsInScope(impl, s); err != nil {
+			if scopeReplanningEnabled(s) {
+				latest, replanErr := recordGraphScopeReplan(ctx, path, s)
+				if replanErr != nil {
+					return latest, false, errors.Join(err, replanErr)
+				}
+				return latest, true, nil
+			}
 			unionOK := false
 			for _, t := range s.Graph.Graph.Tasks {
 				if t.Kind == "implementation" {
@@ -202,11 +231,25 @@ func autonomousWriterEffect(ctx context.Context, path string, s Snapshot) (Snaps
 // legacy nil/old policies remain sequential. It is safe to call after process
 // restart. A completed stage is inspected and skipped; an incomplete runtime
 // is handed to that role's existing resume path.
-func RunAutonomous(ctx context.Context, path string) (Snapshot, error) {
-	if s, err := Inspect(path); err == nil && graphEnabled(s) {
+func RunAutonomous(ctx context.Context, path string) (result Snapshot, failure error) {
+	defer func() {
+		if failure != nil {
+			failure = ClassifyAutonomousFailure(result, failure)
+		}
+	}()
+	s, err := Inspect(path)
+	if err != nil {
+		return s, err
+	}
+	s, err = reconcileUnrecordedSemanticUsagePending(ctx, path, s)
+	if err != nil {
+		return s, err
+	}
+	if graphEnabled(s) {
 		return runAutonomousGraph(ctx, path, false)
 	}
-	for steps := 0; steps < 64; steps++ {
+	progress := autonomousProgress{}
+	for {
 		if err := ctx.Err(); err != nil {
 			s, inspectErr := Inspect(path)
 			if inspectErr != nil {
@@ -222,6 +265,9 @@ func RunAutonomous(ctx context.Context, path string) (Snapshot, error) {
 			return s, err
 		}
 		if err := RequireDispatchAllowed(s); err != nil {
+			return s, err
+		}
+		if err := progress.observe(s); err != nil {
 			return s, err
 		}
 		switch s.State {
@@ -326,7 +372,7 @@ func RunAutonomous(ctx context.Context, path string) (Snapshot, error) {
 			// already-repaired candidate and skip its verification.
 			if autonomousRepairApplied(s) {
 				if candidateID == s.RepairCandidateID {
-					return s, errors.New("autonomous repair made no candidate progress")
+					return s, errors.Join(ErrAutonomousNoProgress, errors.New("autonomous repair made no candidate progress"))
 				}
 				if !autonomousVerificationCovered(s, candidateID) {
 					if err := autonomousDispatchBlocked(s); err != nil {
@@ -339,11 +385,11 @@ func RunAutonomous(ctx context.Context, path string) (Snapshot, error) {
 				}
 			}
 			if s.RepairCandidateID != "" && s.RepairCandidateID == candidateID && s.FileOutcome == "NOT_APPLIED" {
-				return s, errors.New("autonomous repair made no candidate progress")
+				return s, errors.Join(ErrAutonomousNoProgress, errors.New("autonomous repair made no candidate progress"))
 			}
 			if s.RepairCandidateID != candidateID {
 				if s.RepairAttempts >= s.Creation.Execution.MaxRepairs {
-					return s, fmt.Errorf("autonomous repair bound reached (%d)", s.RepairAttempts)
+					return s, fmt.Errorf("%w: autonomous repair bound reached (%d)", ErrAutonomousRepairBudget, s.RepairAttempts)
 				}
 				if err := Append(path, "autonomous.repair-started", AutonomousRepair{Attempt: s.RepairAttempts + 1, CandidateID: candidateID}); err != nil {
 					return InspectOr(s, path, err)
@@ -363,11 +409,6 @@ func RunAutonomous(ctx context.Context, path string) (Snapshot, error) {
 			return s, fmt.Errorf("autonomous execution cannot advance state %q", s.State)
 		}
 	}
-	s, err := Inspect(path)
-	if err != nil {
-		return s, err
-	}
-	return s, errors.New("autonomous execution step limit reached")
 }
 
 // PrepareAutonomous advances a graph-enabled run through planner acceptance,

@@ -38,7 +38,7 @@ func TestExplorerHostFailureIsJournaled(t *testing.T) {
 	if _, err := RecordExploration(path, ExplorerRecord{"Read fixture source", expected.Invocation, unbacked}); err == nil {
 		t.Fatal("unbacked Codex explorer result recorded")
 	}
-	if err := Append(path, "explorer.runtime-observed", ExplorerRuntimeReceipt{expected.Invocation.ID, "thread", "turn", strings.Repeat("a", 64), strings.Repeat("b", 64)}); err == nil {
+	if err := Append(path, "explorer.runtime-observed", ExplorerRuntimeReceipt{InvocationID: expected.Invocation.ID, ThreadID: "thread", TurnID: "turn", JournalHead: strings.Repeat("a", 64), ResultHash: strings.Repeat("b", 64)}); err == nil {
 		t.Fatal("runtime receipt without observed host admitted")
 	}
 	foreign := expected

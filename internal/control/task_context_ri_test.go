@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/codexruntime"
 	"harness.local/engorch/internal/gitlocal"
+	"harness.local/engorch/internal/journal"
 	"harness.local/engorch/internal/ri"
 	"harness.local/engorch/internal/taskcontext"
 )
@@ -27,6 +29,7 @@ type fixtureTaskContextLexicalSearcher struct {
 	manifest  ri.LexicalManifest
 	queryIDs  []string
 	paths     []string
+	err       error
 }
 
 // TestTaskContextLexicalSearchThroughPinnedRust runs the same bounded evidence
@@ -100,6 +103,9 @@ func (f *fixtureTaskContextLexicalSearcher) SearchLexicalOverlay(_ context.Conte
 	if after != nil || limit != taskContextLexicalPageSize || overlay.Candidate != f.candidate {
 		return ri.LexicalResult{}, errors.New("fixture received an unexpected lexical binding or page")
 	}
+	if f.err != nil {
+		return ri.LexicalResult{}, f.err
+	}
 	queryID, err := query.ID()
 	if err != nil {
 		return ri.LexicalResult{}, err
@@ -118,6 +124,56 @@ func (f *fixtureTaskContextLexicalSearcher) SearchLexicalOverlay(_ context.Conte
 			Range: [2]int64{1, 5},
 		}},
 	}, nil
+}
+
+func TestTaskContextLexicalProcessFailureDegradesAndReplaysBoundedSource(t *testing.T) {
+	s, binding, original, _ := taskContextLexicalFixture(t)
+	searcher := &fixtureTaskContextLexicalSearcher{
+		candidate: binding.Overlay.Candidate, overlayID: original.LexicalOverlayID,
+		err: fmt.Errorf("local process exited: %w", ri.ErrProcessUnavailable),
+	}
+	searches, paths, err := searchTaskContextLexical(context.Background(), binding, "Change ParseBytes and parse_bytes", searcher)
+	if err == nil || !ri.IsProcessUnavailableOnly(err) || searches != nil || paths != nil {
+		t.Fatalf("expected bounded optional RI failure without fabricated results: searches=%v paths=%v err=%v", searches, paths, err)
+	}
+
+	sourceID, err := s.Creation.Repository.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := "Change ParseBytes and parse_bytes"
+	record := TaskContextRecord{
+		Version: taskContextRIUnavailableVersion, Role: "writer", SourceID: sourceID,
+		CandidateID: original.CandidateID, Query: query, QueryHash: taskContextQueryHash(query), QueryLen: len(query),
+		LexicalBuildID: original.LexicalBuildID, LexicalOverlayID: original.LexicalOverlayID,
+		LexicalUnavailableReason: taskContextLexicalUnavailableReason,
+		Unavailable:              "no_eligible_files",
+		Manifest: taskcontext.Manifest{
+			Version: 1, Scope: taskcontext.Scope{SourceID: sourceID, CandidateID: original.CandidateID},
+			InputHash: strings.Repeat("3", 64), Selected: []taskcontext.SelectedFile{}, Omissions: []taskcontext.Omission{},
+		},
+	}
+	if err := validateTaskContextLexicalEvidence(s, record); err != nil {
+		t.Fatalf("candidate-bound fallback record rejected: %v", err)
+	}
+	raw, err := canonical.Bytes(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := replayTaskContext(&s, journal.Event{Payload: raw}); err != nil || len(s.TaskContexts) != 1 {
+		t.Fatalf("fallback evidence did not replay: contexts=%d err=%v", len(s.TaskContexts), err)
+	}
+
+	stale := record
+	stale.LexicalOverlayID = strings.Repeat("9", 64)
+	if err := validateTaskContextLexicalEvidence(s, stale); err == nil {
+		t.Fatal("fallback admitted a stale candidate overlay")
+	}
+	forged := record
+	forged.LexicalUnavailableReason = "transport failed: provider output omitted"
+	if err := validateTaskContextLexicalEvidence(s, forged); err == nil {
+		t.Fatal("fallback admitted arbitrary diagnostic text")
+	}
 }
 
 func taskContextLexicalFixture(t *testing.T) (Snapshot, codexruntime.LexicalBinding, TaskContextRecord, *fixtureTaskContextLexicalSearcher) {
@@ -170,6 +226,7 @@ func taskContextLexicalFixture(t *testing.T) (Snapshot, codexruntime.LexicalBind
 		t.Fatal(err)
 	}
 	record := TaskContextRecord{
+		Version:          taskContextVersion,
 		CandidateID:      candidateID,
 		LexicalBuildID:   buildID,
 		LexicalOverlayID: overlayID,

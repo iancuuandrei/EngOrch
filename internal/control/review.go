@@ -10,6 +10,7 @@ import (
 	"harness.local/engorch/internal/journal"
 	"harness.local/engorch/internal/runtime"
 	"harness.local/engorch/internal/safepath"
+	"harness.local/engorch/internal/taskscheduler"
 	"harness.local/engorch/internal/worktree"
 )
 
@@ -34,6 +35,14 @@ type ReviewRecord struct {
 }
 
 func reviewInvocation(s Snapshot) (runtime.Invocation, error) {
+	base, err := reviewInvocationBase(s)
+	if err != nil {
+		return runtime.Invocation{}, err
+	}
+	return correctedRoleInvocation(s, base), nil
+}
+
+func reviewInvocationBase(s Snapshot) (runtime.Invocation, error) {
 	if s.State != "REVIEWING" || s.Candidate == nil || s.Plan == nil || s.Verification == nil || s.Verification.Pending {
 		return runtime.Invocation{}, errors.New("review requires completed verification and REVIEWING state")
 	}
@@ -111,6 +120,30 @@ func reviewInvocation(s Snapshot) (runtime.Invocation, error) {
 	return runtime.NewInvocationWithCodexAutoCompact(profile, string(input), codexAutoCompactForExecution(s.Creation.Execution, profile))
 }
 
+func scheduledReviewHostForInvocation(s Snapshot, invocation runtime.Invocation) *ReviewHostState {
+	var matched *ReviewHostState
+	for _, correction := range s.RoleCorrections {
+		if correction.ScheduledTaskID == "" || correction.Invocation.Profile.Role != "reviewer" {
+			continue
+		}
+		scoped, err := scheduledTurnInvocation(correction.Invocation, taskscheduler.OperationReviewer, correction.ScheduledTaskID)
+		if err != nil || scoped != invocation {
+			continue
+		}
+		if matched != nil {
+			return nil
+		}
+		matched = scheduledReviewHostState(s, correction.ScheduledTaskID)
+	}
+	if matched != nil {
+		return matched
+	}
+	if s.ReviewHost != nil && s.ReviewHost.Intent.Invocation == invocation {
+		return s.ReviewHost
+	}
+	return nil
+}
+
 // PrepareReviewInvocation fixes reviewer routing, candidate and verification input.
 func PrepareReviewInvocation(path string) (runtime.Invocation, error) {
 	s, err := Inspect(path)
@@ -134,14 +167,15 @@ func replayReview(s *Snapshot, e journal.Event) error {
 		return errors.New("review invocation substituted")
 	}
 	if i.Profile.Runtime == "codex-app-server" {
-		if s.ReviewHost == nil || s.ReviewHost.Intent.Invocation != i || s.ReviewHost.RuntimeReceipt == nil {
+		host := scheduledReviewHostForInvocation(*s, i)
+		if host == nil || host.Intent.Invocation != i || host.RuntimeReceipt == nil {
 			return errors.New("review requires linked runtime receipt")
 		}
 		hash, err := canonical.Hash("harness.review-result.v1", record.Result)
 		if err != nil {
 			return err
 		}
-		if hash != s.ReviewHost.RuntimeReceipt.ResultHash {
+		if hash != host.RuntimeReceipt.ResultHash {
 			return errors.New("review result differs from runtime receipt")
 		}
 	}
@@ -153,25 +187,28 @@ func replayReview(s *Snapshot, e journal.Event) error {
 	}
 	var verdict ReviewVerdict
 	if err := canonical.Decode([]byte(record.Result.Output), &verdict); err != nil {
-		return err
+		return rejectedSemanticOutput(err)
 	}
 	id, err := s.Candidate.ID()
 	if err != nil {
 		return err
 	}
-	if verdict.CandidateID != id || verdict.VerificationPlanID != s.Verification.PlanID || verdict.Findings == nil || len(verdict.Findings) > 64 {
-		return errors.New("review scope or findings invalid")
+	if verdict.CandidateID != id || verdict.VerificationPlanID != s.Verification.PlanID {
+		return errors.Join(ErrAutonomousUnsafe, errors.New("review candidate or verification binding invalid"))
+	}
+	if verdict.Findings == nil || len(verdict.Findings) > 64 {
+		return rejectedSemanticOutput(errors.New("review findings invalid"))
 	}
 	if verdict.Decision != "approve" && verdict.Decision != "changes_requested" || (verdict.Decision == "approve") != (len(verdict.Findings) == 0) {
-		return errors.New("review decision/findings conflict")
+		return rejectedSemanticOutput(errors.New("review decision/findings conflict"))
 	}
 	for _, f := range verdict.Findings {
 		if strings.TrimSpace(f.Message) == "" || len(f.Message) > 4096 {
-			return errors.New("invalid review finding")
+			return rejectedSemanticOutput(errors.New("invalid review finding"))
 		}
 		if f.Path != "" {
 			if err := safepath.Relative(f.Path); err != nil {
-				return err
+				return errors.Join(ErrAutonomousUnsafe, err)
 			}
 		}
 	}
