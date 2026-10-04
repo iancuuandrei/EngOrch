@@ -51,6 +51,36 @@ func TestAdaptivePlannerInvocationRoutesFromExactFinalInputBytes(t *testing.T) {
 	}
 }
 
+func TestRoutingDecisionEvidenceIsOptInAndBindsExactInput(t *testing.T) {
+	c := creation(t)
+	c.Config.PlannerContract = plannerContractV1
+	c.Config.ModelPolicy = adaptivePlannerPolicy(c.Config.Planner, 80)
+	input := strings.Repeat("x", 90)
+
+	legacy, evidence, err := modelSelectionForInput(c.Config, "planner", input, 0)
+	if err != nil || legacy.Model != "planner-strong" || evidence != nil {
+		t.Fatalf("default routing changed or unexpectedly emitted evidence: %+v %+v %v", legacy, evidence, err)
+	}
+	c.Config.ModelPolicy.DecisionEvidenceVersion = 1
+	selected, evidence, err := modelSelectionForInput(c.Config, "planner", input, 0)
+	if err != nil || selected != legacy || evidence == nil {
+		t.Fatalf("opt-in evidence changed selection or was absent: %+v %+v %v", selected, evidence, err)
+	}
+	configID, err := c.Config.ID()
+	if err != nil || evidence.ConfigID != configID || evidence.ProfileName != "escalated" || evidence.Model != selected.Model || evidence.Effort != selected.Effort || evidence.ContextBytes != int64(len(input)) || evidence.AcceptedFailures != 0 || evidence.Reason != "large-input-bytes" {
+		t.Fatalf("routing evidence does not describe the exact configured decision: %+v %v", evidence, err)
+	}
+	snapshot := Snapshot{RunID: strings.Repeat("a", 64), Creation: c}
+	invocation, err := runtime.NewInvocation(selected, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	derived, err := modelRoutingDecisionForInvocation(snapshot, invocation)
+	if err != nil || !sameCanonical(derived, evidence) {
+		t.Fatalf("controller invocation evidence was not reproducible: %+v %v", derived, err)
+	}
+}
+
 func TestAdaptiveWriterRoutingIgnoresUnknownGraphAttempt(t *testing.T) {
 	c := creation(t)
 	base := runtime.Profile{Runtime: "fake", Provider: "deterministic", Model: "writer-standard", Effort: "medium", Role: "writer"}

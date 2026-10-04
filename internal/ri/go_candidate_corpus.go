@@ -47,6 +47,10 @@ type GoCandidateCorpus struct {
 	Omissions        []taskcontext.Omission `json:"omissions"`
 	OmissionsTrimmed bool                   `json:"omissions_trimmed"`
 	Coverage         string                 `json:"coverage"`
+	// CandidateFactCacheHits/Misses are local diagnostics only. They are never
+	// serialized into a graph, review record, prompt, or semantic identity.
+	CandidateFactCacheHits   int `json:"-"`
+	CandidateFactCacheMisses int `json:"-"`
 }
 
 // CollectCandidateGoCorpus derives a candidate-bound graph under one shared
@@ -84,8 +88,8 @@ func collectCandidateGoCorpusLeased(ctx context.Context, identity repository.Ide
 	if baseGraph.SourceID != source.RepositoryID || baseGraph.CandidateID != "" || baseGraph.ProducerSHA256 != client.ExecutableHash || baseGraph.ModuleInventory == nil || baseInventory.Digest != baseGraph.ModuleInventory.Digest || ValidateGoModuleInventory(baseInventory, identity) != nil {
 		return result, errors.New("candidate Go corpus requires a committed module-backed base graph")
 	}
-	if cacheDir != "" {
-		return result, errors.New("candidate Go corpus does not permit parser cache reuse")
+	if cacheDir != "" && (!filepath.IsAbs(cacheDir) || filepath.Clean(cacheDir) != cacheDir || filepath.Clean(cacheDir) == filepath.VolumeName(cacheDir)+string(filepath.Separator)) {
+		return result, errors.New("candidate Go corpus cache directory must be absolute, clean, and non-root")
 	}
 	if err := expected.ValidateBinding(binding); err != nil {
 		return result, err
@@ -200,9 +204,15 @@ func collectCandidateGoCorpusLeased(ctx context.Context, identity repository.Ide
 			deleteBase(path)
 			continue
 		}
-		facts, err := stream.GoFileFacts(ctx, path, content, "")
+		facts, err := stream.GoFileFacts(ctx, path, content, cacheDir)
 		if err != nil {
 			return result, fmt.Errorf("candidate Go facts %q: %w", path, err)
+		}
+		switch facts.Cache {
+		case "hit":
+			result.CandidateFactCacheHits++
+		case "miss":
+			result.CandidateFactCacheMisses++
 		}
 		binding, err := DeclaredGoPackageBinding(inventory, path, parsed.Name.Name)
 		if err != nil {

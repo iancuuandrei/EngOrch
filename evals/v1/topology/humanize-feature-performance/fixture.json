@@ -13,6 +13,8 @@
   "review_impact_context_requested": true,
   "planner_context": "go-contract-context-v1",
   "review_impact_context_version_required": 1,
+  "candidate_facts_cache_requested": true,
+  "candidate_facts_cache_version_required": 1,
   "objective": "objective.md",
   "acceptance_recipe": "acceptance.md",
   "read_only_hub_paths": [

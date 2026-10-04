@@ -28,6 +28,70 @@ fn cold_warm_and_forged_cache_reparse() {
         1
     )
 }
+
+#[test]
+fn concurrent_cache_writers_keep_results_bounded_and_reusable() {
+    let directory = tempfile::tempdir().unwrap();
+    let cache = directory.path().to_path_buf();
+    let producer = "a".repeat(64);
+    let count = 32usize;
+    let mut workers = Vec::new();
+    for index in 0..count {
+        let cache = cache.clone();
+        let producer = producer.clone();
+        workers.push(std::thread::spawn(move || {
+            let path = format!("pkg/file{index}.go");
+            let source = format!("package p\nfunc F{index}() {{}}\n").into_bytes();
+            let facts =
+                go_file_facts(&path, &source, &h(&source), &producer, Some(&cache)).unwrap();
+            (path, source, producer, facts)
+        }));
+    }
+    for worker in workers {
+        let (path, source, producer, facts) = worker.join().unwrap();
+        assert_eq!(facts.parse_count, 1);
+        assert_eq!(facts.source_sha256, h(&source));
+        assert_eq!(facts.producer_sha256, producer);
+        assert_eq!(facts.path, path);
+    }
+
+    // Contended writers may skip publication. A later ordinary call fills any
+    // missing entries, and every subsequent result must be the exact fact hit.
+    for index in 0..count {
+        let path = format!("pkg/file{index}.go");
+        let source = format!("package p\nfunc F{index}() {{}}\n").into_bytes();
+        let _ = go_file_facts(&path, &source, &h(&source), &producer, Some(&cache)).unwrap();
+    }
+    for index in 0..count {
+        let path = format!("pkg/file{index}.go");
+        let source = format!("package p\nfunc F{index}() {{}}\n").into_bytes();
+        let warm = go_file_facts(&path, &source, &h(&source), &producer, Some(&cache)).unwrap();
+        assert_eq!(
+            warm.parse_count, 0,
+            "fact {index} was not reusable after publication"
+        );
+    }
+    let entries: Vec<_> = std::fs::read_dir(&cache)
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .collect();
+    let json_entries: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".json"))
+        .collect();
+    let bytes: u64 = json_entries
+        .iter()
+        .map(|entry| entry.metadata().unwrap().len())
+        .sum();
+    assert_eq!(json_entries.len(), count);
+    assert!(json_entries.len() <= 1024);
+    let resident_bytes: u64 = entries
+        .iter()
+        .map(|entry| entry.metadata().unwrap().len())
+        .sum();
+    assert!(bytes <= resident_bytes);
+    assert!(resident_bytes <= 64 << 20);
+}
 #[test]
 fn unicode_and_escaped_bytes_are_decoded() {
     let s = "package p\nimport ( . `raw\r/path`; _ \"caf\\xC3\\xA9\" )\ntype A = B\n";
@@ -124,14 +188,16 @@ fn source_bindings_cache_keys_and_read_bounds_hold() {
     assert!(go_file_facts("../bad.go", source, &h(source), &producer, None).is_err());
     assert!(go_file_facts("a.go", source, &"0".repeat(64), &producer, None).is_err());
     assert!(go_file_facts("a.go", b"\xff", &h(b"\xff"), &producer, None).is_err());
-    assert!(go_file_facts(
-        "a.go",
-        source,
-        &h(source),
-        &producer,
-        Some(std::path::Path::new("relative"))
-    )
-    .is_err());
+    assert!(
+        go_file_facts(
+            "a.go",
+            source,
+            &h(source),
+            &producer,
+            Some(std::path::Path::new("relative"))
+        )
+        .is_err()
+    );
     let huge = vec![b' '; (1 << 20) + 1];
     assert!(go_file_facts("a.go", &huge, &h(&huge), &producer, None).is_err());
     let path = directory
@@ -162,12 +228,14 @@ fn symlink_cache_ancestors_are_rejected() {
     let link = root.path().join("link");
     symlink(&real, &link).unwrap();
     let source = b"package p";
-    assert!(go_file_facts(
-        "a.go",
-        source,
-        &h(source),
-        &"f".repeat(64),
-        Some(&link.join("child"))
-    )
-    .is_err());
+    assert!(
+        go_file_facts(
+            "a.go",
+            source,
+            &h(source),
+            &"f".repeat(64),
+            Some(&link.join("child"))
+        )
+        .is_err()
+    );
 }

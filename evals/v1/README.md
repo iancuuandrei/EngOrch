@@ -201,6 +201,16 @@ The PR #5 sequential journey remains the comparison baseline. It requires its
 own clean clone and explicit human approval/review accounting; its historical
 single-task acceptance is not treated as a six-repository result.
 
+The opt-in `-CandidateFactsCache` runner switch is available only in Native
+mode with `-ReviewImpactContext`, `-PlannerContext go-contract-context-v1`, and
+the explicit pinned RI executable/hash. Pass it to both Prepare and Evaluate;
+the runner rejects mismatches before evaluation effects and checks the
+inspected execution policy version. Default runs omit the switch and preserve
+their previous command and receipt shape. A recorded cache-policy version is
+not a cache-hit measurement: corpus diagnostic statistics are not included in
+the evaluation receipt, and no hit-rate or performance claim follows from the
+flag.
+
 ## Controlled parallel-writer comparison
 
 Native evaluations accept `-ParallelWriters` and `-MaxParallel 1..8`.

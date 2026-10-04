@@ -1,6 +1,10 @@
 package modelpolicy
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestSelectBoundedPolicy(t *testing.T) {
 	policy := FixturePolicy()
@@ -104,6 +108,27 @@ func TestSelectRejectsOutOfBoundsSignalsAndThresholds(t *testing.T) {
 	policy.Rules["writer"] = Rule{DefaultProfile: "standard", EscalatedProfile: "architect", ContextEscalationTokens: MaxContextTokens + 1, FailureEscalationCount: 1}
 	if _, err := Select(policy, Request{Role: "writer", Complexity: LevelLow, Risk: LevelLow, Uncertainty: LevelLow}); err == nil {
 		t.Fatal("out-of-bounds context threshold accepted")
+	}
+}
+
+func TestPolicyRejectsUnknownDecisionEvidenceVersion(t *testing.T) {
+	policy := FixturePolicy()
+	policy.DecisionEvidenceVersion = 2
+	if _, err := Select(policy, Request{Role: "writer", Complexity: LevelMedium, Risk: LevelMedium, Uncertainty: LevelMedium}); err == nil {
+		t.Fatal("unknown decision evidence version was accepted")
+	}
+}
+
+func TestDecisionEvidenceVersionZeroIsOmittedFromLegacyJSON(t *testing.T) {
+	policy := FixturePolicy()
+	legacy, err := json.Marshal(policy)
+	if err != nil || strings.Contains(string(legacy), "decision_evidence_version") {
+		t.Fatalf("default policy encoding changed legacy identity bytes: %s %v", legacy, err)
+	}
+	policy.DecisionEvidenceVersion = 1
+	optedIn, err := json.Marshal(policy)
+	if err != nil || !strings.Contains(string(optedIn), `"decision_evidence_version":1`) {
+		t.Fatalf("opt-in evidence version was not encoded: %s %v", optedIn, err)
 	}
 }
 

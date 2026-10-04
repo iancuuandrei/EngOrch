@@ -11,7 +11,6 @@ import (
 	"harness.local/engorch/internal/config"
 	"harness.local/engorch/internal/journal"
 	"harness.local/engorch/internal/opencoderuntime"
-	"harness.local/engorch/internal/providerruntime"
 	"harness.local/engorch/internal/runtime"
 	"harness.local/engorch/internal/safepath"
 	"harness.local/engorch/internal/taskscheduler"
@@ -100,13 +99,13 @@ func executeDirectProvider(ctx context.Context, controllerPath string, configura
 	if err != nil {
 		return runtime.Result{}, providerDispatchReceipt{}, err
 	}
-	if err := ensureDirectDispatchCapacity(configuration, runID, invocation); err != nil {
+	if err := ensureDirectDispatchCapacity(snapshot, invocation); err != nil {
 		return runtime.Result{}, providerDispatchReceipt{}, err
 	}
 	if err := markAgentDispatchRunning(&binding); err != nil {
 		return runtime.Result{}, providerDispatchReceipt{}, err
 	}
-	result, receipt, dispatchErr := executeDirectProviderRuntime(ctx, controllerPath, configuration, runID, invocation)
+	result, receipt, dispatchErr := executeDirectProviderRuntime(ctx, controllerPath, snapshot, invocation)
 	if dispatchErr != nil {
 		return result, receipt, errors.Join(dispatchErr, finishAgentDispatchUnknown(binding))
 	}
@@ -241,11 +240,7 @@ func markAgentDispatchRunning(binding *agentDispatchBinding) error {
 }
 
 func ensureOpenCodeDispatchCapacity(snapshot Snapshot, invocation runtime.Invocation) error {
-	inputHash, err := access.InputID(invocation.Input)
-	if err != nil {
-		return err
-	}
-	selected, err := ResolveProviderRouting(snapshot.Creation.Config, snapshot.RunID, invocation.Profile.Role, inputHash, 1, invocation.Profile)
+	selected, err := resolveProviderRoutingForSnapshot(snapshot, invocation, 1)
 	if err != nil || selected.Profile != invocation.Profile {
 		return errors.Join(errors.New("OpenCode provider selection changed"), err)
 	}
@@ -253,21 +248,12 @@ func ensureOpenCodeDispatchCapacity(snapshot Snapshot, invocation runtime.Invoca
 	return err
 }
 
-func ensureDirectDispatchCapacity(configuration config.Config, runID string, invocation runtime.Invocation) error {
-	_, expectation, err := ConfiguredProviderExpectation(configuration, invocation.Profile.Role, invocation.Profile)
-	if err != nil {
-		return err
-	}
-	direct := providerruntime.Invocation{Version: 1, System: "Return exactly one JSON value for the controller role request. Do not claim tools or repository access.", Prompt: invocation.Input, Output: providerruntime.OutputContract{Kind: "json"}}
-	inputHash, err := direct.InputHash(expectation)
-	if err != nil {
-		return err
-	}
-	selected, err := ResolveProviderRouting(configuration, runID, invocation.Profile.Role, inputHash, 1, invocation.Profile)
+func ensureDirectDispatchCapacity(snapshot Snapshot, invocation runtime.Invocation) error {
+	selected, err := resolveProviderRoutingForSnapshot(snapshot, invocation, 1)
 	if err != nil || selected.Profile != invocation.Profile {
 		return errors.Join(errors.New("direct provider selection changed"), err)
 	}
-	_, err = ensureTaskPool(configuration, runID, selected.Intent)
+	_, err = ensureTaskPool(snapshot.Creation.Config, snapshot.RunID, selected.Intent)
 	return err
 }
 

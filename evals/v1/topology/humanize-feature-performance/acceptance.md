@@ -24,6 +24,12 @@ requested flag, and verifies that the inspected run reports version 1 plus one
 durable context record for the exact reviewed candidate. Do not infer context
 usefulness from the requested flag alone; retain candidate binding, partial
 coverage, omission counts, and unavailable reasons from the observed record.
+Set `CandidateFactsCache = $true` in the common hashtable for both arms. This
+requires the same reviewer-impact context and planner/parser binding, is
+recorded separately as requested policy version 1, and must be observed as
+`creation.execution.candidate_facts_cache_version = 1` after inspection.
+The runner does not expose cache-hit diagnostics, so this verifies policy
+selection only and makes no cache-hit or speedup claim.
 Both arms use the pinned CLI default repair allowance of two.
 
 Create the policy at an absolute path outside both source checkouts and pin its
@@ -66,6 +72,7 @@ $common = @{
     PlannerContextRIExecutable = 'C:\tools\engorch-ri.exe'
     PlannerContextRIExecutableSHA256 = '<verified lowercase SHA-256>'
     ReviewImpactContext = $true
+    CandidateFactsCache = $true
     PromptRecipe = 'cache-prefix-v1'
     ValidateWriterEdits = $true
     TaskIds = @('go-humanize-feature-performance')
@@ -95,6 +102,8 @@ and acceptance gates are frozen.
 Require equal task,
 objective, source, model/runtime, Go, RI, prompt, edit-validation, and repair
 bindings in the two retained run receipts; reject the pair if any differ.
+Also require `candidate_facts_cache_version_requested = 1` and
+`candidate_facts_cache_version_observed = 1` in both evaluation receipts.
 
 ## Evidence for topology
 

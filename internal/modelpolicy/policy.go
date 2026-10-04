@@ -63,9 +63,10 @@ type Rule struct {
 // Rules are keyed by a role such as planner, explorer, writer, reviewer, or
 // architect. Unknown roles reject rather than borrowing another role's route.
 type Policy struct {
-	Version  int             `json:"version"`
-	Profiles []Profile       `json:"profiles"`
-	Rules    map[string]Rule `json:"rules"`
+	Version                 int             `json:"version"`
+	DecisionEvidenceVersion int             `json:"decision_evidence_version,omitempty" toml:"DecisionEvidenceVersion"`
+	Profiles                []Profile       `json:"profiles"`
+	Rules                   map[string]Rule `json:"rules"`
 }
 
 // Request contains only task facts already known to the caller. Failures is
@@ -133,7 +134,7 @@ func Select(policy Policy, request Request) (Decision, error) {
 }
 
 func (p Policy) validate() (map[string]Profile, error) {
-	if p.Version != 1 || len(p.Profiles) == 0 || len(p.Profiles) > maxProfiles || len(p.Rules) == 0 || len(p.Rules) > maxRules {
+	if p.Version != 1 || (p.DecisionEvidenceVersion != 0 && p.DecisionEvidenceVersion != 1) || len(p.Profiles) == 0 || len(p.Profiles) > maxProfiles || len(p.Rules) == 0 || len(p.Rules) > maxRules {
 		return nil, errors.New("invalid model policy")
 	}
 	profiles := make(map[string]Profile, len(p.Profiles))

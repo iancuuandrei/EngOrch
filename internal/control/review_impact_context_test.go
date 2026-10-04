@@ -27,8 +27,14 @@ func TestReviewImpactContextPolicyAndHistoryAreBounded(t *testing.T) {
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid review-impact policy rejected: %v", err)
 	}
+	cache := valid
+	cache.CandidateFactsCacheVersion = 1
+	if err := cache.Validate(); err != nil {
+		t.Fatalf("valid candidate facts cache policy rejected: %v", err)
+	}
 	for name, policy := range map[string]ExecutionPolicy{
-		"without contract context": {Mode: "autonomous-v1", MaxRepairs: 2, ReviewImpactContextVersion: 1},
+		"candidate cache without review context": {Mode: "autonomous-v1", MaxRepairs: 2, PlannerContext: plannerContextGoContractV1, PlannerContextRIExecutable: `C:\tools\ri.exe`, PlannerContextRIExecutableSHA256: strings.Repeat("a", 64), CandidateFactsCacheVersion: 1},
+		"without contract context":               {Mode: "autonomous-v1", MaxRepairs: 2, ReviewImpactContextVersion: 1},
 		"without pinned parser": {
 			Mode: "autonomous-v1", MaxRepairs: 2, PlannerContext: plannerContextGoContractV1,
 			PlannerContextRIExecutableSHA256: strings.Repeat("a", 64), ReviewImpactContextVersion: 1,

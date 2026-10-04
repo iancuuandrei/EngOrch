@@ -55,12 +55,49 @@ func (p Policy) ID() (string, error) {
 
 // Intent stores hashes and resource ceilings, not raw prompts or credentials.
 type Intent struct {
-	Attempt     int          `json:"attempt"`
-	PolicyID    string       `json:"policy_id"`
-	InputHash   string       `json:"input_hash"`
-	Route       Route        `json:"route"`
-	ModelChoice *ModelChoice `json:"model_choice,omitempty"`
-	Reservation Reservation  `json:"reservation"`
+	Attempt         int              `json:"attempt"`
+	PolicyID        string           `json:"policy_id"`
+	InputHash       string           `json:"input_hash"`
+	Route           Route            `json:"route"`
+	ModelChoice     *ModelChoice     `json:"model_choice,omitempty"`
+	RoutingDecision *RoutingDecision `json:"routing_decision,omitempty"`
+	Reservation     Reservation      `json:"reservation"`
+}
+
+// RoutingDecision is optional, non-authoritative evidence for an explicitly
+// opted-in model policy. The selected model and effort remain authoritative in
+// Route and ModelChoice; this projection records why that existing route was
+// selected.
+type RoutingDecision struct {
+	Version          int    `json:"version"`
+	ConfigID         string `json:"config_id"`
+	ProfileName      string `json:"profile_name"`
+	Model            string `json:"model"`
+	Effort           string `json:"effort"`
+	Reason           string `json:"reason"`
+	ContextBytes     int64  `json:"context_bytes"`
+	AcceptedFailures int    `json:"accepted_failures"`
+}
+
+// Validate binds a compact routing observation to the route already admitted
+// by this intent. It does not authorize or select a model by itself.
+func (d RoutingDecision) Validate(route Route, choice *ModelChoice) error {
+	if d.Version != 1 || safepath.RequireDigest(d.ConfigID) != nil || !identifier(d.ProfileName) || !validModelName(d.Model) || !identifier(d.Effort) || d.ContextBytes < 0 || d.ContextBytes > 256<<10 || d.AcceptedFailures < 0 || d.AcceptedFailures > 1_000_000 {
+		return errors.New("invalid routing decision evidence")
+	}
+	switch d.Reason {
+	case "default-configured-profile", "architect-role", "high-risk", "high-complexity", "high-uncertainty", "large-context", "large-input-bytes", "prior-failures", "bounded-read-only-input":
+	default:
+		return errors.New("invalid routing decision reason")
+	}
+	model, effort := route.Model, route.Effort
+	if choice != nil {
+		model, effort = choice.Model, choice.Effort
+	}
+	if d.Model != model || d.Effort != effort {
+		return errors.New("routing decision differs from admitted model choice")
+	}
+	return nil
 }
 
 // ID derives invocation identity from all intent fields except the derived
@@ -75,6 +112,11 @@ func (i Intent) ID() (string, error) {
 	}
 	if !i.Route.AllowsModelChoice(i.ModelChoice) {
 		return "", errors.New("adaptive model choice is not admitted by route")
+	}
+	if i.RoutingDecision != nil {
+		if err := i.RoutingDecision.Validate(i.Route, i.ModelChoice); err != nil {
+			return "", err
+		}
 	}
 	i.Reservation.InvocationID = ""
 	return canonical.Hash("harness.access-invocation.v1", i)

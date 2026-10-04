@@ -58,17 +58,18 @@ func writerFixerQueueDepth(invocation runtime.Invocation) int {
 }
 
 type providerDispatchReceipt struct {
-	Version            int            `json:"version"`
-	Role               string         `json:"role"`
-	Question           string         `json:"question,omitempty"`
-	InvocationID       string         `json:"invocation_id"`
-	AccessInvocationID string         `json:"access_invocation_id"`
-	RuntimeJournalHead string         `json:"runtime_journal_head"`
-	GatewayJournalHead string         `json:"gateway_journal_head"`
-	ResultHash         string         `json:"result_hash"`
-	ObservedModel      string         `json:"observed_model"`
-	ObservedProvider   string         `json:"observed_provider"`
-	Result             runtime.Result `json:"result"`
+	Version            int                     `json:"version"`
+	Role               string                  `json:"role"`
+	Question           string                  `json:"question,omitempty"`
+	InvocationID       string                  `json:"invocation_id"`
+	AccessInvocationID string                  `json:"access_invocation_id"`
+	RoutingDecision    *access.RoutingDecision `json:"routing_decision,omitempty"`
+	RuntimeJournalHead string                  `json:"runtime_journal_head"`
+	GatewayJournalHead string                  `json:"gateway_journal_head"`
+	ResultHash         string                  `json:"result_hash"`
+	ObservedModel      string                  `json:"observed_model"`
+	ObservedProvider   string                  `json:"observed_provider"`
+	Result             runtime.Result          `json:"result"`
 }
 
 type providerTransportContextKey struct{}
@@ -148,12 +149,8 @@ func replayRoleProvider(s *Snapshot, event journal.Event) error {
 	if err != nil || receipt.ObservedProvider != resolved.Model.Provider || !providergateway.AcceptsObservedModel(resolved.Model, receipt.ObservedModel) {
 		return errors.New("provider role observation substituted")
 	}
-	inputHash, err := access.InputID(invocation.Input)
-	if err != nil {
-		return err
-	}
-	selected, err := ResolveProviderRouting(s.Creation.Config, s.RunID, receipt.Role, inputHash, 1, invocation.Profile)
-	if err != nil || selected.Intent.Reservation.InvocationID != receipt.AccessInvocationID {
+	selected, err := resolveProviderRoutingForRecordedEvidence(s.Creation.Config, s.RunID, invocation, 1, receipt.RoutingDecision)
+	if err != nil || selected.Intent.Reservation.InvocationID != receipt.AccessInvocationID || !sameCanonical(selected.Intent.RoutingDecision, receipt.RoutingDecision) {
 		return errors.New("provider role access identity mismatch")
 	}
 	if s.ProviderRuntime == nil {
@@ -172,11 +169,7 @@ func executeOpenCodeProviderRuntime(ctx context.Context, controllerPath string, 
 	}
 	runtimeCtx, cancelRuntime := openCodeProviderRuntimeContext(ctx, s.Creation.Config.OpenCode)
 	defer cancelRuntime()
-	inputHash, err := access.InputID(invocation.Input)
-	if err != nil {
-		return runtime.Result{}, providerDispatchReceipt{}, err
-	}
-	selected, err := ResolveProviderRouting(s.Creation.Config, s.RunID, invocation.Profile.Role, inputHash, 1, invocation.Profile)
+	selected, err := resolveProviderRoutingForSnapshot(s, invocation, 1)
 	if err != nil || selected.Profile != invocation.Profile {
 		return runtime.Result{}, providerDispatchReceipt{}, errors.Join(errors.New("OpenCode provider selection changed"), err)
 	}
@@ -393,7 +386,7 @@ func executeOpenCodeProviderRuntime(ctx context.Context, controllerPath string, 
 	if err != nil {
 		return runtime.Result{}, providerDispatchReceipt{}, err
 	}
-	receipt := providerDispatchReceipt{Version: 1, Role: invocation.Profile.Role, InvocationID: invocation.ID, AccessInvocationID: selected.Intent.Reservation.InvocationID, RuntimeJournalHead: runtimeHead, GatewayJournalHead: record.GatewayHead, ResultHash: resultHash, ObservedModel: observedModel, ObservedProvider: selected.ProviderRole.Model.Provider, Result: record.Result}
+	receipt := providerDispatchReceipt{Version: 1, Role: invocation.Profile.Role, InvocationID: invocation.ID, AccessInvocationID: selected.Intent.Reservation.InvocationID, RoutingDecision: selected.Intent.RoutingDecision, RuntimeJournalHead: runtimeHead, GatewayJournalHead: record.GatewayHead, ResultHash: resultHash, ObservedModel: observedModel, ObservedProvider: selected.ProviderRole.Model.Provider, Result: record.Result}
 	return record.Result, receipt, nil
 }
 
@@ -426,22 +419,12 @@ func replayPlannerProvider(s *Snapshot, event journal.Event) error {
 	if err != nil || hash != receipt.ResultHash {
 		return errors.New("direct planner result hash mismatch")
 	}
-	resolved, expectation, err := ConfiguredProviderExpectation(s.Creation.Config, "planner", invocation.Profile)
+	resolved, _, err := ConfiguredProviderExpectation(s.Creation.Config, "planner", invocation.Profile)
 	if err != nil || receipt.ObservedProvider != resolved.Model.Provider || !providergateway.AcceptsObservedModel(resolved.Model, receipt.ObservedModel) {
 		return errors.New("direct planner provider observation substituted")
 	}
-	var inputHash string
-	if runtimeID == "provider-api" {
-		direct := providerruntime.Invocation{Version: 1, System: "Return exactly one JSON value for the controller role request. Do not claim tools or repository access.", Prompt: invocation.Input, Output: providerruntime.OutputContract{Kind: "json"}}
-		inputHash, err = direct.InputHash(expectation)
-	} else {
-		inputHash, err = access.InputID(invocation.Input)
-	}
-	if err != nil {
-		return err
-	}
-	selected, err := ResolveProviderRouting(s.Creation.Config, s.RunID, "planner", inputHash, 1, invocation.Profile)
-	if err != nil || selected.Intent.Reservation.InvocationID != receipt.AccessInvocationID {
+	selected, err := resolveProviderRoutingForRecordedEvidence(s.Creation.Config, s.RunID, invocation, 1, receipt.RoutingDecision)
+	if err != nil || selected.Intent.Reservation.InvocationID != receipt.AccessInvocationID || !sameCanonical(selected.Intent.RoutingDecision, receipt.RoutingDecision) {
 		return errors.New("direct planner access identity mismatch")
 	}
 	copy := receipt
@@ -525,7 +508,8 @@ func requireOpenCodeRoleReceipt(s Snapshot, invocation runtime.Invocation, resul
 	return nil
 }
 
-func executeDirectProviderRuntime(ctx context.Context, controllerPath string, c config.Config, runID string, invocation runtime.Invocation) (runtime.Result, providerDispatchReceipt, error) {
+func executeDirectProviderRuntime(ctx context.Context, controllerPath string, s Snapshot, invocation runtime.Invocation) (runtime.Result, providerDispatchReceipt, error) {
+	c, runID := s.Creation.Config, s.RunID
 	if invocation.Profile.Runtime != "provider-api" {
 		return runtime.Result{}, providerDispatchReceipt{}, errors.New("direct provider runtime required")
 	}
@@ -534,11 +518,7 @@ func executeDirectProviderRuntime(ctx context.Context, controllerPath string, c 
 		return runtime.Result{}, providerDispatchReceipt{}, err
 	}
 	direct := providerruntime.Invocation{Version: 1, System: "Return exactly one JSON value for the controller role request. Do not claim tools or repository access.", Prompt: invocation.Input, Output: providerruntime.OutputContract{Kind: "json"}}
-	inputHash, err := direct.InputHash(expectation)
-	if err != nil {
-		return runtime.Result{}, providerDispatchReceipt{}, err
-	}
-	selected, err := ResolveProviderRouting(c, runID, invocation.Profile.Role, inputHash, 1, invocation.Profile)
+	selected, err := resolveProviderRoutingForSnapshot(s, invocation, 1)
 	if err != nil || selected.Profile != invocation.Profile || !reflect.DeepEqual(selected.ProviderRole, configured) || !reflect.DeepEqual(selected.RequestExpectation, expectation) {
 		return runtime.Result{}, providerDispatchReceipt{}, errors.Join(errors.New("direct provider selection changed"), err)
 	}
@@ -618,7 +598,7 @@ func executeDirectProviderRuntime(ctx context.Context, controllerPath string, c 
 	if err != nil {
 		return runtime.Result{}, providerDispatchReceipt{}, err
 	}
-	receipt := providerDispatchReceipt{Version: 1, Role: invocation.Profile.Role, InvocationID: invocation.ID, AccessInvocationID: selected.Intent.Reservation.InvocationID, RuntimeJournalHead: runtimeHead, GatewayJournalHead: gatewayHead, ResultHash: resultHash, ObservedModel: directResult.Receipt.ObservedModel, ObservedProvider: configured.Model.Provider, Result: result}
+	receipt := providerDispatchReceipt{Version: 1, Role: invocation.Profile.Role, InvocationID: invocation.ID, AccessInvocationID: selected.Intent.Reservation.InvocationID, RoutingDecision: selected.Intent.RoutingDecision, RuntimeJournalHead: runtimeHead, GatewayJournalHead: gatewayHead, ResultHash: resultHash, ObservedModel: directResult.Receipt.ObservedModel, ObservedProvider: configured.Model.Provider, Result: result}
 	return result, receipt, nil
 }
 

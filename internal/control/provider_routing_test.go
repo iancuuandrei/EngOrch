@@ -185,3 +185,33 @@ func TestResolveProviderRoutingBindsOnlyConfiguredAdaptiveModel(t *testing.T) {
 		t.Fatal("provider routing admitted an unconfigured adaptive model")
 	}
 }
+
+func TestProviderRoutingPersistsAndReplaysOptedInDecisionEvidence(t *testing.T) {
+	c := providerRoutingConfig("provider-api", "openai")
+	c.ModelPolicy = &modelpolicy.Policy{
+		Version: 1, DecisionEvidenceVersion: 1,
+		Profiles: []modelpolicy.Profile{
+			{Name: "standard", Runtime: c.Planner.Runtime, Provider: c.Planner.Provider, Model: c.Planner.Model, Effort: c.Planner.Effort},
+			{Name: "strong", Runtime: c.Planner.Runtime, Provider: c.Planner.Provider, Model: c.Planner.Model, Effort: c.Planner.Effort},
+		},
+		Rules: map[string]modelpolicy.Rule{"planner": {DefaultProfile: "standard", EscalatedProfile: "strong", ContextEscalationTokens: modelpolicy.MaxContextTokens, ContextEscalationBytes: modelpolicy.MaxContextBytes, FailureEscalationCount: 1}},
+	}
+	snapshot := Snapshot{RunID: strings.Repeat("a", 64), Creation: Creation{Config: c}}
+	invocation, err := runtime.NewInvocation(c.Planner, "exact provider prompt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := resolveProviderRoutingForSnapshot(snapshot, invocation, 1)
+	if err != nil || selected.Intent.RoutingDecision == nil || selected.Intent.RoutingDecision.ContextBytes != int64(len(invocation.Input)) || selected.Intent.RoutingDecision.AcceptedFailures != 0 {
+		t.Fatalf("provider route omitted exact routing decision evidence: %+v %v", selected.Intent, err)
+	}
+	replayed, err := resolveProviderRoutingForRecordedEvidence(c, snapshot.RunID, invocation, 1, selected.Intent.RoutingDecision)
+	if err != nil || replayed.Intent.Reservation.InvocationID != selected.Intent.Reservation.InvocationID {
+		t.Fatalf("recorded direct-provider decision did not replay exactly: %+v %v", replayed.Intent, err)
+	}
+	changedEvidence := *selected.Intent.RoutingDecision
+	changedEvidence.ContextBytes++
+	if _, err := resolveProviderRoutingForRecordedEvidence(c, snapshot.RunID, invocation, 1, &changedEvidence); err == nil {
+		t.Fatal("recorded decision with a substituted input size was accepted")
+	}
+}

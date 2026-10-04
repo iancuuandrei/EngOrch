@@ -6,6 +6,7 @@ import (
 
 	"harness.local/engorch/internal/access"
 	"harness.local/engorch/internal/config"
+	"harness.local/engorch/internal/modelpolicy"
 	"harness.local/engorch/internal/runtime"
 )
 
@@ -84,6 +85,30 @@ func TestDeriveModelAccessIntentAllRoles(t *testing.T) {
 				t.Fatal("intent reservation differs from configured role limit or billing")
 			}
 		})
+	}
+}
+
+func TestModelAccessIntentIncludesOptedInRoutingEvidence(t *testing.T) {
+	s := modelAccessSnapshot(t, "subscription")
+	profile := s.Creation.Config.Planner
+	s.Creation.Config.ModelPolicy = &modelpolicy.Policy{
+		Version: 1, DecisionEvidenceVersion: 1,
+		Profiles: []modelpolicy.Profile{
+			{Name: "standard", Runtime: profile.Runtime, Provider: profile.Provider, Model: profile.Model, Effort: profile.Effort},
+			{Name: "strong", Runtime: profile.Runtime, Provider: profile.Provider, Model: profile.Model, Effort: profile.Effort},
+		},
+		Rules: map[string]modelpolicy.Rule{"planner": {DefaultProfile: "standard", EscalatedProfile: "strong", ContextEscalationTokens: modelpolicy.MaxContextTokens, ContextEscalationBytes: modelpolicy.MaxContextBytes, FailureEscalationCount: 1}},
+	}
+	invocation, err := runtime.NewInvocation(profile, "controller-owned planner input")
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := deriveModelAccessIntent(s, invocation, 1)
+	if err != nil || intent.RoutingDecision == nil || intent.RoutingDecision.ContextBytes != int64(len(invocation.Input)) || intent.RoutingDecision.AcceptedFailures != 0 {
+		t.Fatalf("Codex/model-access intent omitted opt-in decision evidence: %+v %v", intent, err)
+	}
+	if err := intent.RoutingDecision.Validate(intent.Route, intent.ModelChoice); err != nil {
+		t.Fatalf("decision evidence does not match admitted access route: %v", err)
 	}
 }
 

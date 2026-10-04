@@ -2,6 +2,7 @@ package access
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,39 @@ import (
 
 	"harness.local/engorch/internal/journal"
 )
+
+func TestRoutingDecisionEvidenceIsOptionalAndIdentityBound(t *testing.T) {
+	_, _, intent := activeFixture(t)
+	legacyID, err := intent.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(intent)
+	if err != nil || bytes.Contains(raw, []byte("routing_decision")) {
+		t.Fatalf("legacy intent emitted an empty routing evidence field: %s %v", raw, err)
+	}
+	intent.RoutingDecision = &RoutingDecision{
+		Version: 1, ConfigID: strings.Repeat("c", 64), ProfileName: "standard",
+		Model: intent.Route.Model, Effort: intent.Route.Effort,
+		Reason: "default-configured-profile", ContextBytes: 32,
+	}
+	id, err := intent.ID()
+	if err != nil || id == legacyID {
+		t.Fatalf("opt-in evidence did not bind to invocation identity: %q %q %v", id, legacyID, err)
+	}
+	changed := intent
+	copyEvidence := *intent.RoutingDecision
+	changed.RoutingDecision = &copyEvidence
+	copyEvidence.ContextBytes++
+	changedID, err := changed.ID()
+	if err != nil || changedID == id {
+		t.Fatalf("mutated decision evidence did not change invocation identity: %q %q %v", changedID, id, err)
+	}
+	copyEvidence.Model = "substituted"
+	if _, err := changed.ID(); err == nil {
+		t.Fatal("evidence inconsistent with the admitted route was accepted")
+	}
+}
 
 func TestDurableAdmissionReplaysBudgetAndPolicy(t *testing.T) {
 	profile := fixture()

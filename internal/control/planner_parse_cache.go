@@ -12,7 +12,10 @@ import (
 	"harness.local/engorch/internal/safepath"
 )
 
-const plannerParseCachePathDomain = "harness.control.planner-go-parse-cache-checkout.v1"
+const (
+	plannerParseCachePathDomain   = "harness.control.planner-go-parse-cache-checkout.v1"
+	candidateFactsCachePathDomain = "harness.control.candidate-go-facts-cache-checkout.v1"
+)
 
 type plannerParseCacheCheckout struct {
 	Name         string `json:"name"`
@@ -127,4 +130,41 @@ func pathContains(parent, child string) bool {
 		rel = strings.ToLower(rel)
 	}
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel))
+}
+
+// ensureCandidateFactsCacheDir creates a separate local cache namespace for
+// candidate review facts. It shares no entries with planner corpus caching.
+func ensureCandidateFactsCacheDir(identity repository.Identity, producerSHA256 string) (string, error) {
+	userCacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	userCacheDir = filepath.Clean(userCacheDir)
+	if !filepath.IsAbs(userCacheDir) || userCacheDir == filepath.VolumeName(userCacheDir)+string(filepath.Separator) {
+		return "", errors.New("candidate facts cache requires a non-root user cache directory")
+	}
+	if err := identity.Validate(); err != nil || safepath.RequireDigest(producerSHA256) != nil {
+		return "", errors.New("invalid candidate facts cache identity or producer")
+	}
+	root := plannerParseCacheCheckout{Name: identity.Name, Root: filepath.Clean(identity.Root), CommonDir: filepath.Clean(identity.CommonDir), ObjectFormat: identity.ObjectFormat}
+	checkoutID, err := canonical.Hash(candidateFactsCachePathDomain, root)
+	if err != nil {
+		return "", err
+	}
+	cacheDir := filepath.Join(userCacheDir, "Fabric", "ri", "go-candidate-file-facts", checkoutID, producerSHA256)
+	if err := rejectParseCacheRepositoryOverlap(cacheDir, identity); err != nil {
+		return "", err
+	}
+	if err := ensurePlannerParseCacheDirectories(userCacheDir, cacheDir); err != nil {
+		return "", err
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(cacheDir, 0700); err != nil {
+			return "", err
+		}
+	}
+	if err := safepath.Directory(cacheDir); err != nil {
+		return "", err
+	}
+	return cacheDir, nil
 }

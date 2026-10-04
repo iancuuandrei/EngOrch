@@ -229,7 +229,14 @@ func maybeAdmitReviewImpactContext(ctx context.Context, path string) error {
 		}
 		policy := s.Creation.Execution
 		client := ri.Client{Executable: policy.PlannerContextRIExecutable, ExecutableHash: policy.PlannerContextRIExecutableSHA256}
-		corpus, err := ri.CollectCandidateGoCorpus(ctx, s.Creation.Repository, *s.Workspace, *s.Candidate, baseGraph, baseInventory, client, "")
+		cacheDir := ""
+		if policy.CandidateFactsCacheVersion == 1 {
+			cacheDir, err = ensureCandidateFactsCacheDir(s.Creation.Repository, policy.PlannerContextRIExecutableSHA256)
+			if err != nil {
+				return err
+			}
+		}
+		corpus, err := ri.CollectCandidateGoCorpus(ctx, s.Creation.Repository, *s.Workspace, *s.Candidate, baseGraph, baseInventory, client, cacheDir)
 		if err != nil {
 			return err
 		}

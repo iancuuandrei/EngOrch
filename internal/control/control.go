@@ -65,6 +65,10 @@ type ExecutionPolicy struct {
 	// ReviewImpactContextVersion opts reviews into a candidate-bound, bounded
 	// source-topology projection. Zero preserves historical reviewer invocations.
 	ReviewImpactContextVersion int `json:"review_impact_context_version,omitempty"`
+	// CandidateFactsCacheVersion opts review-impact collection into local,
+	// content-addressed candidate syntax-fact reuse. Cache observations are not
+	// durable evidence and never authorize an effect.
+	CandidateFactsCacheVersion int `json:"candidate_facts_cache_version,omitempty"`
 	// PlannerContextRIExecutable and PlannerContextRIExecutableSHA256 pin the
 	// local read-only parser used only by Go planner-context admission. They
 	// are immutable run inputs and do not authorize a model or repository effect.
@@ -138,6 +142,12 @@ func (p ExecutionPolicy) Validate() error {
 	}
 	if p.ReviewImpactContextVersion == 1 && (p.PlannerContext != plannerContextGoContractV1 || p.PlannerContextRIExecutable == "" || safepath.RequireDigest(p.PlannerContextRIExecutableSHA256) != nil) {
 		return errors.New("review impact context requires go-contract-context-v1 and a pinned RI parser")
+	}
+	if p.CandidateFactsCacheVersion != 0 && p.CandidateFactsCacheVersion != 1 {
+		return errors.New("invalid candidate facts cache version")
+	}
+	if p.CandidateFactsCacheVersion == 1 && p.ReviewImpactContextVersion != 1 {
+		return errors.New("candidate facts cache requires review impact context")
 	}
 	if p.GraphVersion != 0 && p.GraphVersion != 1 {
 		return errors.New("invalid execution graph version")

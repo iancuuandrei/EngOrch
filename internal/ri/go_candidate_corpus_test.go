@@ -1,7 +1,9 @@
 package ri
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -69,6 +71,50 @@ func TestCollectCandidateGoCorpusActualPinnedRI(t *testing.T) {
 	}
 }
 
+func TestCollectCandidateGoCorpusCandidateFactsCacheRevalidatesCandidateBindings(t *testing.T) {
+	client, identity, binding, inventory, graph := candidateGoCorpusTestBase(t, map[string]string{
+		"go.mod": "module example.test/cache\n",
+		"a.go":   "package cache\nfunc Base() {}\n",
+	}, "cache candidate facts")
+	cacheDir := t.TempDir()
+	collect := func(content string) GoCandidateCorpus {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(binding.Request.Path, "a.go"), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+		expected, err := worktree.Fingerprint(context.Background(), binding)
+		if err != nil {
+			t.Fatal(err)
+		}
+		corpus, err := CollectCandidateGoCorpus(context.Background(), identity, binding, expected, graph, inventory, client, cacheDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if corpus.CandidateID == "" || corpus.Graph.CandidateID != corpus.CandidateID || corpus.CandidateFilesHash != expected.FilesHash || !hasGoDeclaration(corpus.Graph, "a.go", "ChangedA") && !hasGoDeclaration(corpus.Graph, "a.go", "ChangedB") {
+			t.Fatal("candidate facts cache lost current candidate graph binding")
+		}
+		return corpus
+	}
+	a := "package cache\nfunc ChangedA() {}\n"
+	b := "package cache\nfunc ChangedB() {}\n"
+	first := collect(a)
+	second := collect(b)
+	third := collect(a)
+	if first.CandidateID == second.CandidateID || first.CandidateID != third.CandidateID || first.CandidateFilesHash == second.CandidateFilesHash || first.Graph.Digest == second.Graph.Digest || first.Graph.Digest != third.Graph.Digest {
+		t.Fatal("A/B/A candidate facts did not rebuild candidate-bound graph identity")
+	}
+	if first.CandidateFactCacheHits != 0 || first.CandidateFactCacheMisses != 1 || second.CandidateFactCacheHits != 0 || second.CandidateFactCacheMisses != 1 || third.CandidateFactCacheHits != 1 || third.CandidateFactCacheMisses != 0 {
+		t.Fatalf("unexpected candidate fact cache diagnostics: first=%d/%d second=%d/%d third=%d/%d", first.CandidateFactCacheHits, first.CandidateFactCacheMisses, second.CandidateFactCacheHits, second.CandidateFactCacheMisses, third.CandidateFactCacheHits, third.CandidateFactCacheMisses)
+	}
+	if err := ValidateGoEngineeringGraph(third.Graph); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(third)
+	if err != nil || bytes.Contains(encoded, []byte("candidate_fact_cache")) {
+		t.Fatal("candidate cache diagnostics entered serialized corpus identity")
+	}
+}
+
 func TestReadCandidateGoCorpusFileRejectsStaleExpectedCandidate(t *testing.T) {
 	_, binding := candidateModuleFixture(t, map[string]string{"go.mod": "module example.test/root\n", "a.go": "package p\n"})
 	expected, err := worktree.Fingerprint(context.Background(), binding)
@@ -115,6 +161,54 @@ func TestCollectCandidateGoCorpusActualPinnedRINoOp(t *testing.T) {
 	}
 	if len(got.ChangedPaths) != 0 || len(got.DeletedPaths) != 0 || got.Graph.CandidateID != got.CandidateID || got.Graph.CandidateID == "" || !hasGoDeclaration(got.Graph, "a.go", "A") {
 		t.Fatalf("no-op candidate did not rebuild bound retained facts: %#v", got)
+	}
+}
+
+func TestCollectCandidateGoCorpusRejectsUnsafeCacheDirectory(t *testing.T) {
+	client, identity, binding, inventory, graph := candidateGoCorpusTestBase(t, map[string]string{
+		"go.mod": "module example.test/cachepath\n",
+		"a.go":   "package cachepath\nfunc A() {}\n",
+	}, "cache path")
+	expected, err := worktree.Fingerprint(context.Background(), binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CollectCandidateGoCorpus(context.Background(), identity, binding, expected, graph, inventory, client, "relative-cache"); err == nil {
+		t.Fatal("relative candidate cache directory accepted")
+	}
+}
+
+func TestCandidateFactsCacheDoesNotReuseModuleOwnership(t *testing.T) {
+	client, identity, binding, inventory, graph := candidateGoCorpusTestBase(t, map[string]string{
+		"go.mod":   "module example.test/old\n",
+		"pkg/a.go": "package pkg\nfunc Base() {}\n",
+	}, "module ownership")
+	if err := os.WriteFile(filepath.Join(binding.Request.Path, "pkg", "a.go"), []byte("package pkg\nfunc Changed() {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := t.TempDir()
+	collect := func() GoCandidateCorpus {
+		t.Helper()
+		expected, err := worktree.Fingerprint(context.Background(), binding)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := CollectCandidateGoCorpus(context.Background(), identity, binding, expected, graph, inventory, client, cacheDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	first := collect()
+	if first.CandidateFactCacheMisses != 1 || packageBindingForPath(first.Graph, "pkg/a.go").ImportPath != "example.test/old/pkg" {
+		t.Fatal("initial candidate cache collection did not bind old module ownership")
+	}
+	if err := os.WriteFile(filepath.Join(binding.Request.Path, "go.mod"), []byte("module example.test/new\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	second := collect()
+	if second.CandidateFactCacheHits != 1 || second.CandidateID == first.CandidateID || packageBindingForPath(second.Graph, "pkg/a.go").ImportPath != "example.test/new/pkg" {
+		t.Fatal("cached candidate facts reused stale module ownership")
 	}
 }
 

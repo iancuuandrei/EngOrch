@@ -9,12 +9,13 @@ for candidate observations, native checks, review, or final verification.
 The controller derives a private cache directory beneath the operating
 system's user cache directory. Its namespace binds the stable checkout
 identity (checkout name/root/Git common directory/object format) and the
-pinned RI executable digest. Individual facts are keyed by source path, source
-digest, parser/schema version, and producer digest. A new commit reuses only
-facts whose complete key still matches. The absolute cache path and hit/miss
-counts are not written into the journal or planner prompt. A run that already
-has an admitted planner context replays that immutable record without querying
-the cache again.
+pinned RI executable digest. A new producer digest therefore gets a separate
+leaf and does not migrate or overwrite another producer's cache. Individual
+facts are keyed by source path, source digest, parser/schema version, and
+producer digest. A new commit reuses only facts whose complete key still
+matches. The absolute cache path and hit/miss counts are not written into the
+journal or planner prompt. A run that already has an admitted planner context
+replays that immutable record without querying the cache again.
 
 The cache is a trusted-local performance optimization, not an authority or
 integrity boundary. RI revalidates cached fact shape and bindings before use;
@@ -24,6 +25,26 @@ cache may replace an entry and recompute its hashes, so the cached syntax facts
 are advisory just like freshly parsed syntax facts. Cache corruption is
 discarded and reparsed; errors do not cause a provider call or grant file-write
 permission.
+
+Each per-checkout/per-producer RI leaf retains at most 1,024 published fact
+files and 64 MiB across those files plus its small policy marker. Temporary
+files are included in the byte reservation while a managed writer publishes;
+the zero-byte lock file is not. A one-time locked migration trims older leaves
+to these limits before publishing the marker. When an insertion would exceed
+either bound, the oldest fact by file modification time is evicted; equal
+timestamps use the cache filename as a stable tie-break. The marker is never
+evicted. A bounded scan rejects symlink, non-regular, or malformed entries for
+storage, and a create-new local lock serializes cache publications. If another
+writer holds the lock during migration/publication or the cache cannot safely
+be scanned, the freshly parsed facts are returned without publishing that
+result. A leftover lock after process interruption is not recovered; writes
+remain unpublished while the lock exists, while already-published exact hits
+remain readable if the policy marker is valid. These limits govern files
+managed by cooperative RI writers. An external process
+with access to the cache directory can add unrelated files after the fast-path
+policy check; that does not expand cache authority, and the next managed write
+will reject an unsafe scan. Eviction, lock contention, and cache write
+failures never turn cached data into verification evidence.
 
 Focused evidence is collected with the pinned RI executable:
 

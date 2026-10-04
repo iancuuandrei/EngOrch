@@ -286,6 +286,7 @@ func TestAutonomousContractPlannerContextBindsSeparateOptIn(t *testing.T) {
 
 func TestAutonomousReviewImpactContextRequiresAndBindsPinnedContractMode(t *testing.T) {
 	for _, args := range [][]string{
+		{"run", "--autonomous", "--review-impact-candidate-facts-cache", "objective"},
 		{"run", "--autonomous", "--review-impact-context", "objective"},
 		{"run", "--autonomous", "--review-impact-context", "--planner-context", autonomousPlannerContextGoSourceV1, "objective"},
 		{"run", "--autonomous", "--review-impact-context", "--planner-context", autonomousPlannerContextGoContractV1, "objective"},
@@ -318,7 +319,7 @@ func TestAutonomousReviewImpactContextRequiresAndBindsPinnedContractMode(t *test
 		"--planner-context", autonomousPlannerContextGoContractV1,
 		"--planner-context-ri-executable", parser,
 		"--planner-context-ri-executable-sha256", parserHash,
-		"--review-impact-context", "A bounded contract review objective",
+		"--review-impact-context", "--review-impact-candidate-facts-cache", "A bounded contract review objective",
 	}, root, &out)
 	if err == nil {
 		t.Fatal("test executable unexpectedly satisfied the RI protocol")
@@ -336,7 +337,7 @@ func TestAutonomousReviewImpactContextRequiresAndBindsPinnedContractMode(t *test
 		t.Fatal(err)
 	}
 	policy := snapshot.Creation.Execution
-	if policy == nil || policy.ReviewImpactContextVersion != 1 || policy.PlannerContext != autonomousPlannerContextGoContractV1 || policy.PlannerContextRIExecutable != parser || policy.PlannerContextRIExecutableSHA256 != parserHash {
+	if policy == nil || policy.ReviewImpactContextVersion != 1 || policy.CandidateFactsCacheVersion != 1 || policy.PlannerContext != autonomousPlannerContextGoContractV1 || policy.PlannerContextRIExecutable != parser || policy.PlannerContextRIExecutableSHA256 != parserHash {
 		t.Fatalf("review impact mode/parser were not bound in run creation: %#v", policy)
 	}
 }

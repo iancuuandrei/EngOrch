@@ -30,6 +30,12 @@ an advisory topology projection; it does not prescribe the task plan or prove
 independence. Prepare records zero provider calls, and the existing native
 full-package and two composed held-out checks remain mandatory.
 
+Both arms also request `-CandidateFactsCache`, an opt-in version-1 cache policy
+for the candidate-bound reviewer facts. The runner requires this to match
+between Prepare and Evaluate and verifies that the inspected run records
+`candidate_facts_cache_version=1`. This records the selected policy only; the
+runner does not report cache hits or claim that a cache was useful.
+
 For the cap-2 treatment, qualification additionally requires a read-only hub
 followed by two ready, disjoint implementation leaves and positive overlap of
 their controller dispatch intervals. The cap-1 control is compared on normal

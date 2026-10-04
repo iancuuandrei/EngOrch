@@ -34,42 +34,43 @@ must observe the exact same compaction item ID on started and completed
 notifications and a completed turn. If the threshold is not reached, the
 result is “not observed,” not zero compactions or a successful compaction test.
 
-## Proposed bounded option (not implemented here)
+## Implemented opt-in and qualification boundary
 
-Keep the current no-option behavior and serialized identities unchanged. Add
-an omitted-by-default, versioned immutable run option such as
-`Execution.AutoCompact = { version: 1, token_limit: N }`, selected only by an
-explicit init CLI flag. Validate `N > 0`; do not infer a threshold from bytes,
-token estimates, or an assumed model window. Bind this option through the
-existing immutable run creation/config hash and include the exact thread-start
-override in the thread/runtime intent and observed thread binding. The
-Codex-host's generated CODEX_HOME config remains fixed and hash-validated.
+The CLI exposes `run --autonomous --auto-compact-token-limit N`, bounded to
+1–10,000,000. Omission preserves prior run and invocation identities. The
+requested limit is bound to immutable execution policy and each Codex
+invocation; the runtime sends it as
+`config.model_auto_compact_token_limit` at thread start. The thread receipt
+proves which value was requested, not that the runtime reached it. The
+generated Codex host configuration remains fixed and hash-validated. See the
+[operator guide](../guides/native-auto-compaction.md) for the exact binding.
 
-Qualification should use one bounded coding task with a real native test,
-`max_parallel=1`, no repair allowance, and one writer invocation. The task
-should require several useful inspect/edit/test tool iterations, not filler
-turns. Set a conservative explicit threshold only after validating it against
-the selected model's effective window. Require exact compaction lifecycle
-pairing inside the same invocation, completed final turn, accepted candidate,
-native verification, review, and held-out acceptance. Enforce existing
-invocation/token budgets and stop on UNKNOWN; do not issue manual compact RPCs
-or resend an uncertain turn.
-
-Fabric currently sets no auto-compaction threshold in `StartThreadWithTools`;
-its Codex-host private config is intentionally fixed. The current source-level
-evidence and mock tests are not live qualification. This note proposes no
-runtime or controller changes.
+Qualification must use a useful coding objective and its unchanged repair,
+native, review, and held-out gates. Keep `max_parallel=1`, use a threshold
+validated against the configured model's effective window, and retain the
+existing invocation and token budgets. Require the same compaction item ID in
+both started and completed notifications for one invocation/thread/turn and a
+completed final turn. A configured limit without that lifecycle evidence is
+“not observed,” not a pass. Do not issue manual compact RPCs or resend an
+uncertain turn. The upstream mock and local protocol fixtures remain protocol
+evidence, not live provider qualification.
 
 ## Fresh-context rounds after READY
 
-An accepted `READY` run remains terminal. The existing local commit path can
-integrate its exact verified candidate without reopening that run:
-`prepare-commit` captures a candidate only when the run is READY and the
-workspace outcome is confirmed; `commit` requires the matching preview intent
-ID and explicit actor. A following `run --autonomous` rediscovers the exact
-current repository HEAD/tree and creates a new run identity from that source,
-the same harness config, and a new objective. Its role invocations start fresh
-runtime threads. This provides a separate, auditable long-horizon round using
-existing operations, while retaining both prior run journals and their
-candidate/review/verification bindings. It is distinct from compaction within
-one writer turn and does not continue a terminal READY controller.
+An accepted `READY` run remains terminal. `prepare-commit` and `commit` create
+and confirm a commit on that run's isolated `harness/<RUN>` branch. They do not
+move the configured source checkout's `HEAD`; the source checkout is
+deliberately preserved. Therefore, starting another run at the same `--root`
+still discovers the old source `HEAD`, not the accepted candidate commit.
+
+To base a new run on the accepted result, confirm the exact commit in the
+original run's `COMMITTED` snapshot, then create a separate detached source
+worktree at that commit. Copy the operator's `harness.toml` policy into that
+checkout and give it a distinct external `controller_state_root`. Start the
+next run with that checkout as `--root`. The new journal binds the accepted
+commit/tree and its roles start fresh runtime threads, while the old run stays
+terminal and its journal is retained. The [verified fresh rounds guide](../guides/verified-fresh-rounds.md)
+provides a not-executed Humanize recipe. A fresh round and in-turn compaction
+are separate: only the latter requires a compaction lifecycle pair within one
+long-lived role invocation. Resume only the exact nonterminal run, preserve
+`UNKNOWN`, and never resend an uncertain invocation.

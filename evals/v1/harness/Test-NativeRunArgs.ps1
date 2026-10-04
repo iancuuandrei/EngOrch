@@ -30,13 +30,22 @@ if ($null -eq $contextValidator) { throw 'Planner context binding validator miss
 $reviewImpactBinding = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-ReviewImpactRunnerBindingShape' }, $true)
 $reviewImpactPrepared = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-ReviewImpactPreparedBinding' }, $true)
 $reviewImpactObserved = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-ReviewImpactObserved' }, $true)
-if ($null -eq $reviewImpactBinding -or $null -eq $reviewImpactPrepared -or $null -eq $reviewImpactObserved) { throw 'Review-impact treatment binding helpers missing.' }
+$factsCacheBinding = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-CandidateFactsCacheRunnerBindingShape' }, $true)
+$factsCachePrepared = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-CandidateFactsCachePreparedBinding' }, $true)
+$factsCacheObserved = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-CandidateFactsCacheObserved' }, $true)
+if ($null -eq $reviewImpactBinding -or $null -eq $reviewImpactPrepared -or $null -eq $reviewImpactObserved -or
+    $null -eq $factsCacheBinding -or $null -eq $factsCachePrepared -or $null -eq $factsCacheObserved) {
+    throw 'Review-impact/candidate-facts-cache treatment binding helpers missing.'
+}
 . ([scriptblock]::Create($goMode.Extent.Text))
 . ([scriptblock]::Create($fileHash.Extent.Text))
 . ([scriptblock]::Create($contextValidator.Extent.Text))
 . ([scriptblock]::Create($reviewImpactBinding.Extent.Text))
 . ([scriptblock]::Create($reviewImpactPrepared.Extent.Text))
 . ([scriptblock]::Create($reviewImpactObserved.Extent.Text))
+. ([scriptblock]::Create($factsCacheBinding.Extent.Text))
+. ([scriptblock]::Create($factsCachePrepared.Extent.Text))
+. ([scriptblock]::Create($factsCacheObserved.Extent.Text))
 . ([scriptblock]::Create($policyBinding.Extent.Text))
 . ([scriptblock]::Create($preparedBinding.Extent.Text))
 . ([scriptblock]::Create($observedPolicy.Extent.Text))
@@ -134,6 +143,9 @@ if (($goContractV1 | ConvertTo-Json -Compress) -ne ($expectedGoContractV1 | Conv
 $reviewImpact = @(Get-NativeRunArgs $taskPath $objective $false 1 'go-contract-context-v1' '' $parserPath $parserHash $false '' 0 $true)
 $expectedReviewImpact = @('--root', $taskPath, 'run', '--autonomous', '--planner-context', 'go-contract-context-v1', '--planner-context-ri-executable', $parserPath, '--planner-context-ri-executable-sha256', $parserHash, '--review-impact-context', '--max-parallel', '1', $objective)
 if (($reviewImpact | ConvertTo-Json -Compress) -ne ($expectedReviewImpact | ConvertTo-Json -Compress)) { throw 'Review-impact argv does not bind the contract planner and exact pinned parser.' }
+$reviewImpactFactsCache = @(Get-NativeRunArgs $taskPath $objective $false 1 'go-contract-context-v1' '' $parserPath $parserHash $false '' 0 $true $true)
+$expectedReviewImpactFactsCache = @('--root', $taskPath, 'run', '--autonomous', '--planner-context', 'go-contract-context-v1', '--planner-context-ri-executable', $parserPath, '--planner-context-ri-executable-sha256', $parserHash, '--review-impact-context', '--review-impact-candidate-facts-cache', '--max-parallel', '1', $objective)
+if (($reviewImpactFactsCache | ConvertTo-Json -Compress) -ne ($expectedReviewImpactFactsCache | ConvertTo-Json -Compress)) { throw 'Candidate facts cache argv does not add the explicit v1 cache policy to the reviewer-impact treatment.' }
 Assert-ReviewImpactRunnerBindingShape $false '' 'Native'
 Assert-ReviewImpactRunnerBindingShape $true 'go-contract-context-v1' 'Native'
 foreach ($badReviewImpact in @(
@@ -145,12 +157,55 @@ foreach ($badReviewImpact in @(
     try { Assert-ReviewImpactRunnerBindingShape $badReviewImpact.Enabled $badReviewImpact.Planner $badReviewImpact.Mode } catch { $rejected = $true }
     if (-not $rejected) { throw 'Invalid reviewer-impact mode/planner combination was accepted.' }
 }
+$validFactsCache = @(
+    @{ Enabled=$false; ReviewImpact=$false; Planner=''; Mode='Native' },
+    @{ Enabled=$true; ReviewImpact=$true; Planner='go-contract-context-v1'; Mode='Native' }
+)
+foreach ($case in $validFactsCache) { Assert-CandidateFactsCacheRunnerBindingShape $case.Enabled $case.ReviewImpact $case.Planner $case.Mode }
+foreach ($badFactsCache in @(
+    @{ Enabled=$true; ReviewImpact=$false; Planner='go-contract-context-v1'; Mode='Native' },
+    @{ Enabled=$true; ReviewImpact=$true; Planner='go-source-context-v2'; Mode='Native' },
+    @{ Enabled=$true; ReviewImpact=$true; Planner='go-contract-context-v1'; Mode='PR5Matched' }
+)) {
+    $rejected = $false
+    try { Assert-CandidateFactsCacheRunnerBindingShape $badFactsCache.Enabled $badFactsCache.ReviewImpact $badFactsCache.Planner $badFactsCache.Mode } catch { $rejected = $true }
+    if (-not $rejected) { throw 'Invalid candidate-facts-cache mode/review-context combination was accepted.' }
+}
 $reviewImpactPrepared = [pscustomobject]@{ review_impact_context_requested = $true }
 Assert-ReviewImpactPreparedBinding $reviewImpactPrepared $true
 Assert-ReviewImpactPreparedBinding ([pscustomobject]@{}) $false
 $rejectedReviewImpactMismatch = $false
 try { Assert-ReviewImpactPreparedBinding $reviewImpactPrepared $false } catch { $rejectedReviewImpactMismatch = $true }
 if (-not $rejectedReviewImpactMismatch) { throw 'Evaluate accepted a changed reviewer-impact treatment.' }
+$factsCachePrepared = [pscustomobject]@{ candidate_facts_cache_version_requested = 1 }
+Assert-CandidateFactsCachePreparedBinding $factsCachePrepared $true
+Assert-CandidateFactsCachePreparedBinding ([pscustomobject]@{}) $false
+$rejectedFactsCacheMismatch = $false
+try { Assert-CandidateFactsCachePreparedBinding $factsCachePrepared $false } catch { $rejectedFactsCacheMismatch = $true }
+if (-not $rejectedFactsCacheMismatch) { throw 'Evaluate accepted a changed candidate-facts-cache treatment.' }
+$rejectedFactsCacheMissing = $false
+try { Assert-CandidateFactsCachePreparedBinding ([pscustomobject]@{}) $true } catch { $rejectedFactsCacheMissing = $true }
+if (-not $rejectedFactsCacheMissing) { throw 'Evaluate accepted a candidate-facts-cache treatment absent from Prepare.' }
+$factsCacheObserved = Assert-CandidateFactsCacheObserved (@{creation=@{execution=@{review_impact_context_version=1;candidate_facts_cache_version=1}}}) $true
+if ($factsCacheObserved -ne 1) { throw 'Candidate-facts-cache policy version was not observed.' }
+$disabledFactsCacheObserved = Assert-CandidateFactsCacheObserved (@{creation=@{execution=@{}}}) $false
+if ($null -ne $disabledFactsCacheObserved) { throw 'Legacy run unexpectedly reports a candidate-facts-cache policy.' }
+foreach ($invalidFactsCacheSnapshot in @(
+    @{creation=@{execution=@{review_impact_context_version=1;candidate_facts_cache_version=2}}},
+    @{creation=@{execution=@{review_impact_context_version=0;candidate_facts_cache_version=1}}},
+    @{creation=@{execution=@{review_impact_context_version=1}}}
+)) {
+    $rejected = $false
+    try { Assert-CandidateFactsCacheObserved $invalidFactsCacheSnapshot $true } catch { $rejected = $true }
+    if (-not $rejected) { throw 'Invalid or absent observed candidate-facts-cache policy was accepted.' }
+}
+$preEffectProbeRoot = Join-Path ([IO.Path]::GetTempPath()) ('fabric-v1-cache-invalid-' + [guid]::NewGuid().ToString('N'))
+if (Test-Path -LiteralPath $preEffectProbeRoot) { throw 'Pre-effect probe path unexpectedly exists.' }
+$rejectedBeforeEffects = $false
+try { & $runner -Action Prepare -RunRoot $preEffectProbeRoot -CandidateFactsCache } catch { $rejectedBeforeEffects = $true }
+if (-not $rejectedBeforeEffects -or (Test-Path -LiteralPath $preEffectProbeRoot)) {
+    throw 'Invalid CandidateFactsCache runner arguments were not rejected before creating the run root.'
+}
 $reviewCandidate = 'a' * 64
 $reviewImpactSnapshot = @{
     creation = @{ execution = @{ review_impact_context_version = 1 } }
@@ -181,6 +236,9 @@ try {
     $isolatedReviewImpact = @(Get-NativeRunArgs $taskPath $objective $false 2 'go-contract-context-v1' '' $parserPath $parserHash $true $binding.Path 0 $true)
     $expectedIsolatedReviewImpact = @('--root', $taskPath, 'run', '--autonomous', '--planner-context', 'go-contract-context-v1', '--planner-context-ri-executable', $parserPath, '--planner-context-ri-executable-sha256', $parserHash, '--review-impact-context', '--isolated-writers', '--isolation-policy', $policyPath, '--max-parallel', '2', $objective)
     if (($isolatedReviewImpact | ConvertTo-Json -Compress) -ne ($expectedIsolatedReviewImpact | ConvertTo-Json -Compress)) { throw 'Topology treatment argv does not preserve the pinned contract parser, review flag, resource policy and parallel cap.' }
+    $isolatedReviewImpactFactsCache = @(Get-NativeRunArgs $taskPath $objective $false 2 'go-contract-context-v1' '' $parserPath $parserHash $true $binding.Path 0 $true $true)
+    $expectedIsolatedReviewImpactFactsCache = @('--root', $taskPath, 'run', '--autonomous', '--planner-context', 'go-contract-context-v1', '--planner-context-ri-executable', $parserPath, '--planner-context-ri-executable-sha256', $parserHash, '--review-impact-context', '--review-impact-candidate-facts-cache', '--isolated-writers', '--isolation-policy', $policyPath, '--max-parallel', '2', $objective)
+    if (($isolatedReviewImpactFactsCache | ConvertTo-Json -Compress) -ne ($expectedIsolatedReviewImpactFactsCache | ConvertTo-Json -Compress)) { throw 'Topology treatment argv omits or reorders the candidate facts cache policy.' }
 
     $priorBinding = [pscustomobject]@{
         isolated_writers_requested = $true
@@ -319,4 +377,4 @@ foreach ($invalid in @(-1, 9)) {
     try { Get-NativeRunArgs $taskPath $objective $true $invalid | Out-Null } catch { $rejected = $true }
     if (-not $rejected) { throw "Invalid limit $invalid was admitted." }
 }
-Write-Output 'PASS: legacy argv is byte-order stable; Go planner modes bind exact parser provenance; reviewer-impact opt-in matches the prepared treatment and exact candidate record; isolated mode binds policy and an external controller state root; invalid combinations and mutations reject; objectives stay one argument; no provider calls.'
+Write-Output 'PASS: legacy argv is byte-order stable; Go planner modes bind exact parser provenance; reviewer-impact and candidate-facts-cache opt-ins match Prepare/Evaluate and observed immutable policy versions; isolated mode binds policy and an external controller state root; invalid combinations and mutations reject; objectives stay one argument; no provider calls.'

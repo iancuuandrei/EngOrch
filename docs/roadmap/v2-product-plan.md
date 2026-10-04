@@ -422,3 +422,30 @@ integrated increment, without resurrecting a G0 promotion ladder.
   context reuse are the next product work. Adaptive policy calibration,
   sustained fresh-context/native compaction qualification and v2 release
   gates remain open.
+
+## Checkpoint — v1.0.13 integrated; bounded cache and routing evidence candidate
+
+- Public main/dev advanced to `2459ab9d863386cae16b158ddc505f65b9397951`
+  after clean full Go, independent review, hosted security and Sonar passed.
+  The concurrent directory race correction belongs to that same increment.
+  See its qualification record for exact pins and retained original failure.
+- The completed frozen context comparison has fixed-six 5/6 in both arms,
+  with different held-out failures. Contract godotenv passed; context-v2
+  godotenv blocked at repair 1/2. Numeric-text exhausted two repairs in both.
+  No passing sets are pooled; no new default context is adopted. Typed usage
+  includes failed work, with cost and physical provider calls UNKNOWN.
+- The next opt-in candidate reuses exact per-file candidate review syntax
+  observations while recomputing source/candidate/module/generator bindings.
+  Its RI cache has bounded 1,024-entry / 64 MiB cooperative storage and safe
+  eviction. No verification, review authority or external effect is cached.
+- Versioned routing decision evidence now binds the serialized input and
+  configured route to the original invocation, including settlement paths.
+  It records decisions without claiming a calibrated allocation policy.
+- Independent reviews and focused Go/Rust/PowerShell checks approved these
+  slices. Clean full Go/Rust, hosted checks and actual cache/topology use are
+  still required before promotion. Native compaction/fresh-round guidance is
+  documented but not live qualification.
+- Old v1.0.13 topology preparations had zero effects and are superseded by
+  the source amendment. Fresh matched topology runs will use a qualified
+  frozen increment. A read-only native model catalog confirmed Sol High for
+  a predeclared fixer pilot; no pilot model invocation has been sent.

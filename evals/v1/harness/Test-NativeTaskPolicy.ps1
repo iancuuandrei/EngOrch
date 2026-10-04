@@ -40,6 +40,8 @@ if ($topologyFixture.manifest_task -ne $entry[0].id -or
     $topologyFixture.review_impact_context_requested -ne $true -or
     $topologyFixture.planner_context -cne 'go-contract-context-v1' -or
     $topologyFixture.review_impact_context_version_required -ne 1 -or
+    $topologyFixture.candidate_facts_cache_requested -ne $true -or
+    $topologyFixture.candidate_facts_cache_version_required -ne 1 -or
     $topologyFixture.current_product_gate -cne 'not_qualified_until_a_fresh_matched_pair_is_prepared_and_accepted') {
     throw 'Humanize topology fixture is not bound to the supported opt-in reviewer-impact runner treatment.'
 }

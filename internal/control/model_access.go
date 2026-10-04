@@ -39,6 +39,10 @@ func deriveModelAccessIntent(s Snapshot, invocation runtime.Invocation, attempt 
 	if err := invocation.Validate(); err != nil {
 		return access.Intent{}, err
 	}
+	routingDecision, err := modelRoutingDecisionForInvocation(s, invocation)
+	if err != nil {
+		return access.Intent{}, err
+	}
 
 	configured, err := s.Creation.Config.Route(invocation.Profile.Role)
 	if err != nil {
@@ -103,11 +107,12 @@ func deriveModelAccessIntent(s Snapshot, invocation runtime.Invocation, attempt 
 		return access.Intent{}, err
 	}
 	intent := access.Intent{
-		Attempt:     attempt,
-		PolicyID:    policyID,
-		InputHash:   inputID,
-		Route:       selected,
-		ModelChoice: modelChoice,
+		Attempt:         attempt,
+		PolicyID:        policyID,
+		InputHash:       inputID,
+		Route:           selected,
+		ModelChoice:     modelChoice,
+		RoutingDecision: routingDecision,
 		Reservation: access.Reservation{
 			Tokens:          limit.Tokens,
 			UnlimitedTokens: limit.UnlimitedTokens,
