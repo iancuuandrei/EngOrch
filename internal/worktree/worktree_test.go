@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -174,5 +175,79 @@ func TestRawGitSymlinkRejectedBeforeCreation(t *testing.T) {
 	}
 	if _, err := os.Stat(r.Path); !os.IsNotExist(err) {
 		t.Fatal("workspace created before source admission")
+	}
+}
+
+func TestCreateLongBranchPathWithMaskedGlobalConfig(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Git for Windows long-path behavior")
+	}
+
+	root := t.TempDir()
+	for len(filepath.Join(root, ".git", "refs", "heads", "harness", strings.Repeat("a", 64)+".lock")) <= 260 {
+		root = filepath.Join(root, "x")
+	}
+	if len(root) >= 260 {
+		t.Fatalf("fixture root unexpectedly exceeds classic path limit: %d", len(root))
+	}
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, root, "init", "-q")
+	if err := os.WriteFile(filepath.Join(root, "source.txt"), []byte("committed\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, root, "add", "source.txt")
+	gitTest(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "fixture")
+	gitTest(t, root, "config", "core.longpaths", "false")
+
+	identity, err := repository.Discover(context.Background(), root, "longpath-fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := Prepare(strings.Repeat("a", 64), identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refLock := filepath.Join(identity.CommonDir, "refs", "heads", "harness", r.RunID+".lock")
+	if len(refLock) <= 260 {
+		t.Fatalf("test does not cross classic ref-lock path limit: %d", len(refLock))
+	}
+
+	// The production command intentionally masks machine-wide Git config.
+	// Verify the local override is in the actual argv, then prove Create can
+	// register and materialize a normal fresh worktree despite local=false.
+	cmd := command(context.Background(), root, "config", "--get", "core.longpaths")
+	if !strings.Contains(strings.Join(cmd.Args, " "), "-c core.longpaths=true") {
+		t.Fatalf("Git command lacks explicit long-path override: %q", cmd.Args)
+	}
+	globalMasked, noSystem := false, false
+	for _, entry := range cmd.Env {
+		if entry == "GIT_CONFIG_GLOBAL="+os.DevNull {
+			globalMasked = true
+		}
+		if entry == "GIT_CONFIG_NOSYSTEM=1" {
+			noSystem = true
+		}
+	}
+	if !globalMasked || !noSystem {
+		t.Fatal("test command did not retain masked global/system Git config")
+	}
+	if got, err := gitText(context.Background(), root, "config", "--get", "core.longpaths"); err != nil || got != "true" {
+		t.Fatalf("explicit command-level config did not override repository=false: got %q, err %v", got, err)
+	}
+
+	binding, err := Create(context.Background(), r)
+	if err != nil {
+		t.Fatalf("Create failed with a >260-character branch ref lock path: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(identity.CommonDir, "refs", "heads", r.Branch)); err != nil {
+		t.Fatalf("fresh worktree branch ref was not created: %v", err)
+	}
+	if _, err := Observe(context.Background(), r); err != nil {
+		t.Fatalf("fresh long-path worktree did not pass normal observation: %v", err)
+	}
+	if binding.Request != r {
+		t.Fatal("created binding changed the admitted request")
 	}
 }

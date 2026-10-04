@@ -500,3 +500,23 @@ integrated increment, without resurrecting a G0 promotion ladder.
 - Fixed-six 6/6, generated-code ownership, real topology comparison, calibrated
   allocation, accepted fresh rounds/native compaction and release gates remain
   open. Product fixes do not substitute for those outcomes.
+
+## Checkpoint — v1.0.17 final batch candidate
+
+- v1.0.15/16 remain pending integration over public v1.0.14. Their original
+  clean full Go suites passed. The corrected init harness belongs to v1.0.15;
+  all ten PowerShell harnesses passed on the corrected v1.0.16 source. Exact
+  tested and corrected identities are in the preintegration record.
+- The next product correction gives worktree Git commands an explicit
+  `core.longpaths=true` under their existing isolated configuration. A fresh
+  Windows regression exceeds 260 characters in the branch-lock path and
+  passes ordinary creation/observation. Historical uncertain state is untouched.
+- An opt-in explicit-manifest Go formatting observation reuses only exact
+  deterministic artifacts. It does not satisfy verification, review or READY.
+  Generic `go test` remains ineligible for result reuse because its complete
+  process/input closure is not controlled. Final checks remain fresh.
+- Final code/documentation review and a clean combined batch suite precede
+  integration. Superseded preparations have zero provider effects and are not
+  dispatched. The next productive live steps are unchanged coding acceptance,
+  matched topology/model trials and useful accepted fresh rounds; all broader
+  qualification and release gates remain open.

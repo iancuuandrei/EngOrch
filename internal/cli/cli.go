@@ -101,6 +101,7 @@ var commands = []Command{
 	{"init", "[--codex EXE --model MODEL [--effort EFFORT] [--writer-model MODEL] [--writer-effort EFFORT] [--reviewer-model MODEL] [--reviewer-effort EFFORT] [--auth-source PATH] [--state-root PATH] [--validate-writer-edits]]", "Create a fake configuration or a complete Codex role configuration without overwriting an existing file; validate-writer-edits opts into same-turn anchored edit validation."},
 	{"doctor", "", "Validate configuration and committed Git identity; dispatch no runtime."},
 	{"diff", "[RUN]", "Show the current isolated candidate diff, including non-ignored untracked files with coverage metadata, without applying or dispatching work."},
+	{"observe-format", "RUN MANIFEST_JSON CACHE_DIR", "Record a bounded local Go formatting artifact for one confirmed candidate; this never satisfies verification, review, repair or READY."},
 	{"plan", "OBJECTIVE or --file PATH", "Create a plan from exact objective text or a bounded UTF-8 file using the explicitly configured runtime and access profile."},
 	{"status", "", "List validated local run IDs, workflow/lifecycle states and plan IDs without input or evidence bodies."},
 	{"inspect", "[RUN] [--export-jsonl]", "Replay one run and show its bound inputs and state, or export its validated canonical event history."},
@@ -310,6 +311,8 @@ func Execute(ctx context.Context, args []string, cwd string, out io.Writer) (res
 		return initCommand(ctx, *root, args, out)
 	case "diff":
 		return diffCommand(ctx, *root, args, out)
+	case "observe-format":
+		return formatObservationCommand(ctx, *root, args, out)
 	case "doctor":
 		if len(args) != 0 {
 			return errors.New("doctor takes no arguments")
