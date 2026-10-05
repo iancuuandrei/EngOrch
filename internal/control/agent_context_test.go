@@ -78,6 +78,26 @@ func TestAgentContextPlannerAndCreationReplay(t *testing.T) {
 	}
 }
 
+func TestAgentContextPlannerUsesSharedWireSchema(t *testing.T) {
+	i, err := plannerInvocationForSnapshot(Snapshot{Creation: agentContextCreation(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		OutputSchema json.RawMessage `json:"output_schema"`
+	}
+	if err := json.Unmarshal([]byte(i.Input), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	expected, err := engineeringplan.AgentContextPlannerJSONSchema()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(envelope.OutputSchema) != string(expected) {
+		t.Fatal("controller schema differs from the admitted wire schema")
+	}
+}
+
 func TestAgentContextRolePromptAndGraphValidation(t *testing.T) {
 	c := agentContextCreation(t)
 	s := Snapshot{Creation: c}

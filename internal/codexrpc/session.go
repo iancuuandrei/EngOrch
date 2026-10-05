@@ -377,7 +377,12 @@ func (c *Client) StartTurn(ctx context.Context, thread ThreadSettings, i runtime
 		if json.Unmarshal([]byte(i.Input), &envelope) == nil && len(envelope.OutputSchema) > 0 {
 			got, err := canonical.Hash("planner-output-schema", envelope.OutputSchema)
 			want, _ := canonical.Hash("planner-output-schema", engineeringplan.PlannerJSONSchema())
-			if err != nil || got != want {
+			contextSchema, schemaErr := engineeringplan.AgentContextPlannerJSONSchema()
+			if schemaErr != nil {
+				return wire.Turn, nil, schemaErr
+			}
+			contextWant, _ := canonical.Hash("planner-output-schema", contextSchema)
+			if err != nil || got != want && got != contextWant {
 				return wire.Turn, nil, errors.New("planner output schema substitution")
 			}
 			params["outputSchema"] = envelope.OutputSchema

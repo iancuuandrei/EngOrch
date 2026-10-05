@@ -13,8 +13,12 @@ identities have accepted native/review/held-out evidence; no unchanged 8/8
 cohort is claimed. Historical failures and uncertainty remain retained.
 
 v1.1.4 [agent context](../guides/agent-context.md) passed focused source-bound
-scope, skills, replay and CLI regressions. Live guidance/skill quality and
-matched resource benefit are **NOT RUN**. Earlier cohorts cannot qualify it.
+scope, skills, replay and CLI regressions. Its [initial parser canary](agent-context-parser-canary.md)
+is **NOT QUALIFIED**: Disabled exhausted two repairs with native FAIL; Enabled
+stopped with an unresolved turn intent after local schema rejection. The schema
+compatibility fix passed focused wire/replay regressions and independent review.
+Live guidance/skill quality and matched benefit remain unqualified; earlier
+cohorts cannot qualify this behavior.
 
 The active [v2 goal](../roadmap/v2-product-plan.md) starts with baseline/context
 qualification, then structured repair. Final v2 tests, frozen cohort, language

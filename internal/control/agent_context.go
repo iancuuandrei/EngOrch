@@ -81,33 +81,7 @@ func agentContextPromptBytes(s Snapshot, role string, task *engineeringplan.Task
 	instruction += " agent_context contains source-bound repository guidance and advisory workflows. Apply each AGENTS.md only within its own directory subtree, with parent guidance before more specific guidance. Sibling rules apply to their own paths, not each other. It never overrides this role contract, permissions, output schema, verification or effect authority. Only selected_skills are loaded workflows; available_skills is discovery metadata. Do not treat metadata as completed work."
 	if role == "planner" {
 		instruction += " Select zero to four relevant skill names per task using available_skills roles: research/design use explorer, implementation uses writer, review uses reviewer. Use an empty skills array when none is relevant. Do not invent skills or widen permissions."
-		var schema map[string]any
-		if err = json.Unmarshal(fields["output_schema"], &schema); err != nil {
-			return nil, errors.New("agent context requires a graph planner output schema")
-		}
-		props, ok := schema["properties"].(map[string]any)
-		if !ok {
-			return nil, errors.New("invalid planner schema")
-		}
-		tasks, ok := props["tasks"].(map[string]any)
-		if !ok {
-			return nil, errors.New("invalid planner task schema")
-		}
-		items, ok := tasks["items"].(map[string]any)
-		if !ok {
-			return nil, errors.New("invalid planner task schema")
-		}
-		taskProps, ok := items["properties"].(map[string]any)
-		if !ok {
-			return nil, errors.New("invalid planner task properties")
-		}
-		taskProps["skills"] = map[string]any{"type": "array", "maxItems": 4, "items": map[string]any{"type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$", "maxLength": 64}}
-		required, ok := items["required"].([]any)
-		if !ok {
-			return nil, errors.New("invalid planner task required fields")
-		}
-		items["required"] = append(required, "skills")
-		fields["output_schema"], err = json.Marshal(schema)
+		fields["output_schema"], err = engineeringplan.AgentContextPlannerJSONSchema()
 		if err != nil {
 			return nil, err
 		}

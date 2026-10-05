@@ -119,3 +119,10 @@ Inspect the creation and invocation records for the actual captured inputs.
 
 Provider execution, selection quality and end-to-end benefits require their
 own evidence. Earlier task cohorts do not qualify this new behavior.
+
+The graph schema with bounded task skill names is shared by controller prompt
+construction and Codex wire admission. The adapter accepts exactly the legacy
+schema or this extension; arbitrary schema substitutions remain rejected.
+The [initial parser canary](../evaluation/agent-context-parser-canary.md) exposed
+the former mismatch at this boundary. Its original blocked run remains retained;
+source regressions for the correction do not establish a live quality win.

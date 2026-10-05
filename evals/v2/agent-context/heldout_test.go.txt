@@ -1,0 +1,55 @@
+package decoder
+
+import (
+	"errors"
+	"io"
+	"strings"
+	"testing"
+)
+
+type prohibitedRead struct{}
+func (prohibitedRead) Read([]byte) (int, error) { panic("invalid limit read input") }
+type failedRead struct{}
+func (failedRead) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+
+func TestHeldoutLargeRecordAndCompatibility(t *testing.T) {
+	input := "\"" + strings.Repeat("a", 80<<10) + "\""
+	r, err := Decode(strings.NewReader(input + "\n{}\n"))
+	if err != nil || len(r) != 2 || string(r[0]) != input { t.Fatal("valid large record rejected", err) }
+	for _, separator := range []string{"\n", "\r\n", ""} {
+		r, err := DecodeWithLimit(strings.NewReader("\"123456\""+separator), 8)
+		if err != nil || len(r) != 1 { t.Fatal("inclusive limit failed", err) }
+	}
+}
+
+func TestHeldoutLimitsAndSafeErrors(t *testing.T) {
+	for _, limit := range []int{-1, 0, (16<<20)+1} {
+		r, err := DecodeWithLimit(prohibitedRead{}, limit)
+		if r != nil || !errors.Is(err, ErrInvalidLimit) { t.Fatal("invalid limit not rejected") }
+	}
+	r, err := DecodeWithLimit(strings.NewReader("{}\n\"123456\"\n"), 7)
+	if r != nil || !errors.Is(err, ErrRecordTooLarge) { t.Fatal("oversize batch not rejected", err) }
+	r, err = DecodeWithLimit(strings.NewReader("{}\nPRIVATE-CREDENTIAL\n"), 64)
+	if r != nil || !errors.Is(err, ErrInvalidRecord) || strings.Contains(err.Error(), "PRIVATE-CREDENTIAL") { t.Fatal("unsafe invalid-record result", err) }
+	r, err = DecodeWithLimit(failedRead{}, 64)
+	if r != nil || !errors.Is(err, io.ErrUnexpectedEOF) { t.Fatal("reader error lost", err) }
+	r, err = DecodeWithLimit(strings.NewReader(" \t\r\n{}\r\n\n"), 8)
+	if err != nil || len(r) != 1 { t.Fatal("blank/CRLF compatibility failed", err) }
+}
+
+func TestHeldoutByteCountDefaultCapAndOversizePrivacy(t *testing.T) {
+	for _, limit := range []int{3, 4} {
+		r, err := DecodeWithLimit(strings.NewReader("\"é\"\n"), limit)
+		if limit == 3 && (r != nil || !errors.Is(err, ErrRecordTooLarge)) { t.Fatal("limit counts runes rather than UTF-8 bytes", err) }
+		if limit == 4 && (err != nil || len(r) != 1) { t.Fatal("exact UTF-8 byte limit rejected", err) }
+	}
+	for _, size := range []int{1<<20, (1<<20)+1} {
+		input := "\"" + strings.Repeat("x", size-2) + "\"\n"
+		r, err := Decode(strings.NewReader(input))
+		if size == 1<<20 && (err != nil || len(r) != 1) { t.Fatal("default exact cap rejected", err) }
+		if size > 1<<20 && (r != nil || !errors.Is(err, ErrRecordTooLarge)) { t.Fatal("default cap exceeded without typed error", err) }
+	}
+	marker := "OVERSIZE-PRIVATE-MARKER"
+	r, err := DecodeWithLimit(strings.NewReader("\""+marker+strings.Repeat("z", 256)+"\"\n"), 128)
+	if r != nil || !errors.Is(err, ErrRecordTooLarge) || strings.Contains(err.Error(), marker) { t.Fatal("oversize diagnostic exposes content", err) }
+}
