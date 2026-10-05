@@ -84,6 +84,33 @@ After a permitted repair, the new candidate still requires fresh configured
 native checks and independent review. UNKNOWN provider effects remain UNKNOWN.
 This command never resends them or infers their completion from missing findings.
 
+## Give a fixer structured repair evidence
+
+For a new development-source run, enable the optional integration explicitly:
+
+```powershell
+fabric run --autonomous --repair-intelligence "Fix a concrete coding task"
+```
+
+When an admitted repair task becomes ready, its writer input includes
+`repair_intelligence`: findings from its exact failed gate, the existing write
+scope and advisory strategy. Source validation uses complete files already in
+the recorded task context. It does not read extra workspace files or add an
+admission event. Partial context cannot prove a complete preimage. A prior
+admitted context from the same source and original candidate can support unique
+line relocation; original findings retain their identities.
+
+The prompt does not duplicate code already present in `task_context`. Reports
+over 32 KiB become an explicit hashed omission record. If optional intelligence
+would take the input over 256 KiB, that addition is omitted while the ordinary
+input remains intact. These are byte limits, not measured token savings.
+
+The flag is stored in immutable creation policy and cannot retrofit an old run.
+It defaults off; ordinary run inputs retain their historical serialization.
+The fixer still proposes changes through its existing contract and candidate
+tools. Every configured native check and independent review remains required.
+See [executed integration evidence](../evaluation/repair-fixer-context.md).
+
 Repair Intelligence supplies typed diagnosis, exact scope inspection, bounded
 preimage validation and explicit unique code relocation. Deterministic
 transformations, strategy execution and finding closure are not implemented

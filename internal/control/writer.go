@@ -283,7 +283,25 @@ func writerInvocationBody(s Snapshot, taskID string, isolated *isolatedWriterBin
 	}
 	instruction += " Preserve established behavior outside the requested feature. Compare base and candidate behavior at relevant boundaries, and add a focused regression test that distinguishes the intended change from nearby unchanged cases. For parser or stateful-format work, use explicit lexical boundaries rather than lookahead heuristics; exercise quote, escape, comment, and end-of-input transitions."
 	instruction = promptRecipeInstruction(s.Creation.Execution, role, s.Creation.Config.WriterContract, instruction)
-	input, err := agentContextPromptBytes(s, role, agentContextWriterTask(s, taskID), struct {
+	if s.Creation.Execution != nil && s.Creation.Execution.RepairIntelligenceVersion == 1 && implementationTask == nil {
+		if taskID == "" {
+			implementationTask, err = writerImplementationForV4(s)
+		} else {
+			implementationTask, err = writerImplementationForTask(s, taskID)
+		}
+		if err != nil {
+			return runtime.Invocation{}, err
+		}
+	}
+	repair, err := writerRepairIntelligence(s, implementationTask, taskCtx)
+	if err != nil {
+		return runtime.Invocation{}, err
+	}
+	baseInstruction := instruction
+	if repair != nil {
+		instruction += " The repair_intelligence object binds observed findings and any complete recorded task-context preimages to this task. Use its exact admitted write paths. A localized_llm suggestion is advisory; validate edits with current candidate tools. Stale, unavailable or ambiguous locations require investigation. Preserve every configured native check and independent review; never treat an anchor or strategy suggestion as finding closure or retry authority."
+	}
+	payload := struct {
 		OutputSchema       json.RawMessage                  `json:"output_schema,omitempty"`
 		Instruction        string                           `json:"instruction"`
 		RunID              string                           `json:"run_id"`
@@ -299,7 +317,13 @@ func writerInvocationBody(s Snapshot, taskID string, isolated *isolatedWriterBin
 		TaskContext        *TaskContextRecord               `json:"task_context,omitempty"`
 		ImplementationTask *writerImplementationContext     `json:"implementation_task,omitempty"`
 		Isolation          *isolatedWriterInvocationContext `json:"isolation,omitempty"`
-	}{schema, instruction, s.RunID, s.PlanID, candidate, objective, s.Plan.Output, checks, feedback, intelligence, lexical, exploration, taskCtx, implementationTask, isolationContext})
+		RepairIntelligence *RepairDiagnosis                 `json:"repair_intelligence,omitempty"`
+	}{schema, instruction, s.RunID, s.PlanID, candidate, objective, s.Plan.Output, checks, feedback, intelligence, lexical, exploration, taskCtx, implementationTask, isolationContext, repair}
+	input, err := agentContextPromptBytes(s, role, agentContextWriterTask(s, taskID), payload)
+	if err == nil && repair != nil && len(input) > 256<<10 {
+		payload.RepairIntelligence, payload.Instruction = nil, baseInstruction
+		input, err = agentContextPromptBytes(s, role, agentContextWriterTask(s, taskID), payload)
+	}
 	if err != nil {
 		return runtime.Invocation{}, err
 	}

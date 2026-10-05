@@ -486,6 +486,23 @@ func TestAutonomousPromptRecipeIsExplicitlyBoundInCreation(t *testing.T) {
 	}
 }
 
+func TestAutonomousRepairIntelligenceIsExplicitlyBoundInCreation(t *testing.T) {
+	root := autonomousCLIFixture(t)
+	var out bytes.Buffer
+	err := Execute(context.Background(), []string{"run", "--autonomous", "--prepare-only", "--repair-intelligence", "A bounded fixture objective"}, root, &out)
+	if err == nil {
+		t.Fatal("fake non-graph planner should stop before provider dispatch")
+	}
+	entries, err := filepath.Glob(filepath.Join(root, ".harness", "runs", "*.jsonl"))
+	if err != nil || len(entries) != 1 {
+		t.Fatal("missing immutable run", entries, err)
+	}
+	s, err := control.Inspect(entries[0])
+	if err != nil || s.Creation.Execution.RepairIntelligenceVersion != 1 {
+		t.Fatal("repair intelligence was not bound at creation", err)
+	}
+}
+
 func TestAutonomousCLIRejectsInvalidOptionsAndNonAutonomousResume(t *testing.T) {
 	root := autonomousCLIFixture(t)
 	for _, args := range [][]string{

@@ -114,6 +114,8 @@ func TestRepairDesignPathRevisionWriterAndFreshGatesReachReady(t *testing.T) {
 	c.Config.PlannerContract = plannerContractGraphV3
 	c.Config.ReviewerContract = "json-v1"
 	c.Execution.RepairPlanningVersion = 1
+	c.Execution.Context = taskContextBoundedV1
+	c.Execution.RepairIntelligenceVersion = 1
 	initial := engineeringplan.Graph{Version: engineeringplan.Version, Mode: engineeringplan.ModeGraph, Summary: "generated repair fixture", Tasks: []engineeringplan.Task{
 		{ID: "impl", Kind: engineeringplan.Implementation, Title: "Initial implementation", ScopePaths: []string{"."}, WritePaths: []string{"file.txt"}, ExpectedEvidence: []engineeringplan.Evidence{{Kind: "file", Description: "candidate"}}, EstimatedSeconds: 20},
 		{ID: "verify", Kind: engineeringplan.Verification, Title: "Verify", Dependencies: []string{"impl"}, ScopePaths: []string{"."}, ExpectedEvidence: []engineeringplan.Evidence{{Kind: "test", Description: "native"}}, EstimatedSeconds: 10},
@@ -268,6 +270,27 @@ func TestRepairDesignPathRevisionWriterAndFreshGatesReachReady(t *testing.T) {
 	writerInvocation, err := PrepareWriterInvocation(path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	inputSnapshot, err := Inspect(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	largePlan := *inputSnapshot.Plan
+	largePlan.Output += strings.Repeat("x", (256<<10)-len(writerInvocation.Input)+1)
+	inputSnapshot.Plan = &largePlan
+	largeInvocation, err := writerInvocationBody(inputSnapshot, "", nil)
+	var largeInput struct {
+		Plan string `json:"plan"`
+	}
+	decodeErr := json.Unmarshal([]byte(largeInvocation.Input), &largeInput)
+	if err != nil || decodeErr != nil || strings.Contains(largeInvocation.Input, "\"repair_intelligence\"") || largeInput.Plan != largePlan.Output {
+		t.Fatalf("optional intelligence blocked or truncated mandatory large input: %v", err)
+	}
+	var repairInput struct {
+		Repair *RepairDiagnosis `json:"repair_intelligence"`
+	}
+	if err := json.Unmarshal([]byte(writerInvocation.Input), &repairInput); err != nil || repairInput.Repair == nil || len(repairInput.Repair.Findings) != 1 || len(repairInput.Repair.Specifications) != 1 || !stringListsEqual(repairInput.Repair.Specifications[0].AllowedWritePaths, impl.WritePaths) || repairInput.Repair.ControllerHead != "" {
+		t.Fatalf("repair invocation lacks exact recorded intelligence: %+v %v", repairInput.Repair, err)
 	}
 	candidateID, err = refined.Candidate.ID()
 	if err != nil {

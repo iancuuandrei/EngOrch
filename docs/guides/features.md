@@ -71,8 +71,10 @@ through `fabric diagnose RUN`: source-typed findings, conservative Go diagnostic
 locations, stale-candidate labels and exact ready repair-task write scope.
 `--anchor` validates bounded file preimages and explicitly relocates unique
 previous code hints; verified owned findings can suggest a localized repair.
-It is advisory inspection; automatic repair routing and live quality gains
-remain unqualified.
+New runs can opt into `--repair-intelligence` to provide these structured
+findings and exact repair scope to the fixer, validating preimages from complete
+recorded task context. Strategy suggestions remain advisory; automatic strategy
+routing and live quality gains remain unqualified.
 
 New autonomous runs additionally use [source-bound agent context](agent-context.md):
 scope-aware repository instructions and role/task-selected workflows from

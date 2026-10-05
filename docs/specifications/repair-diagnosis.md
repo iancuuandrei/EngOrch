@@ -52,3 +52,28 @@ Original finding fields and IDs MUST remain unchanged by anchoring.
 finding has a current validated anchor inside the existing admitted write paths.
 It MUST NOT dispatch a model, bypass ownership or imply semantic finding closure.
 Code and source hashes in anchored reports are private run evidence.
+
+## Opt-in fixer input
+
+New autonomous creations MAY set `repair_intelligence_version: 1`. It requires
+graph v1, repair planning v1 and bounded task context. Absent/zero policy MUST
+preserve historical serialization and writer inputs.
+
+The fixer projection MUST derive only from replay-validated records, filter to
+the ready task's exact failed parent gate and preserve its existing write scope.
+It MUST NOT read files during invocation reconstruction or append new events.
+The diagnostic journal cursor MUST be omitted from invocation data because
+host-intent appends cannot change invocation identity.
+
+Preimage validation MUST require a complete selected file starting at zero,
+matching content length and SHA-256, at most 32 KiB, and matching the current
+candidate. Relocation MAY use complete prior admitted context for the same
+source and original finding candidate. Missing or partial evidence MUST NOT
+imply a verified preimage. Code already in task context SHOULD NOT be duplicated.
+
+Derived repair reports over 32 KiB MUST become explicit omission records with
+the full projection hash and omitted finding count. Optional repair intelligence
+MUST be removed if it would exceed a 256 KiB writer input; mandatory existing
+input MUST remain intact. Byte bounds MUST NOT be presented as token savings.
+Strategy suggestions MUST remain advisory. Existing proposal validation,
+repair budgets, provider authority, native checks and review remain unchanged.

@@ -58,6 +58,8 @@ type RepairDiagnosis struct {
 	Authority                   string                `json:"authority"`
 	AnchoringStatus             string                `json:"anchoring_status,omitempty"`
 	Anchors                     []RepairAnchor        `json:"anchors,omitempty"`
+	OmittedFindings             int                   `json:"omitted_findings,omitempty"`
+	ProjectionHash              string                `json:"projection_hash,omitempty"`
 }
 
 // DiagnoseRepair derives bounded findings and ready-task repair specifications

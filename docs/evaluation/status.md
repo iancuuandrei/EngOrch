@@ -30,6 +30,13 @@ hidden diagnostic tails, ambiguous paths and no journal mutation. The subsequent
 explicit prior code hints, with optional failure degradation. Automatic strategy
 execution and live repair-benefit qualification remain **NOT RUN**.
 
+The v1.1.9 [fixer-context integration](repair-fixer-context.md) adds explicit
+`--repair-intelligence` for new runs. Focused regressions cover recorded preimage
+validation, replay-stable input, exact task scope and optional byte-budget
+degradation. The existing real Git fixture reaches READY after a repair, fresh
+native checks and independent fixture review. This is integration evidence;
+live model quality and token/cost benefit remain **NOT RUN**.
+
 The active [v2 goal](../roadmap/v2-product-plan.md) starts with baseline/context
 qualification, then structured repair. Final v2 tests, frozen cohort, language
 canaries, installed acceptance and release qualification remain **NOT RUN**.

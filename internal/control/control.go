@@ -89,6 +89,9 @@ type ExecutionPolicy struct {
 	// RepairPlanningVersion opts new graph runs into candidate-bound design
 	// tasks that refine never-started repair write paths within original scope.
 	RepairPlanningVersion int `json:"repair_planning_version,omitempty"`
+	// RepairIntelligenceVersion derives bounded fixer evidence from existing
+	// recorded task context. Zero preserves historical invocation bytes.
+	RepairIntelligenceVersion int `json:"repair_intelligence_version,omitempty"`
 	// ParallelImplementationVersion opts new graph runs into a bounded static
 	// cohort of at most two independent implementation writers. Their proposals
 	// are collected on one candidate and applied through one aggregate effect.
@@ -122,6 +125,9 @@ func codexAutoCompactForExecution(policy *ExecutionPolicy, profile runtime.Profi
 // RepairPlanningVersion 1 requires graph execution and a matching graph-v3
 // planner contract at creation replay; zero preserves the prior repair recipe.
 func (p ExecutionPolicy) Validate() error {
+	if p.RepairIntelligenceVersion != 0 && (p.RepairIntelligenceVersion != 1 || p.GraphVersion != 1 || p.RepairPlanningVersion != 1 || p.Context != taskContextBoundedV1) {
+		return errors.New("unsupported repair intelligence policy")
+	}
 	if p.ScopeReplanDesignVersion != 0 && (p.ScopeReplanDesignVersion < 1 || p.ScopeReplanDesignVersion > 2 || p.ScopeReplanDesignVersion != p.ScopeReplanVersion) {
 		return errors.New("unsupported scope replan design policy")
 	}

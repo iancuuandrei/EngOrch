@@ -102,6 +102,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	isolationPolicyPath := fs.String("isolation-policy", "", "strict versioned JSON resource capacity and per-writer estimate file (required with --isolated-writers)")
 	plannerContext := fs.String("planner-context", "", "planner evidence mode: source-bounded-v1 or pinned go-source-context-v1/go-source-context-v2/go-contract-context-v1/go-contract-context-v2/go-contract-context-v3")
 	agentContext := fs.Bool("agent-context", true, "bind committed scope-aware AGENTS.md and role-aware skill workflows to the new run")
+	repairIntelligence := fs.Bool("repair-intelligence", false, "bind structured repair evidence from admitted task context to new graph repair invocations")
 	plannerContextRIExecutable := fs.String("planner-context-ri-executable", "", "absolute path to the pinned Go RI parser (required for Go source/contract contexts)")
 	plannerContextRIExecutableSHA256 := fs.String("planner-context-ri-executable-sha256", "", "lowercase SHA-256 of the pinned Go-source RI parser")
 	plannerContextParseCache := fs.Bool("planner-context-parse-cache", false, "reuse local Go parser facts for go-source-context-v2 or go-contract-context-v1/v2/v3")
@@ -191,7 +192,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 		if err := validateAutonomousObjective(objective); err != nil {
 			return err
 		}
-		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, out, *agentContext)
+		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, *repairIntelligence, out, *agentContext)
 	}
 	if fs.NArg() != 1 || fs.Arg(0) == "" {
 		return errors.New("run --autonomous requires one objective or --file PATH")
@@ -199,7 +200,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	if err := validateAutonomousObjective(fs.Arg(0)); err != nil {
 		return err
 	}
-	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, out, *agentContext)
+	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, *repairIntelligence, out, *agentContext)
 }
 
 func validatePlannerParseCacheVersion(plannerContext string, version int) error {
@@ -311,7 +312,7 @@ func validateAutonomousObjective(objective string) error {
 	return nil
 }
 
-func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, parallelWriters bool, isolationPolicy *isolatedWriterPolicyFile, plannerContext string, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion int, plannerContextRIExecutable, plannerContextRIExecutableSHA256, promptRecipe string, autoCompactTokenLimit int64, prepareOnly bool, out io.Writer, agentContextEnabled ...bool) error {
+func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, parallelWriters bool, isolationPolicy *isolatedWriterPolicyFile, plannerContext string, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion int, plannerContextRIExecutable, plannerContextRIExecutableSHA256, promptRecipe string, autoCompactTokenLimit int64, prepareOnly, repairIntelligence bool, out io.Writer, agentContextEnabled ...bool) error {
 	if err := validateAutonomousObjective(objective); err != nil {
 		return err
 	}
@@ -446,6 +447,9 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 			IsolatedImplementationVersion: isolatedImplementationVersion, IsolationCapacity: isolationCapacity, IsolationEstimate: isolationEstimate,
 			CodexAutoCompact: autoCompact,
 		},
+	}
+	if repairIntelligence {
+		creation.Execution.RepairIntelligenceVersion = 1
 	}
 	configureAutonomousScopeReplan(&creation)
 	if len(agentContextEnabled) > 0 && agentContextEnabled[0] {
