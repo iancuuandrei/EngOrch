@@ -67,6 +67,11 @@ bundle includes both executables. See the [packaging guide](release.md) and
 
 ## Implemented capabilities
 
+New autonomous runs additionally use [source-bound agent context](agent-context.md):
+scope-aware repository instructions and role/task-selected workflows from
+`.agents/skills/`. This extension has separate verification scope and is not
+qualified by the earlier eight-task ledger.
+
 | Capability | What it provides | Usage and limits |
 | --- | --- | --- |
 | Autonomous engineering | Planning, exploration, dependency graph execution, writing, native verification, review and bounded repair | [Autonomous tasks](autonomous-task.md), [task graphs](graph-autonomous-task.md); default repair ceiling 2, configurable 0–8 before creating the run |

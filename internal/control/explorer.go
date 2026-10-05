@@ -71,7 +71,7 @@ func explorerInvocation(s Snapshot, question string) (runtime.Invocation, error)
 	if err != nil {
 		return runtime.Invocation{}, err
 	}
-	input, err := promptRecipeBytes(s.Creation.Execution, struct {
+	input, err := agentContextPromptBytes(s, "explorer", agentContextTaskForQuestion(s, question), struct {
 		OutputSchema      json.RawMessage                 `json:"output_schema,omitempty"`
 		Instruction       string                          `json:"instruction"`
 		RunID             string                          `json:"run_id"`

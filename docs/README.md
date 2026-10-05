@@ -112,7 +112,7 @@ flowchart TB
 - [Runtime capability limits](guides/graceful-capabilities.md) · [Codex confinement](guides/codex-capability-confinement.md)
 - [Task schedules](guides/task-schedules.md) · [prompt-cache recipes](guides/prompt-cache-recipes.md) · [deterministic Go formatting](guides/deterministic-go-format-observation.md)
 - [Native compaction](guides/native-auto-compaction.md) · [file changes](guides/file-changes.md) · [local packaging](guides/local-packaging.md)
-- [Optional procedures](guides/procedures.md) · [Codex CLI integration](../integrations/codex/engorch/README.md)
+- [Agent context resolution](guides/agent-context.md) · [Engineering skills](guides/procedures.md) · [Codex CLI integration](../integrations/codex/engorch/README.md)
 
 ### Development and qualification
 

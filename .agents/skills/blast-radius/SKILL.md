@@ -1,6 +1,8 @@
 ---
 name: blast-radius
 description: Assess the impact of a proposed change. Use for dependency reach, affected callers, schema consumers or regression scope; focuses on consequences rather than explaining a single execution path.
+metadata:
+  fabric.roles: "planner,explorer,fixer,reviewer"
 ---
 
 # blast-radius

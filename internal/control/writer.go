@@ -283,7 +283,7 @@ func writerInvocationBody(s Snapshot, taskID string, isolated *isolatedWriterBin
 	}
 	instruction += " Preserve established behavior outside the requested feature. Compare base and candidate behavior at relevant boundaries, and add a focused regression test that distinguishes the intended change from nearby unchanged cases. For parser or stateful-format work, use explicit lexical boundaries rather than lookahead heuristics; exercise quote, escape, comment, and end-of-input transitions."
 	instruction = promptRecipeInstruction(s.Creation.Execution, role, s.Creation.Config.WriterContract, instruction)
-	input, err := promptRecipeBytes(s.Creation.Execution, struct {
+	input, err := agentContextPromptBytes(s, role, agentContextWriterTask(s, taskID), struct {
 		OutputSchema       json.RawMessage                  `json:"output_schema,omitempty"`
 		Instruction        string                           `json:"instruction"`
 		RunID              string                           `json:"run_id"`

@@ -21,6 +21,7 @@ import (
 const Version = 1
 
 var idPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+var skillPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 // Mode selects the planner representation. Direct holds exactly one task;
 // Graph holds an ordered dependency graph.
@@ -91,6 +92,8 @@ type Task struct {
 	EstimatedSeconds int        `json:"estimated_seconds"`
 	Completed        bool       `json:"completed,omitempty"`
 	Attempts         []Attempt  `json:"attempts,omitempty"`
+	// Skills names advisory workflows, never permissions or effect authority.
+	Skills []string `json:"skills,omitempty"`
 }
 
 // Graph is a planner response. Direct plans retain the same representation but
@@ -120,6 +123,16 @@ func (g Graph) Validate() error {
 	}
 	byID := make(map[string]Task, len(g.Tasks))
 	for _, t := range g.Tasks {
+		if len(t.Skills) > 4 {
+			return errors.New("task exceeds four selected skills")
+		}
+		seenSkills := map[string]bool{}
+		for _, name := range t.Skills {
+			if len(name) > 64 || !skillPattern.MatchString(name) || seenSkills[name] {
+				return errors.New("invalid or duplicate task skill")
+			}
+			seenSkills[name] = true
+		}
 		if !idPattern.MatchString(t.ID) || strings.TrimSpace(t.Title) == "" || !validKind(t.Kind) || len(t.Dependencies) > 64 || len(t.ScopePaths) == 0 || len(t.ScopePaths) > 32 || len(t.WritePaths) > 32 || len(t.ExpectedEvidence) == 0 || len(t.ExpectedEvidence) > 16 || len(t.Attempts) > 64 || t.EstimatedSeconds < 1 || t.EstimatedSeconds > 86400 {
 			return fmt.Errorf("invalid task %q", t.ID)
 		}
@@ -344,7 +357,7 @@ func ValidateRevision(previous, next Graph) error {
 func sameCompletedTask(a, b Task) bool {
 	return a.ID == b.ID && a.ParentID == b.ParentID && a.Kind == b.Kind && a.Title == b.Title &&
 		stringListEqual(a.Dependencies, b.Dependencies) && stringListEqual(a.ScopePaths, b.ScopePaths) &&
-		stringListEqual(a.WritePaths, b.WritePaths) && evidenceEqual(a.ExpectedEvidence, b.ExpectedEvidence) &&
+		stringListEqual(a.WritePaths, b.WritePaths) && stringListEqual(a.Skills, b.Skills) && evidenceEqual(a.ExpectedEvidence, b.ExpectedEvidence) &&
 		a.EstimatedSeconds == b.EstimatedSeconds && a.Completed == b.Completed
 }
 func stringListEqual(a, b []string) bool { return strings.Join(a, "\x00") == strings.Join(b, "\x00") }
@@ -607,6 +620,7 @@ func ValidateAutonomousRevision(previous, next Graph) error {
 			!stringListEqual(fresh.Dependencies, old.Dependencies) ||
 			!stringListEqual(fresh.ScopePaths, old.ScopePaths) ||
 			!stringListEqual(fresh.WritePaths, old.WritePaths) ||
+			!stringListEqual(fresh.Skills, old.Skills) ||
 			!evidenceEqual(fresh.ExpectedEvidence, old.ExpectedEvidence) ||
 			fresh.EstimatedSeconds != old.EstimatedSeconds {
 			return fmt.Errorf("started task %q is immutable", old.ID)

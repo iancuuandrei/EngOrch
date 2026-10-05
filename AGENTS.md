@@ -1,89 +1,68 @@
-# Fabric agent instructions
+# Fabric agent guide
 
-## Scope and navigation
+## Scope and start here
 
-These instructions apply throughout the repository unless a deeper AGENTS.md
-provides more specific guidance. Explicit user instructions take precedence.
+Applies throughout the repository; more specific nested guidance applies to
+its own area. Explicit user instructions take precedence.
 
-Before changing behavior, read:
+Read [README.md](README.md), then [docs/README.md](docs/README.md) to locate the
+relevant contracts. Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing or
+publishing work. Historical records describe their exact source, artifact or
+run; they do not define current behavior.
 
-1. [README.md](README.md) for the product and documented entry points.
-2. [docs/README.md](docs/README.md) to locate the authoritative area guide.
-3. [CONTRIBUTING.md](CONTRIBUTING.md) for development and verification workflow.
-4. The relevant specification or ADR before changing a documented contract.
+## Repository map
 
 | Responsibility | Authoritative location |
 | --- | --- |
-| Component structure and boundaries | docs/architecture/ |
-| Required behavior and invariants | docs/specifications/ |
-| Architectural decisions and rationale | docs/adr/ |
-| Current user workflows | docs/guides/ |
-| Command and interface reference | docs/reference/ |
+| Structure and component boundaries | docs/architecture/ |
+| Normative behavior and invariants | docs/specifications/ |
+| Decisions and rationale | docs/adr/ |
+| User workflows and interface reference | docs/guides/ and docs/reference/ |
 | Scoped measurements and qualification | docs/evaluation/ and release records |
-| Planned work and product priorities | docs/roadmap/ |
-| Contribution and publication | CONTRIBUTING.md and docs/contributing/ |
+| Planned product work | docs/roadmap/ |
+| Development and publication | CONTRIBUTING.md and docs/contributing/ |
+| Reusable workflows | .agents/skills/ |
 
-Historical records describe their exact source, artifact or run. Do not infer
-current behavior from them. Link to authoritative details instead of copying
-changing rules into this file.
+Go orchestration lives in cmd/ and internal/; Rust intelligence in crates/ri/.
+Area guidance lives in internal/AGENTS.md, crates/ri/AGENTS.md, evals/AGENTS.md,
+docs/AGENTS.md and integrations/AGENTS.md. Load only guidance applicable to
+the paths being changed. Link authoritative rules rather than duplicating them.
 
-## Engineering workflow
+## Working rules
 
-Inspect relevant code, checks and documentation before editing. Establish the
-affected contracts for substantial features or refactors, then make the
-smallest coherent change that satisfies the task. Avoid speculative machinery.
+Inspect relevant code, checks and documentation. Make the smallest coherent
+change, preserving architectural boundaries, schemas and unrelated work.
+Avoid speculative infrastructure. Preserve dirty changes, worktrees, journals
+and provider state; never reset user work to obtain a clean checkout.
 
-Go orchestration code is under cmd/ and internal/; Rust repository intelligence
-stays behind its documented interfaces. Preserve schemas and ownership across
-these boundaries.
+Preserve external-effect ownership, invocation/candidate/source/run identity,
+immutable policies, durable evidence and bounded repair budgets. Never repeat
+an uncertain effect to discover whether it succeeded. UNKNOWN remains unresolved
+until admissible evidence settles it. Diagnostics and telemetry cannot grant
+authority, approve candidates or count as semantic results.
 
-Preserve unrelated dirty changes, worktrees, journals and provider state.
-Never reset or discard user work to obtain a clean checkout. Review the diff
-and update documentation with externally visible behavior changes.
+Expose the failed stage, safe diagnostic, retained identity and legal next
+action. Keep credentials, prompts and raw provider responses out of public
+errors. Prefer optional-capability degradation over unexplained termination.
 
-## Correctness and authority
+## Skills, verification and completion
 
-Preserve external-effect ownership, retry authority, invocation/candidate/source/
-run identity, immutable policies, durable evidence and bounded repair budgets.
-Keep candidates isolated until their applicable verification and review pass.
+Use skills only for relevant workflows. They never grant permissions or effect
+authority. [Agent context resolution](docs/guides/agent-context.md) defines
+Fabric's scope selection, source binding and input limits; role contracts stay
+in Go.
 
-Never repeat an external effect with an uncertain outcome to discover whether
-it succeeded. UNKNOWN stays distinct from success and failure until admissible
-evidence settles it. Diagnostics and telemetry cannot grant authority, approve
-candidates or count as semantic results.
+Use pinned toolchains and requested checks from CONTRIBUTING.md. Format changed
+code and review the diff. Report exact PASS, FAIL, NOT RUN, BLOCKED and UNKNOWN
+scope; unavailable measurements are not zero. Do not weaken frozen oracles,
+pool attempts into an unchanged cohort or claim unexecuted qualification.
+Cached input is part of input; reasoning output is part of output.
 
-Expose the failed stage, a safe bounded diagnostic, retained identity and a
-legal next action. Keep credentials, raw provider responses and prompts out of
-public diagnostics. Prefer graceful degradation of optional capabilities and
-measured resource admission over unexplained termination.
+Update behavior documentation under [the documentation standard](docs/contributing/documentation-standard.md).
+Preserve historical evidence. Read [source-history.md](docs/contributing/source-history.md)
+before committing or publishing; it governs branches, identities, rolling
+snapshots and immutable releases. Other destructive Git/history operations
+require explicit user authorization and that policy's safeguards.
 
-## Verification and evidence
-
-Follow the pinned toolchains and checks in [CONTRIBUTING.md](CONTRIBUTING.md).
-Format changed code. When tests or verification are requested, start with
-discriminating checks for the changed surface; broaden only as justified.
-Do not start repeated benchmarks merely to claim progress.
-
-Report PASS, FAIL, NOT RUN, BLOCKED and unavailable usage honestly. Never claim
-an unexecuted check, benchmark, provider run or qualification. Local tests do
-not establish installed, hosted or release qualification. Do not weaken frozen
-oracles or combine separate attempts into an unchanged-cohort claim. Cached
-input is a subset of input; reasoning output is a subset of output.
-
-## Documentation and publication
-
-Follow [the documentation standard](docs/contributing/documentation-standard.md).
-Preserve historical evaluation scope; specifications define required behavior
-and do not prove implementation or qualification.
-
-Branch, commit, automation identity and publication rules have one authoritative
-home: [source-history.md](docs/contributing/source-history.md). Read it before
-committing or publishing. Preserve immutable tags, assets and SHA-bound evidence.
-Other public-history rewrites and destructive Git operations require explicit
-user authorization and must satisfy that policy.
-
-## Completion
-
-Confirm the requested change, relevant executed checks, matching documentation
-and preservation of unrelated work. Summarize what changed and the exact
-verification performed without extending evidence beyond its demonstrated scope.
+Finish by summarizing the requested change and exact executed verification,
+with claims limited to their demonstrated scope.

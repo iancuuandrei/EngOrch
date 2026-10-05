@@ -95,7 +95,7 @@ func reviewInvocationBase(s Snapshot) (runtime.Invocation, error) {
 		instruction += " The verification section contains only configured required checks and recorded observations. A plan recommendation is not evidence that a check ran; distinguish planned work from actually executed checks. Use an empty finding path only for a cross-cutting concern that has no specific file path."
 	}
 	instruction = promptRecipeInstruction(s.Creation.Execution, "reviewer", s.Creation.Config.ReviewerContract, instruction)
-	input, err := promptRecipeBytes(s.Creation.Execution, struct {
+	input, err := agentContextPromptBytes(s, "reviewer", nil, struct {
 		OutputSchema        json.RawMessage            `json:"output_schema,omitempty"`
 		Instruction         string                     `json:"instruction"`
 		RunID               string                     `json:"run_id"`

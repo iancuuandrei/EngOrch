@@ -14,8 +14,11 @@
 | Release assets | Installed distribution | Original hashes and acceptance record | Package version | Published record |
 
 The initial `main` history is `v0.0.0` → `v0.0.1` → `v1.0` → `v1.1`.
-The two historical bootstrap checkpoints are explicitly retained. The rolling
-`v1.1` snapshot contains the development corrections through `v1.1.3`.
+The two historical bootstrap checkpoints are explicitly retained. Their
+authors and committers are `iancuuandrei`; development and later
+version-line checkpoints use the automation identity defined below. Attribution
+changes preserve checkpoint trees, titles and dates and require a remote backup.
+The rolling `v1.1` snapshot follows trusted current development source.
 
 ```mermaid
 flowchart LR

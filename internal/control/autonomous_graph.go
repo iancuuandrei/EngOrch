@@ -108,6 +108,9 @@ func parseAcceptedGraph(s Snapshot) (engineeringplan.Graph, error) {
 	if err != nil {
 		return engineeringplan.Graph{}, rejectedSemanticOutput(err)
 	}
+	if err := validateAgentContextGraph(s, g); err != nil {
+		return engineeringplan.Graph{}, rejectedSemanticOutput(err)
+	}
 	maxInitialImplementations := 1
 	if s.Creation.Execution != nil && s.Creation.Execution.ParallelImplementationVersion == 1 {
 		maxInitialImplementations = 2
@@ -316,6 +319,9 @@ func replayGraph(s *Snapshot, e journal.Event) error {
 			}
 		}
 		if err := engineeringplan.ValidateAutonomousRevision(s.Graph.Graph, rev.Graph); err != nil {
+			return err
+		}
+		if err := validateAgentContextGraph(*s, rev.Graph); err != nil {
 			return err
 		}
 		if repairPlanningEnabled(*s) {

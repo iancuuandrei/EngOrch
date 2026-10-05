@@ -47,7 +47,8 @@ func plannerInvocationForSnapshot(s Snapshot) (runtime.Invocation, error) {
 		if s.PlannerContext != nil || s.PlannerGoContext != nil {
 			return runtime.Invocation{}, errors.New("planner context present without policy")
 		}
-		return plannerInvocationWithContextsAndRecipe(s.Creation.Config, s.Creation.Objective, nil, nil, s.Creation.Execution)
+		base, err := plannerInvocationWithContextsAndRecipe(s.Creation.Config, s.Creation.Objective, nil, nil, s.Creation.Execution)
+		return plannerAgentContextInvocation(s, base, err)
 	}
 	if plannerContextEnabled(s) && s.PlannerContext == nil {
 		return runtime.Invocation{}, errors.New("planner context admission missing")
@@ -55,7 +56,8 @@ func plannerInvocationForSnapshot(s Snapshot) (runtime.Invocation, error) {
 	if plannerGoContextEnabled(s) && s.PlannerGoContext == nil {
 		return runtime.Invocation{}, errors.New("Go planner context admission missing")
 	}
-	return plannerInvocationWithContextsAndRecipe(s.Creation.Config, s.Creation.Objective, s.PlannerContext, s.PlannerGoContext, s.Creation.Execution)
+	base, err := plannerInvocationWithContextsAndRecipe(s.Creation.Config, s.Creation.Objective, s.PlannerContext, s.PlannerGoContext, s.Creation.Execution)
+	return plannerAgentContextInvocation(s, base, err)
 }
 
 func plannerInvocationWithContext(c config.Config, objective string, plannerContext *PlannerContextRecord) (runtime.Invocation, error) {

@@ -23,6 +23,11 @@ a rejected or uncertain old result is never normalized into a successful one.
 
 ## 0. Prerequisites
 
+New autonomous runs also bind committed repository instructions and selected
+role workflows. See [agent context resolution](agent-context.md); use
+`--agent-context=false` for a new run without that input. Existing runs keep
+their original frozen instructions.
+
 - A Codex account with local authentication: run `codex login` first so the
   auth file exists (default `~/.codex/auth.json`, or `$CODEX_HOME/auth.json`).
   `fabric init` only binds the auth path; it never reads credential contents.

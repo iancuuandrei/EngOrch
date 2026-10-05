@@ -9,6 +9,7 @@ import (
 )
 
 type autonomousCapabilities struct {
+	agentContext                             bool
 	parallel                                 bool
 	isolation                                *isolatedWriterPolicyFile
 	plannerContext, parser, parserHash       string

@@ -1,28 +1,27 @@
-# Optional engineering procedures
+# Engineering skills
 
-The seven directories under `procedures/` are portable Agent Skills. Each contains
-an independent `SKILL.md`; copy only the directories you want into your agent's
-documented skill location, or read a procedure directly. No global installation,
-controller router, supervisor, pstack or multi-agent setup is required. Installing
-a procedure does not configure a runtime or authorize any effect.
+Reusable workflows live under `.agents/skills/`. Fabric captures the committed
+catalog for new autonomous runs, filters discovery by role and loads bodies
+only for selected tasks. See [agent context resolution](agent-context.md) for
+scope, source identity, replay, bounds and the opt-out.
 
-| Procedure | Use it for | Output |
+| Skill | Roles | Method |
 | --- | --- | --- |
-| [how](../../procedures/how/SKILL.md) | Current implementation mechanics | Evidence-linked execution trace |
-| [why](../../procedures/why/SKILL.md) | Decision rationale | Recorded reasons, alternatives and explicit hypotheses |
-| [blast-radius](../../procedures/blast-radius/SKILL.md) | Proposed change impact | Consumers, breakage mechanisms and uncovered scope |
-| [tdd](../../procedures/tdd/SKILL.md) | Behavioral implementation or regression repair | Observed failure, change and executed verification |
-| [interrogate](../../procedures/interrogate/SKILL.md) | Consequential requirement ambiguity | Decisions and actionable acceptance criteria |
-| [architect](../../procedures/architect/SKILL.md) | Architecture choices | Boundaries, contracts, failure cases and tradeoffs |
-| [verification-design](../../procedures/verification-design/SKILL.md) | Evidence and qualification design | Claim-to-evidence matrix with independent oracles |
+| [architecture](../../.agents/skills/architecture/SKILL.md) | planner, explorer, reviewer | Boundaries, interfaces and consequential tradeoffs |
+| [codebase-trace](../../.agents/skills/codebase-trace/SKILL.md) | explorer, writer, fixer | Evidence-linked implementation trace |
+| [decision-rationale](../../.agents/skills/decision-rationale/SKILL.md) | planner, explorer, reviewer | Recorded reasons, alternatives and hypotheses |
+| [requirement-analysis](../../.agents/skills/requirement-analysis/SKILL.md) | planner, explorer | Consequential ambiguity and acceptance criteria |
+| [blast-radius](../../.agents/skills/blast-radius/SKILL.md) | planner, explorer, fixer, reviewer | Consumers, regressions and uncovered scope |
+| [tdd](../../.agents/skills/tdd/SKILL.md) | writer, fixer | Discriminating regression and correction workflow |
+| [verification-design](../../.agents/skills/verification-design/SKILL.md) | planner, reviewer | Claim-to-evidence matrix and independent oracles |
+| [code-review](../../.agents/skills/code-review/SKILL.md) | reviewer | Candidate and compatibility review |
+| [repair](../../.agents/skills/repair/SKILL.md) | fixer | Bounded correction from failed-gate evidence |
 
-These methods can be combined when useful, but none invokes another by default.
-The controller's authorization and evidence rules remain the execution authority.
-In particular, a procedure's prose cannot convert UNKNOWN to success, approve a
-plan, bypass a writer lease, or make an inferred dependency complete.
+The seven earlier portable procedures were relocated and their vague names
+clarified; their historical [evaluation plan](../evaluation/procedures.md)
+retains its original names and NOT RUN model scores. The two new workflows do
+not inherit behavioral qualification from those records. Standard packaging
+and Fabric prompt inclusion do not prove selection accuracy or provider quality.
 
-The packaging follows the minimal name/description frontmatter in the
-[Agent Skills specification](https://agentskills.io/specification), consulted
-2026-09-07. Provider-specific discovery and invocation behavior must be checked in
-the chosen host. No cross-provider execution qualification is claimed merely from
-valid frontmatter. See [procedure evaluation](../evaluation/procedures.md).
+No skill grants permissions, credentials, tool capabilities or effect authority.
+Use host-native discovery only according to that host's documented behavior.

@@ -5,11 +5,6 @@ objective into a plan, scoped candidate changes, native checks and an
 independent review, with durable evidence for each step. Go owns orchestration;
 Rust provides optional repository intelligence.
 
-> **Current product increment:** v1.1.3, implementation checkpoint
-> `09a646522d3bfa0eb8cfbe545406971c695b7ffd` on `dev`.
-> **Latest published package:** v1.1.0 for Windows amd64. The development source
-> and its evaluation records are not a new installed release.
-
 Start with the [documentation hub](docs/README.md). It separates current user
 guides and contracts from development notes, historical checkpoints and
 release-specific evidence.
@@ -133,58 +128,6 @@ flowchart LR
 `READY` means the candidate passed its configured verification and review
 gates. It does not mean the change was committed, merged or released.
 
-## Results and benchmarks
-
-The following are retained measurements with identified sources, not a new
-benchmark of the rolling `main` tree. Model latency, repository size, checks
-and provider availability all affect an end-to-end task.
-
-### Real coding-task acceptance
-
-On source `8c5a750`, using `gpt-6.1-sol` with high reasoning, the original
-eight-task cohort passed **7/8**. Its remaining planner was refused because of
-provider capacity. A separately authorized fresh `logr` successor passed
-**1/1**, giving **8/8 accepted task identities** across the two records.
-Every accepted candidate passed native verification, independent review and
-its unchanged heldout checks. Seven accepted tasks required no repair; afero
-required one.
-
-This is not a single unchanged 8/8 attempt, an all-Muse result, or installed
-release qualification. See the [closure report](docs/evaluation/v112-eight-task-closure.md)
-and [machine-readable ledger](docs/evaluation/v112-eight-task-closure.json).
-
-### Local context-cache measurements
-
-| Workload / measured stage | Uncached | Cold cache | Warm cache | Source / samples |
-| --- | ---: | ---: | ---: | --- |
-| Synthetic 24 × 64 KiB Go corpus collection | 0.650 s | 0.652 s | 0.512 s | v1.0.9 / five |
-| Pinned go-humanize corpus collection | 0.799 s | 0.812 s | 0.742 s | v1.0.9 / five |
-| Complete go-humanize contract admission | 1.387 s | 1.763 s | 1.647 s | v1.0.25 / three |
-
-Values are single-host medians on Windows/amd64. The collection timer excluded
-graph and context construction; the admission timer covered the complete
-admission stage. Cached and uncached outputs retained matching identities.
-The complete admission sample **did not show a latency benefit**; collection
-timings alone do not prove faster autonomous tasks. Go allocations were not
-materially reduced in the collection sample. Exact source, toolchain, input
-pins, receipt hashes and methodology are in the
-[cache measurement report](docs/evaluation/autonomous-parse-cache.md).
-
-### Observed model-token accounting
-
-| Token category | Accepted eight-task coverage |
-| --- | ---: |
-| Input total | 8,705,419 |
-| Cached input, included in input | 7,677,440 |
-| Uncached input | 1,027,979 |
-| Output total | 77,567 |
-| Reasoning output, included in output | 32,526 |
-
-These totals cover accepted runs only; usage for the refused predecessor was
-unavailable. Provider prompt caching and Fabric's local syntax-fact cache are
-different mechanisms. The figures establish observed usage, not comparative
-token savings or a dollar cost. Use `fabric usage RUN` to inspect your own run.
-
 ## Boundaries and current limitations
 
 - Windows amd64 has a published package; Linux installed qualification remains pending.
@@ -193,42 +136,13 @@ token savings or a dollar cost. Use `fabric usage RUN` to inspect your own run.
 - Provider capacity and transport failures can block a task. Retained diagnostics identify the stage and permitted next action; uncertain effects remain uncertain.
 - Integration remains an operator decision. Fabric does not guarantee unrestricted autonomous completion or error-free execution.
 
-## Development source and public history
+## Documentation and releases
 
-Development commits retain their full incremental history on `dev`. `main`
-stores one rolling checkpoint for each major/minor line (`v1.0`, `v1.1`).
-Trusted pushes update the matching rolling snapshot on `main` through the
-`automation:fabric-v1-sol-supervisor` workflow, which verifies the current
-`dev` tip and uses an exact `main` force-with-lease. For an existing
-major/minor line, it replaces only that line's latest snapshot tree while
-preserving its title, parent and original author/committer dates. A newer line
-adds one snapshot parented by the previous `main`; an older line cannot replace
-a newer one. The historical `v0.0.0` and `v0.0.1` checkpoints remain, and
-published tags such as `v1.0.0` and `v1.1.0` are never moved. Routine pushes do
-not create a PR; an explicitly created PR still uses the automation identity.
-
-Because a rolling `main` snapshot can change its tree without changing its
-creation date, development evidence must name the exact `dev` source SHA. See
-the [source history and snapshot policy](docs/contributing/source-history.md)
-for the complete rules.
-
-The latest accepted task ledger records **8/8 task identities** across the
-original 7/8 cohort and one separate fresh `logr` successor, on source
-`8c5a750ddf32e569257ec2bb9371a24847565441`. It is not one unchanged 8/8 run and
-is not a full reevaluation of v1.1.3. The [closure record](docs/evaluation/v112-eight-task-closure.md)
-preserves that distinction and the later focused diagnostic checks.
-
-## Published release
-
-The latest immutable [v1.1.0 Windows release](https://github.com/iancuuandrei/Fabric/releases/tag/v1.1.0)
-includes its own [published acceptance record](https://github.com/iancuuandrei/Fabric/releases/download/v1.1.0/v11-release-acceptance.json).
-It is separate from the newer v1.1.3 source fixes and eight-task coverage ledger.
-
-The immutable [v1.0.0 Windows release](https://github.com/iancuuandrei/Fabric/releases/tag/v1.0.0)
-has its own [distribution and installed-task acceptance record](docs/evaluation/v1-release-acceptance.md).
-Linux remains optional and unqualified. Package builds, development tests and
-task-coverage ledgers each answer different questions; none substitutes for
-the others.
+Use the [documentation hub](docs/README.md) for current guides and contracts,
+[release guide](docs/guides/release.md) for immutable published packages, and
+[evaluation index](docs/evaluation/status.md) for source-bound measurements
+and acceptance records. Development and publication follow the
+[source-history policy](docs/contributing/source-history.md).
 
 ## Project references
 

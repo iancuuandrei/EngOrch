@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"harness.local/engorch/internal/access"
+	"harness.local/engorch/internal/agentcontext"
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/codexhost"
 	"harness.local/engorch/internal/config"
@@ -31,6 +32,9 @@ type Creation struct {
 	// immutable run input which allows the controller to make the narrowly
 	// defined machine approvals below.
 	Execution *ExecutionPolicy `json:"execution,omitempty"`
+	// AgentContext retains exact committed guidance for new role invocations.
+	// Absence preserves historical inputs and replay without filesystem reads.
+	AgentContext *agentcontext.Bundle `json:"agent_context,omitempty"`
 }
 
 // ExecutionPolicy is an explicit, immutable opt-in to the bounded autonomous
@@ -579,6 +583,12 @@ func Replay(events []journal.Event) (Snapshot, error) {
 			if c.Execution != nil {
 				if err := c.Execution.Validate(); err != nil {
 					return s, err
+				}
+			}
+			if c.AgentContext != nil {
+				sourceID, err := c.Repository.ID()
+				if err != nil || c.AgentContext.Validate() != nil || c.AgentContext.SourceID != sourceID || c.AgentContext.SourceCommit != c.Repository.Commit || c.Execution == nil || c.Execution.GraphVersion != 1 {
+					return s, errors.New("agent context differs from immutable run source or graph policy")
 				}
 			}
 			if err := validateRepairPlanningBinding(c); err != nil {

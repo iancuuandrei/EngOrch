@@ -1,6 +1,8 @@
 ---
 name: verification-design
 description: Design evidence that can prove or falsify an engineering claim. Use when choosing acceptance tests, qualification gates or evaluation scope before implementation; does not certify unexecuted checks.
+metadata:
+  fabric.roles: "planner,reviewer"
 ---
 
 # verification-design

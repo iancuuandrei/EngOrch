@@ -154,6 +154,7 @@ func inspectAutonomousPlan(ctx context.Context, root string, options autonomousC
 		resources["memory_admission_recheck"] = "BEFORE_FUTURE_ISOLATED_WRITER_CLAIMS"
 	}
 	plan["context"] = contextMode
+	plan["agent_context"] = map[string]any{"enabled": options.agentContext, "source": "COMMITTED_TREE", "skills": "ROLE_FILTERED_METADATA_AND_TASK_SELECTED_BODIES", "runtime_execution": "NOT_RUN"}
 	plan["topology"] = topology
 	scopeVersion := 1
 	if topology != "serial_writer" {
