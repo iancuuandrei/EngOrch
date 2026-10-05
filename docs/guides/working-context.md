@@ -63,14 +63,19 @@ updates. Removing notes never deletes original evidence.
 ## Measurement and qualification
 
 `usage` reports accepted/rejected rewrites, peak bytes and average bytes across
-accepted projection versions. That average is not time-weighted. Provider
-input/cached/output/reasoning tokens remain the runtime's separately observed
+accepted projection versions. The average is an integer floor, not time-weighted;
+total version bytes divided by accepted rewrites gives the exact rational mean.
+Provider input/cached/output/reasoning tokens remain the runtime's separately observed
 usage; unavailable values are not zero.
 
 Deterministic integration and independent code review are distinct from live
 qualification. Independent review approved the execution path. A Codex
 app-server fixture regression verifies exact cached-result recovery with no new
 RPC calls; this is deterministic evidence, not live provider qualification.
-The matched A/B/C provider experiment remains pending. No token,
-latency or success advantage is established, and the treatment remains opt-in.
+The [historical A/B/C pilot](../evaluation/working-context-pilot-20261005.md)
+completed B and C with native verification, review and external acceptance PASS.
+C admitted three context rewrites. A remains UNKNOWN and was not resent. C used
+more observed tokens than B; timing has the limitations recorded in the report.
+No general token, latency or success advantage is established; the treatment
+remains opt-in and is not expanded to other roles.
 See the [architectural decision and experiment requirements](../roadmap/adaptive-working-context.md).

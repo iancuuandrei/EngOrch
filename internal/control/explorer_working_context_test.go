@@ -164,6 +164,20 @@ func TestExplorerWorkingContextCompletedTurnKeepsFrozenGuidanceScope(t *testing.
 	}
 }
 
+func TestExplorerWorkingContextUsageKeepsCanonicalIntegerMean(t *testing.T) {
+	s := Snapshot{WorkingContextHistory: []ExplorerWorkingContextRecord{
+		{Status: "updated", Projection: &workingcontext.Context{SizeBytes: 1}},
+		{Status: "updated", Projection: &workingcontext.Context{SizeBytes: 2}},
+	}}
+	u := measureWorkingContextUsage(s)
+	if u.AverageVersionBytes != 1 || u.TotalVersionBytes != 3 || u.AcceptedRewrites != 2 {
+		t.Fatal("integer mean lost exact numerator/count", u)
+	}
+	if _, err := canonical.Bytes(u); err != nil {
+		t.Fatal("working context usage broke canonical CLI output", err)
+	}
+}
+
 func TestExplorerWorkingContextRetainsOwnNotesAndFrozenReplay(t *testing.T) {
 	policy := &ExecutionPolicy{Mode: "autonomous-v1", GraphVersion: 1, MaxParallel: 1, Context: taskContextBoundedV1, WorkingContextVersion: 1, ScheduledExplorerDispatchVersion: 1}
 	fixture := newAcceptedExplorerFixtureWithPolicy(t, policy)

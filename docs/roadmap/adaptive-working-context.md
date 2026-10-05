@@ -1,7 +1,8 @@
 # Adaptive Working Context — Fabric v2 steering decision
 
 Status: experimental direction; primitive and dynamic explorer integration
-implemented; live qualification pending. This decision extends the full v2 objective; it does not
+implemented; historical pilot complete with A unresolved and B/C accepted.
+Retain opt-in without role expansion. This decision extends the full v2 objective; it does not
 replace repair, scheduling, model allocation or final release requirements.
 
 ## Architectural boundary
@@ -141,8 +142,9 @@ writer handoffs omit private scratch updates.
 The [user guide](../guides/working-context.md) documents the default-off
 `--working-context` flag, supported routes, stale queue limitation and version-size
 accounting. A/B/C must share the same dynamic executor policy; retention remains
-separate. Existing frozen turns always retain their exact input. Matched live
-comparison, final v2 benchmark and promotion remain NOT RUN.
+separate. Existing frozen turns always retain their exact input. The historical
+pilot below supplies live integration evidence; final v2 benchmark and promotion
+remain NOT RUN.
 
 The affected deterministic regressions passed on the final execution-path
 draft (control 58.141 s, CLI 1.360 s, Codex RPC 0.272 s and working-context
@@ -168,3 +170,13 @@ inspection. New/unmatched turns still derive and validate their frozen identity.
 Source-guidance regressions cover both retention-off and retention-on modes,
 including rejection of changed question, invocation or agent identity. These
 debugging probes are not pooled into a matched-treatment acceptance claim.
+
+The [2026-10-05 historical A/B/C pilot](../evaluation/working-context-pilot-20261005.md)
+used frozen execution source `591df4759e77`, one task, GPT 6 Luna High and
+concurrency one. B/C reached READY with native verification, independent
+candidate review and external acceptance PASS. C admitted three rewrites; A
+remains UNKNOWN without resend and its aggregate usage is unavailable. C used
+more observed tokens than B. Timing includes a telemetry repair pause and is
+not a causal comparison. The decision is to retain explorer retention opt-in,
+without default promotion or expansion to other roles. This does not qualify
+the frozen v2 benchmark or release.

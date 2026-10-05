@@ -26,12 +26,14 @@ type ExplorerWorkingContextRecord struct {
 // WorkingContextUsage measures admitted projection versions, not provider tokens
 // or time-weighted residence. Other experiment metrics remain runtime evidence.
 type WorkingContextUsage struct {
-	AcceptedRewrites    int     `json:"accepted_rewrites"`
-	RejectedUpdates     int     `json:"rejected_updates"`
-	PeakContentBytes    int     `json:"peak_content_bytes"`
-	TotalVersionBytes   int     `json:"total_version_bytes"`
-	AverageVersionBytes float64 `json:"average_version_bytes"`
-	Scope               string  `json:"scope"`
+	AcceptedRewrites  int `json:"accepted_rewrites"`
+	RejectedUpdates   int `json:"rejected_updates"`
+	PeakContentBytes  int `json:"peak_content_bytes"`
+	TotalVersionBytes int `json:"total_version_bytes"`
+	// Canonical v1 accepts integers only. This is the floor of the mean;
+	// TotalVersionBytes/AcceptedRewrites retains the exact rational value.
+	AverageVersionBytes int    `json:"average_version_bytes"`
+	Scope               string `json:"scope"`
 }
 
 func measureWorkingContextUsage(s Snapshot) WorkingContextUsage {
@@ -48,7 +50,7 @@ func measureWorkingContextUsage(s Snapshot) WorkingContextUsage {
 		}
 	}
 	if u.AcceptedRewrites != 0 {
-		u.AverageVersionBytes = float64(u.TotalVersionBytes) / float64(u.AcceptedRewrites)
+		u.AverageVersionBytes = u.TotalVersionBytes / u.AcceptedRewrites
 	}
 	return u
 }
