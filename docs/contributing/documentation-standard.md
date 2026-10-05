@@ -6,7 +6,8 @@ Normative project convention, informed by the
 Documentation MUST change with the behavior it describes. Each fact has one
 authoritative home: specifications define invariants, ADRs explain decisions,
 source comments define API use, and guides explain tasks. Historical decisions
-MUST NOT masquerade as current implementation status.
+MUST NOT masquerade as current implementation status. The [documentation hub](../README.md)
+is navigation, not a second specification or evidence record.
 
 Use plain language, sentence-case headings, working relative links and the
 simplest executable example first. Commands omit shell prompts. Separate local,
@@ -29,3 +30,37 @@ Checks MUST catch broken local links, duplicate ADR IDs, invalid ADR statuses,
 undocumented exported APIs and stale generated references when those references
 exist. CLI/config examples must be checked against their actual parser once
 implemented. Conceptual prose is authored, not generated.
+
+## Navigation and evidence
+
+Keep a clear path from the repository README to the documentation hub, current
+task guides, contracts and exact evaluation records. Link a summary to its
+authoritative detail instead of repeating evolving rules in several places.
+When newer evidence changes a status, preserve historical reports and add a
+dated note or current index entry. State the source, candidate, artifact or run
+scope next to each qualification claim. Distinguish implementation, local test,
+provider, hosted, installed-package and release evidence. An unmeasured value is
+unavailable, not zero.
+
+## Diagrams and visual consistency
+
+Use GitHub-compatible Mermaid for compact system, lifecycle and decision
+diagrams. Draw only relationships supported by the current source or an
+explicitly labelled proposal. Show optional integrations and authority
+boundaries; do not make a model, reviewer assertion or telemetry feed look like
+an approval gate. Keep diagrams smaller than their explanatory prose and link
+to the authoritative contract for detailed rules.
+
+For project diagrams, use a restrained shared palette: deep navy for the core
+flow, teal for accepted evidence and verified boundaries, slate for external
+or optional components, and amber for blocked or conditional paths. Define
+meaningful Mermaid `classDef` styles locally so the diagram renders in GitHub.
+Color MUST reinforce, not replace, text labels, edge labels or shape. Prefer
+short node text, consistent direction and explicit labels on non-obvious
+relationships. Avoid decorative gradients, unsupported icons, dense crossings
+and diagrams that imply unqualified performance or release status.
+
+When a diagram describes a process, keep its decision points consistent with
+the corresponding guide and source. When a branch or release diagram describes
+repository history, link the source-history policy and label rolling snapshots
+separately from immutable tags and packages.

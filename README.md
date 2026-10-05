@@ -1,157 +1,104 @@
 # Fabric
 
-Fabric is an engineering agent runner. It binds model work to a repository,
-candidate identity, configured checks, review and durable run history. Go owns
-orchestration; Rust provides repository intelligence.
+Fabric is a repository-bound engineering agent runner. It turns a coding
+objective into a plan, scoped candidate changes, native checks and an
+independent review, with durable evidence for each step. Go owns orchestration;
+Rust provides optional repository intelligence.
 
-Fabric v1.0.0 has a reproducible Windows amd64 distribution and a recorded
-installed-binary acceptance run. Start with the
-[Windows installed-task guide](docs/getting-started/installed-autonomous-task.md)
-for download, setup, a bounded autonomous task and result inspection. The
-[release guide](docs/guides/release.md) describes the accepted package and its
-limits. Linux amd64 remains optional and unqualified.
+> **Current product increment:** v1.1.3, implementation checkpoint
+> `09a646522d3bfa0eb8cfbe545406971c695b7ffd` on `dev`.
+> **Latest published package:** v1.1.0 for Windows amd64. The development source
+> and its evaluation records are not a new installed release.
 
-For the current development checkout, use the
-[source-build autonomous guide](docs/guides/autonomous-task.md).
-The [capability guide](docs/guides/features.md) describes the current
-functionality and its limits. The [v2 product roadmap](docs/roadmap/v2-product-plan.md)
-records qualification separately from published release acceptance.
+Start with the [documentation hub](docs/README.md). It separates current user
+guides and contracts from development notes, historical checkpoints and
+release-specific evidence.
 
-## Current development status
+## Try Fabric
 
-**v1.1.0 adds resilient autonomous execution.** The changes
-add bounded semantic corrections and ownership replanning, typed autonomous
-outcomes, progress-aware execution, optional context/metadata degradation,
-future-worker memory admission and an effective read-only doctor plan.
-Writer and fixer prompts also require preservation of existing behavior and
-focused regression tests around the behavior being changed.
-Completed semantic results are preserved when accounting is unavailable;
-required accounting still gates subsequent model calls. See the
-[v1.1 implementation and release ledger](docs/roadmap/v1.1-resilience.md)
-for development evidence and release checks; published qualification is recorded
-separately with the GitHub release. Further comparative performance
-benchmarking is deferred so this increment can ship.
-
-The latest clean-source evaluation has **8/8 accepted task coverage**, with one
-explicit fresh `logr` successor after a sealed provider capacity refusal. The
-original cohort remains 7/8; all eight accepted candidates passed native checks,
-independent review and unchanged heldouts. See the
-[eight-task closure and diagnostic limits](docs/evaluation/v112-eight-task-closure.md).
-
-**v1.0.29** adds Muse Go execution fixes and graceful optional-capability
-fallbacks. The prior qualified capability checkpoint is v1.0.27 (`6205de9`);
-v1.0.28 updates documentation only. A separate frozen
-v1.0.25 Sol High cohort reached **7/8 PASS**: fixed-six **6/6** plus generated
-numeric ownership; godotenv remains BLOCKED after two repairs. The seven PASS rows
-have native verification, approved candidate-bound review and unchanged
-held-out acceptance. They do not establish v2.0.0 release completion.
-
-The earlier persistent v2 development goal remains paused. Separately authorized
-Muse route work completed one local go-humanize coding task using exclusively
-Muse Spark 1.3 Contributor on OpenCode Go: native tests, candidate-bound review
-and unchanged held-out tests passed. This used a custom development binary and
-does not qualify the entire task suite or a new release. See the
-[route guide](docs/guides/muse-go-route.md) and
-[capability fallback guide](docs/guides/graceful-capabilities.md).
-See the
-[latest checkpoint](docs/roadmap/v2-product-plan.md) for the preserved run
-state, measured token types, cache limitations and remaining release work.
-
-## Run your first real coding task
-
-The installed-task guide uses `fabric run --autonomous` to plan, explore,
-implement, verify and review with a bounded repair budget. The result stays in
-an isolated Git worktree for operator inspection and integration; Fabric does
-not commit or publish it automatically. See the
-[v1.0.0 release acceptance record](docs/evaluation/v1-release-acceptance.md)
-for the exact distribution and installed-run evidence. The
-[task graph guide](docs/guides/graph-autonomous-task.md) documents dependency
-decomposition, bounded parallel read-only work and configured model allocation.
-
-The earlier [source-built Windows first-task guide](docs/getting-started/real-task.md)
-covers the approval-based workflow accepted at its recorded source identity.
-Use the installed-task guide above for the v1.0.0 autonomous workflow.
-
-## Historical bootstrap
-
-- [v0.0.1 trusted bootstrap checkpoint](docs/evaluation/v0.0.1.md): first
-  trusted pre-alpha checkpoint (M2at: Luna planning, recursive Muse research,
-  Muse writer, deterministic verification, Luna review, local commit).
-
-## Try a local plan
-
-Build from source with Go 1.27.1 and Git installed:
+For published packages and their exact identities, use the [release guide](docs/guides/release.md).
+The [installed-task walkthrough](docs/getting-started/installed-autonomous-task.md) retains the recorded v1.0.0 example.
+For the current development checkout, use the [source-build autonomous guide](docs/guides/autonomous-task.md).
+To build locally:
 
 ```sh
 go build -o bin/ ./cmd/fabric
 ```
 
-Add the generated `bin` directory to your shell's `PATH` before the commands
-below. The executable is `fabric.exe` on Windows and `fabric` on other systems.
+Run `fabric --help`, configure a committed project and its required native
+checks, then start a bounded run with `fabric run --autonomous`. Review the
+candidate with `fabric inspect RUN`, `fabric diff RUN`, `fabric usage RUN` and
+`fabric checkpoint RUN`. Changes remain in an isolated worktree for explicit
+operator integration; Fabric does not publish them automatically.
 
-Use a repository with an existing commit. `init` writes `harness.toml` without
-overwriting an existing file. Edit its repository name and required checks.
+## How a task reaches READY
 
-```sh
-fabric --root PATH_TO_REPOSITORY init
+```mermaid
+flowchart LR
+  objective["Objective"] --> plan["Plan and task graph"]
+  plan --> context["Bounded repository context"]
+  context --> writer["Scoped writer"]
+  writer --> candidate["Isolated candidate"]
+  candidate --> verify["Native verification"]
+  verify --> review["Candidate-bound review"]
+  review -->|approved| ready["READY"]
+  verify -->|failed| repair["Bounded repair"]
+  review -->|changes requested| repair
+  repair --> writer
+  classDef navy fill:#14283f,color:#fff,stroke:#14283f,stroke-width:2px
+  classDef teal fill:#d9f1ec,color:#123b43,stroke:#167d83,stroke-width:2px
+  classDef amber fill:#fff0d8,color:#563b12,stroke:#b97819,stroke-width:2px
+  class objective,plan,context,writer,candidate,verify,review navy
+  class ready teal
+  class repair amber
 ```
 
-```sh
-fabric --root PATH_TO_REPOSITORY plan "Add a tested greeting"
-```
+`READY` means the candidate passed its configured verification and review
+gates. It does not mean the change was committed, merged or released.
 
-For an existing goal document, use
-`fabric --root PATH_TO_REPOSITORY plan --file goal.md`. Relative goal paths resolve
-against the selected repository. The file must contain nonempty UTF-8 text of at
-most 256 KiB; its exact text is retained in the run's immutable inputs.
+## Development source and public history
 
-The result is canonical JSON in `AWAITING_APPROVAL`, with exact run and plan IDs.
-The fake plan exercises protocol mechanics; it is not an evaluated model answer.
-See the [local planning guide](docs/getting-started/local-plan.md) for approval,
-replay and failure behavior.
+Development commits retain their full incremental history on `dev`. `main`
+stores one rolling checkpoint for each major/minor line (`v1.0`, `v1.1`).
+Trusted pushes update the matching rolling snapshot on `main` through the
+`automation:fabric-v1-sol-supervisor` workflow, which verifies the current
+`dev` tip and uses an exact `main` force-with-lease. For an existing
+major/minor line, it replaces only that line's latest snapshot tree while
+preserving its title, parent and original author/committer dates. A newer line
+adds one snapshot parented by the previous `main`; an older line cannot replace
+a newer one. The historical `v0.0.0` and `v0.0.1` checkpoints remain, and
+published tags such as `v1.0.0` and `v1.1.0` are never moved. Routine pushes do
+not create a PR; an explicitly created PR still uses the automation identity.
 
-The [source-build autonomous guide](docs/guides/autonomous-task.md) remains
-available for development checkouts. The [local Codex integration](integrations/codex/engorch/README.md)
-packages a separate workflow as a thin skill; this release acceptance does not
-qualify plugin installation or sandbox inheritance.
+Because a rolling `main` snapshot can change its tree without changing its
+creation date, development evidence must name the exact `dev` source SHA. See
+the [source history and snapshot policy](docs/contributing/source-history.md)
+for the complete rules.
 
-## Architecture and development
+The latest accepted task ledger records **8/8 task identities** across the
+original 7/8 cohort and one separate fresh `logr` successor, on source
+`8c5a750ddf32e569257ec2bb9371a24847565441`. It is not one unchanged 8/8 run and
+is not a full reevaluation of v1.1.3. The [closure record](docs/evaluation/v112-eight-task-closure.md)
+preserves that distinction and the later focused diagnostic checks.
 
-- [Fabric v1 product gate](docs/development/v1-product-gate.md): the Windows
-  first-task journey is accepted; broader v1 work remains open. Fabric
-  self-hosting is optional dogfooding.
+## Published release
 
-- [Architecture](docs/architecture/system.md) and [ADRs](docs/adr/0001-language-split.md)
-- [Journal contract](docs/specifications/run-journal.md)
+The latest immutable [v1.1.0 Windows release](https://github.com/iancuuandrei/Fabric/releases/tag/v1.1.0)
+includes its own [published acceptance record](https://github.com/iancuuandrei/Fabric/releases/download/v1.1.0/v11-release-acceptance.json).
+It is separate from the newer v1.1.3 source fixes and eight-task coverage ledger.
+
+The immutable [v1.0.0 Windows release](https://github.com/iancuuandrei/Fabric/releases/tag/v1.0.0)
+has its own [distribution and installed-task acceptance record](docs/evaluation/v1-release-acceptance.md).
+Linux remains optional and unqualified. Package builds, development tests and
+task-coverage ledgers each answer different questions; none substitutes for
+the others.
+
+## Project references
+
+- [Documentation hub](docs/README.md)
+- [System architecture](docs/architecture/system.md)
+- [Capabilities and evidence boundaries](docs/guides/features.md)
 - [CLI reference](docs/reference/cli.md)
-- [All implemented capabilities and qualification](docs/guides/features.md)
-- [Engineering ranking and semantic queries](docs/guides/engineering-orientation.md)
-- [Go file facts](docs/guides/go-file-facts.md)
-- [Resource-bounded isolated writers](docs/guides/isolated-writers.md)
-- [Local task schedules](docs/guides/task-schedules.md)
-- [Autonomous task graphs](docs/guides/graph-autonomous-task.md): dependency
-  waves, bounded context and parallel read tasks; development qualification
-  remains in progress.
-- [Impact-aware review context](docs/guides/reviewer-impact-context.md)
-- [Prompt-cache recipes](docs/guides/prompt-cache-recipes.md)
-- [Empirical model calibration and conservative fallback](docs/guides/empirical-model-calibration.md)
-- [Native runtime compaction](docs/guides/native-auto-compaction.md)
-- [Candidate-bound checkpoints](docs/guides/checkpoints.md)
-- [Verified fresh-context rounds](docs/guides/verified-fresh-rounds.md)
-- [Deterministic Go-format observations](docs/guides/deterministic-go-format-observation.md)
-- [Typed Codex usage observations](docs/guides/codex-native-usage-observations.md)
-- [Apply file changes](docs/guides/file-changes.md)
-- [Build and verify a local package](docs/guides/local-packaging.md): local directory only; never a signed, tagged, or published release.
-- [Reproducible release bundles and installation](docs/guides/release.md):
-  Windows build, integrity verification and installation tooling; a generated
-  bundle does not by itself establish release qualification.
-- [Real-repository evaluation suite](evals/v1/README.md): pinned tasks and
-  candidate-bound hidden acceptance checks, including the PR #5 comparison.
-- [Optional engineering procedures](docs/guides/procedures.md)
-- [Contributing](CONTRIBUTING.md) and [documentation standard](docs/contributing/documentation-standard.md)
-- [Research provenance](docs/research/oss-mechanisms.md)
-- [Current evidence](docs/evaluation/status.md)
-- [Real repository comparison](docs/evaluation/v1-real-repository-comparison.md):
-  measured Native/PR #5 outcomes, real concurrency and observed repair limitations.
-- [WP05/WP06 program history and completion status](docs/evaluation/wp05-wp06-history.md)
-- [v0.0.1 trusted bootstrap checkpoint](docs/evaluation/v0.0.1.md)
+- [Product roadmap](docs/roadmap/v2-product-plan.md)
+- [Current implementation evidence](docs/evaluation/status.md)
+- [Contributing](CONTRIBUTING.md)

@@ -1,5 +1,11 @@
 # Install Fabric and run an autonomous task (Windows)
 
+> **Version scope:** this is the retained v1.0.0 installation walkthrough.
+> The latest published package is v1.1.0; use the
+> [release guide](../guides/release.md#published-packages) for its source, archive
+> hash and acceptance record. For later v1.1.3 fixes, use the
+> [current source guide](../guides/autonomous-task.md).
+
 This guide documents the Fabric v1.0.0 Windows amd64 installation path. The
 release acceptance tested this package on Windows; Linux amd64 is not yet
 qualified. The Windows package is published in the v1.0.0 GitHub release.

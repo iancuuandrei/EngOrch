@@ -2,32 +2,61 @@
 
 Fabric's Go control plane executes a coding objective through planning,
 read-only exploration, scoped implementation, native verification, independent
-review and bounded repair. Each run owns an isolated Git worktree and durable
-evidence. Rust supplies optional repository intelligence through configured
-snapshot and query interfaces.
+review and bounded repair. Each run binds durable evidence to its repository,
+candidate and configured policies. Rust supplies optional repository
+intelligence through configured snapshot and query interfaces.
 
 ```mermaid
-flowchart TD
-  User[Objective] --> CLI[Fabric CLI]
-  CLI --> Control[Configuration and control plane]
-  Control --> Plan[Validated task graph]
-  Plan --> Explore[Bounded parallel research and design]
-  Explore --> Context[Candidate-bound selected context]
-  Context --> Writer[Scoped implementation writer]
-  Writer --> Candidate[Isolated Git worktree]
-  Candidate --> Verify[Native verification]
-  Verify --> Review[Independent review]
-  Review -->|approved| Ready[READY candidate]
-  Verify -->|failed| Repair[Bounded repair design]
-  Review -->|changes requested| Repair
-  Repair --> Writer
-  Control --> Journal[Durable journal and effect receipts]
-  Control --> Runtime[Configured role runtime]
-  Runtime --> Explore
-  Runtime --> Writer
-  Runtime --> Review
-  RI[Configured repository intelligence] --> Context
+flowchart LR
+  objective["Objective"] --> cli["Fabric CLI"]
+  cli --> control["Go control plane"]
+  control --> graph["Validated task graph"]
+  graph --> explore["Read-only research and design"]
+  explore --> context["Bounded, candidate-aware context"]
+  context --> writer["Scoped implementation"]
+  writer --> candidate["Isolated Git worktree"]
+  candidate --> verify["Native verification"]
+  verify --> review["Independent review"]
+  review -->|approved| ready["READY candidate"]
+  verify -->|failed| repair["Bounded repair design"]
+  review -->|changes requested| repair
+  repair --> writer
+
+  subgraph authority["Control and evidence"]
+    control --> journal["Append-only run journal"]
+    control --> gates["Identity, scope and effect gates"]
+    gates --> graph
+    candidate -. identity-bound evidence .-> journal
+    verify -. result .-> journal
+    review -. verdict .-> journal
+  end
+
+  subgraph integrations["Configured integrations"]
+    adapters["Role runtime adapters"]
+    codex["Codex"]
+    opencode["OpenCode"]
+    provider["Configured direct provider"]
+    ri["Optional Rust repository intelligence"]
+    adapters --> codex
+    adapters --> opencode
+    adapters --> provider
+    ri --> context
+  end
+  control --> adapters
+  classDef navy fill:#14283f,color:#fff,stroke:#14283f,stroke-width:2px
+  classDef teal fill:#d9f1ec,color:#123b43,stroke:#167d83,stroke-width:2px
+  classDef slate fill:#edf1f5,color:#27384a,stroke:#8393a4,stroke-width:1px
+  classDef amber fill:#fff0d8,color:#563b12,stroke:#b97819,stroke-width:2px
+  class objective,cli,control,graph,explore,context,writer,adapters navy
+  class candidate,verify,review,journal,gates,ri teal
+  class codex,opencode,provider slate
+  class ready teal
+  class repair amber
 ```
+
+Solid arrows show the task path. Dotted arrows mark evidence recorded against
+the run; a model response or reviewer assertion does not bypass controller
+validation.
 
 ## Planning and ownership
 
@@ -80,6 +109,18 @@ on a candidate-bound copy without modifying the original candidate.
 READY means the local candidate satisfied its configured acceptance gates.
 An autonomous run does not commit, push or publish it. Release qualification
 and public integration require their own evidence.
+
+| Boundary | What it establishes | What it does not establish |
+|---|---|---|
+| Runtime response | Data returned for an exact admitted invocation | Permission to change files or claim completion |
+| Candidate application | Changes passed path, scope, preimage and identity checks | That the code works or the objective is solved |
+| Native verification | Configured checks ran against the identified candidate | That an independent reviewer approved it |
+| Independent review | A verdict bound to that candidate and its verification evidence | Authority to commit or publish |
+| `READY` | The configured candidate gates passed together | A release, merge or general quality guarantee |
+
+Each row is backed by its own journaled identity and evidence. An absent or
+uncertain effect remains unresolved; a later status summary does not convert it
+into success.
 
 ## Runtime and restart
 

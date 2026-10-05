@@ -1,10 +1,45 @@
 # Fabric capabilities
 
-Capabilities introduced through **v1.0.29**. The prior qualified code checkpoint
-is v1.0.27 (`6205de9b6b18d503cd45969a8a64660cb6bc65bb`). The published installed acceptance
-record applies to v1.0.0 on Windows amd64. Development capabilities below do
-not imply a completed v2.0.0 release. The v1.0.28 increment updates
-documentation only.
+This guide describes the v1.1.3 product implementation checkpoint
+(`09a646522d3bfa0eb8cfbe545406971c695b7ffd`), and links to evidence at its
+recorded scope. It is not an installed-release qualification. The published
+v1.0.0 acceptance applies to Windows amd64; the broader v2.0.0 product goal
+remains open. See the [source history policy](../contributing/source-history.md)
+for the difference between incremental `dev` history, rolling `main` snapshots
+and immutable release tags.
+
+## The capability path
+
+```mermaid
+flowchart LR
+  objective["Coding objective"] --> plan["Plan and ownership"]
+  plan --> explore["Read-only exploration"]
+  explore --> context["Bounded context"]
+  context --> implement["Scoped candidate changes"]
+  implement --> checks["Native checks"]
+  checks --> review["Independent review"]
+  review -->|approved| accepted["Candidate accepted"]
+  checks -->|failed| repair["Bounded repair"]
+  review -->|changes requested| repair
+  repair --> implement
+  ri["Optional repository intelligence"] -. facts and queries .-> context
+  runtime["Configured model routes"] --> plan
+  runtime --> explore
+  runtime --> implement
+  runtime --> review
+  classDef navy fill:#14283f,color:#fff,stroke:#14283f,stroke-width:2px
+  classDef teal fill:#d9f1ec,color:#123b43,stroke:#167d83,stroke-width:2px
+  classDef slate fill:#edf1f5,color:#27384a,stroke:#8393a4,stroke-width:1px
+  classDef amber fill:#fff0d8,color:#563b12,stroke:#b97819,stroke-width:2px
+  class objective,plan,explore,context,implement,checks,review navy
+  class accepted,ri teal
+  class runtime slate
+  class repair amber
+```
+
+The capabilities below support this path. Optional intelligence and runtime
+routes enrich configured steps; they do not replace candidate identity,
+verification, review or effect checks.
 
 Separately authorized local Muse route work passed one go-humanize task with
 native verification, approved review and unchanged held-out acceptance, using a
@@ -74,6 +109,12 @@ bundle includes both executables. See the [packaging guide](release.md) and
   limit this qualification.
 - Two v1.0.27 Windows packages were byte-identical and passed offline smoke
   checks. They are packaging evidence, not a new installed-task release gate.
+
+The separate [eight-task closure ledger](../evaluation/v112-eight-task-closure.md)
+records accepted evidence for eight task identities: the original frozen
+cohort is 7/8, and a fresh authorized `logr` successor supplies the eighth
+identity. That coverage used source `8c5a750` and the same task pin; it is not a
+single unchanged 8/8 cohort or a full reevaluation of current v1.1.3 source.
 
 The [product ledger](../roadmap/v2-product-plan.md) records exact identities,
 qualification and the paused development checkpoint. Complete-cohort

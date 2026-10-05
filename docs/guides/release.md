@@ -1,4 +1,44 @@
-# v1.0.0 distribution and native-host release builds
+# Distribution and native-host release builds
+
+## Published packages
+
+| Package | Exact source | Scope and evidence |
+|---|---|---|
+| [v1.1.0 Windows amd64](https://github.com/iancuuandrei/Fabric/releases/tag/v1.1.0) | `7ac130d4ea682559fb3b72a8ca096a7bdd5a3e9b` | Latest published package; [acceptance with documented cohort limits](https://github.com/iancuuandrei/Fabric/releases/download/v1.1.0/v11-release-acceptance.json) |
+| [v1.0.0 Windows amd64](https://github.com/iancuuandrei/Fabric/releases/tag/v1.0.0) | Original immutable release commit | [Recorded installed-task walkthrough](../getting-started/installed-autonomous-task.md) and [acceptance](../evaluation/v1-release-acceptance.md) |
+
+The published v1.1.0 archive is `fabric_1.1.0_windows_amd64.zip`, 40,089,244 bytes,
+SHA256 `daadc14fbcce62c5cd73eb5edb727a9bc9d72d30c22c3e4b4ffc09e3858a1f58`.
+Its published acceptance record includes an installed Muse task and retained
+6/8 original-cohort limits. The newer eight-task coverage ledger and v1.1.3
+diagnostic fixes apply to later development source, not this package. Packages
+are unsigned; Linux live installation remains NOT RUN in the v1.1.0 record.
+
+## Source history and rolling versions
+
+`dev` retains every incremental commit and patch version, such as `v1.1.3`.
+`main` contains one rolling major/minor snapshot, such as `v1.1`. Each trusted
+push to dev synchronizes the exact source tree through
+`automation:fabric-v1-sol-supervisor`. After inspecting a failed synchronization,
+rerun the latest trusted dev workflow if its SHA is still current, or publish
+the next reviewed development increment.
+
+Within the same major/minor line, the workflow rewrites only the latest main
+checkpoint, preserving its title, parent, original author date and committer
+date. It uses an exact expected main SHA with force-with-lease. A newer line
+creates one additional checkpoint; an older line is refused. Development
+history is never merged into main, and dev history is never rewritten by this
+synchronization. Routine updates do not create a PR for every development push.
+
+The authorized initial consolidation leaves the historical v0.0.0/v0.0.1
+bootstrap checkpoints, then v1.0 and v1.1. The v1.1 tree includes the later
+v1.1.1-v1.1.3 fixes, while its date comes from the original v1.1.0 checkpoint.
+Existing published tags/packages remain on their original commits. Main SHA
+changes are expected even though the snapshot date remains fixed; use exact
+source SHA and acceptance evidence, not its displayed date, for qualification.
+See [AGENTS.md](../../AGENTS.md) for attribution, history and evidence rules.
+The [source-history guide](../contributing/source-history.md) provides the
+branch diagrams, synchronization guards and recovery procedure.
 
 Local release artifacts are unsigned integrity-checked bundles. Every
 `release.json` and per-archive `manifest.json` produced here carries

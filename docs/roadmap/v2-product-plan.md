@@ -6,9 +6,12 @@ Complete the attached [user brief](v2-user-brief.md) through usable, qualified
 engineering capabilities. The brief is a proposal; donor claims and its old
 `de61e6f` baseline are not current product qualification evidence.
 
-Publish independently reviewed increments on `main` with commit subjects
-`v1.x.x` (or `v1.x`), author and committer
-`automation:fabric-v1-sol-supervisor <automation@fabric.invalid>`.
+Publish independently reviewed patch increments on `dev`, with automation
+author and committer. Trusted dev pushes synchronize the rolling major/minor
+checkpoint on `main` (for example dev `v1.1.3` updates main `v1.1`, preserving
+its original creation dates). The illustrated
+[source-history policy](../contributing/source-history.md) governs current
+publication; dated main/dev observations below remain historical evidence.
 Keep fixes, including Sonar fixes, with the increment they repair. Preserve
 existing release identities and frozen evaluations. Publish `v2.0.0` only
 after the full applicable capability and release gates below pass.
