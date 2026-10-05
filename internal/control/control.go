@@ -95,6 +95,12 @@ type ExecutionPolicy struct {
 	// ReviewRecheckVersion binds explicit reviewer answers to prior concern IDs.
 	// Absent policy preserves historical review invocation bytes.
 	ReviewRecheckVersion int `json:"review_recheck_version,omitempty"`
+	// WorkingContextVersion enables bounded model-authored context on dynamic
+	// explorer turns only. Zero preserves historical invocation bytes.
+	WorkingContextVersion int `json:"working_context_version,omitempty"`
+	// ScheduledExplorerDispatchVersion independently enables dynamic Codex/fake
+	// explorer execution. Retention remains a separate experimental policy.
+	ScheduledExplorerDispatchVersion int `json:"scheduled_explorer_dispatch_version,omitempty"`
 	// ParallelImplementationVersion opts new graph runs into a bounded static
 	// cohort of at most two independent implementation writers. Their proposals
 	// are collected on one candidate and applied through one aggregate effect.
@@ -128,6 +134,12 @@ func codexAutoCompactForExecution(policy *ExecutionPolicy, profile runtime.Profi
 // RepairPlanningVersion 1 requires graph execution and a matching graph-v3
 // planner contract at creation replay; zero preserves the prior repair recipe.
 func (p ExecutionPolicy) Validate() error {
+	if p.ScheduledExplorerDispatchVersion != 0 && (p.ScheduledExplorerDispatchVersion != 1 || p.GraphVersion != 1 || p.Context != taskContextBoundedV1) {
+		return errors.New("unsupported scheduled explorer dispatch policy")
+	}
+	if p.WorkingContextVersion != 0 && (p.WorkingContextVersion != 1 || p.ScheduledExplorerDispatchVersion != 1) {
+		return errors.New("unsupported working context policy")
+	}
 	if p.ReviewRecheckVersion != 0 && (p.ReviewRecheckVersion != 1 || p.RepairIntelligenceVersion != 1) {
 		return errors.New("unsupported review recheck policy")
 	}
@@ -316,6 +328,7 @@ type Snapshot struct {
 	ScheduledReviewHosts      map[string]ReviewHostState         `json:"scheduled_review_hosts,omitempty"`
 	Review                    *ReviewRecord                      `json:"review,omitempty"`
 	ReviewRecheckHistory      *ReviewRecheckHistory              `json:"review_recheck_history,omitempty"`
+	WorkingContextHistory     []ExplorerWorkingContextRecord     `json:"working_context_history,omitempty"`
 	WriterHost                *WriterHostState                   `json:"writer_host,omitempty"`
 	WriterProposal            *WriterRecord                      `json:"writer_proposal,omitempty"`
 	GraphWriterHosts          map[string]WriterHostState         `json:"graph_writer_hosts,omitempty"`
@@ -477,6 +490,9 @@ func Replay(events []journal.Event) (Snapshot, error) {
 			if err := replayExplorer(&s, record); err != nil {
 				return s, err
 			}
+			if err := recordExplorerWorkingContext(&s, record, e.Hash); err != nil {
+				return s, err
+			}
 		case "commit.recovery-intent":
 			if err := replayCommitRecovery(&s, e); err != nil {
 				return s, err
@@ -599,6 +615,9 @@ func Replay(events []journal.Event) (Snapshot, error) {
 				}
 				if c.Execution.ReviewRecheckVersion == 1 && (c.Config.Reviewer == nil || c.Config.ReviewerContract != "json-v1") {
 					return s, errors.New("review rechecks require structured configured review")
+				}
+				if c.Execution.ScheduledExplorerDispatchVersion == 1 && (c.Config.Version != 2 || c.Config.Explorer == nil || c.Config.ExplorerContract != "json-v2" || c.Config.Explorer.Runtime != "codex-app-server" && c.Config.Explorer.Runtime != "fake") {
+					return s, errors.New("working context requires configuration v2 with structured explorer")
 				}
 			}
 			if c.AgentContext != nil {

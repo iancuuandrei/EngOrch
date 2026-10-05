@@ -162,6 +162,13 @@ func runFixtureAppServer() int {
 			}}) != nil {
 				return 20
 			}
+			var workingInput workingContextTurnEnvelope
+			if json.Unmarshal([]byte(params.Input[0].Text), &workingInput) == nil && workingInput.ContextVersion == 1 {
+				update, _ := json.Marshal(map[string]any{"expected_id": workingInput.ExpectedID, "expected_content_hash": workingInput.ExpectedHash, "content": "Retain file.txt as the relevant source."})
+				output, _ := json.Marshal(Exploration{CandidateID: input.CandidateID, Summary: "working context fixture", Paths: []string{"file.txt"}, WorkingContextUpdate: update})
+				result = map[string]any{"turn": map[string]any{"id": "turn-v2", "status": "completed", "itemsView": "full", "error": nil, "items": []any{map[string]any{"type": "agentMessage", "id": "message-v2", "phase": "final_answer", "text": string(output)}}}}
+				break
+			}
 			if strings.Contains(input.Instruction, "candidate_validate_anchored_edits") {
 				before := sha256.Sum256([]byte("base\n"))
 				beforeHash := hex.EncodeToString(before[:])

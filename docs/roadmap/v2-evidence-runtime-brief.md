@@ -2,6 +2,17 @@
 
 # Fabric v2.0 — Evidence-Driven Autonomous Software Engineering Runtime
 
+## Accepted architectural steering — 2026-10-05
+
+The user's [Adaptive Working Context decision](adaptive-working-context.md)
+extends this brief. Implement the opt-in bounded per-agent editable projection,
+one role end-to-end, deterministic resume/stale/corruption/bound evidence,
+independent review and matched A/B/C evaluation. JEV controls acquisition;
+agents control retention; Fabric controls authority. Develop independently from
+the CLM paper, preserve existing licensing/provenance, and defer unnecessary
+fixed-compaction expansion until the experiment is complete. This steering
+does not narrow any original v2 requirement or permit hidden benchmark exposure.
+
 ## Mission
 
 Take Fabric from its current v1.1.x state to a genuinely differentiated v2.0 autonomous software-engineering runtime.

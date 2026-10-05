@@ -9,7 +9,9 @@ import (
 )
 
 type autonomousCapabilities struct {
+	dynamicExplorers                         bool
 	agentContext                             bool
+	workingContext                           bool
 	parallel                                 bool
 	isolation                                *isolatedWriterPolicyFile
 	plannerContext, parser, parserHash       string
@@ -21,6 +23,9 @@ type autonomousCapabilities struct {
 // Resolve preferences only before run creation. Invalid policies, mismatched
 // binary hashes, unsafe state paths and all existing-run inputs stay strict.
 func (o *autonomousCapabilities) resolve(cfg config.Config) error {
+	if (o.workingContext || o.dynamicExplorers) && (cfg.Version != 2 || cfg.Explorer == nil || cfg.Explorer.Runtime != "codex-app-server" && cfg.Explorer.Runtime != "fake") {
+		return errors.New("working-context requires configuration v2 with a Codex or fixture explorer")
+	}
 	add := func(capability, reason, selected string) {
 		o.fallbacks = append(o.fallbacks, control.CapabilityFallback{Capability: capability, Disposition: control.GateFallback, Reason: reason, Selected: selected})
 	}

@@ -84,3 +84,38 @@ func TestCandidateBoundExplorerSchemaIsForwardedAndBoundToEnvelope(t *testing.T)
 		t.Fatalf("explorer schema for another candidate was not rejected before RPC: %v", err)
 	}
 }
+
+func TestWorkingContextExplorerSchemaBindsReplacementBeforeRPC(t *testing.T) {
+	p := runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "exact", Effort: "low", Role: "explorer"}
+	candidate, expectedID, expectedHash := strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64)
+	schema, err := runtime.WorkingContextExplorerOutputSchema(candidate, expectedID, expectedHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := ThreadSettings{ThreadID: "thread", Model: p.Model, Provider: p.Provider, Effort: &p.Effort, Directory: t.TempDir(), Approval: "never", Sandbox: "readOnly"}
+	makeInvocation := func(hash string, output json.RawMessage) runtime.Invocation {
+		raw, _ := json.Marshal(map[string]any{"candidate_id": candidate, "working_context_version": 1, "expected_context_id": expectedID, "expected_context_hash": hash, "output_schema": output})
+		i, err := runtime.NewInvocation(p, string(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return i
+	}
+	request := scriptedResponse(t, "", map[string]any{"turn": map[string]any{"id": "turn", "status": "completed", "items": []any{}}}, func(ctx context.Context, c *Client) error {
+		_, _, err := c.StartTurn(ctx, settings, makeInvocation(expectedHash, schema))
+		return err
+	})
+	var params map[string]json.RawMessage
+	if err := json.Unmarshal(request.Params, &params); err != nil || !strings.Contains(string(params["outputSchema"]), "working_context_update") {
+		t.Fatal("context contract not forwarded", err)
+	}
+	for _, bad := range []runtime.Invocation{
+		makeInvocation(strings.Repeat("d", 64), schema),
+		makeInvocation(expectedHash, runtime.ExplorerOutputSchema()),
+		makeInvocation(expectedHash, json.RawMessage(strings.Replace(string(schema), `"maxLength":16384`, `"maxLength":999999`, 1))),
+	} {
+		if _, _, err := (&Client{}).StartTurn(context.Background(), settings, bad); err == nil || !strings.Contains(err.Error(), "schema substitution") {
+			t.Fatal("context schema mutation reached RPC", err)
+		}
+	}
+}

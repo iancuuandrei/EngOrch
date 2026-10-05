@@ -102,6 +102,8 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	isolationPolicyPath := fs.String("isolation-policy", "", "strict versioned JSON resource capacity and per-writer estimate file (required with --isolated-writers)")
 	plannerContext := fs.String("planner-context", "", "planner evidence mode: source-bounded-v1 or pinned go-source-context-v1/go-source-context-v2/go-contract-context-v1/go-contract-context-v2/go-contract-context-v3")
 	agentContext := fs.Bool("agent-context", true, "bind committed scope-aware AGENTS.md and role-aware skill workflows to the new run")
+	workingContext := fs.Bool("working-context", false, "experimentally enable bounded editable context for dynamic explorer follow-ups")
+	dynamicExplorers := fs.Bool("dynamic-explorers", false, "enable dynamic Codex explorer turns independently of experimental retention")
 	repairIntelligence := fs.Bool("repair-intelligence", false, "bind structured repair evidence from admitted task context to new graph repair invocations")
 	plannerContextRIExecutable := fs.String("planner-context-ri-executable", "", "absolute path to the pinned Go RI parser (required for Go source/contract contexts)")
 	plannerContextRIExecutableSHA256 := fs.String("planner-context-ri-executable-sha256", "", "lowercase SHA-256 of the pinned Go-source RI parser")
@@ -115,6 +117,9 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	goalFile := fs.String("file", "", "read objective from file")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *workingContext {
+		*dynamicExplorers = true
 	}
 	autoCompactFlagSet := false
 	fs.Visit(func(f *flag.Flag) {
@@ -176,7 +181,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 		if fs.NArg() != 0 || *goalFile != "" {
 			return errors.New("inspect-plan takes run options without an objective")
 		}
-		options := autonomousCapabilities{parallel: *parallelWriters, isolation: isolationPolicy, agentContext: *agentContext,
+		options := autonomousCapabilities{parallel: *parallelWriters, isolation: isolationPolicy, agentContext: *agentContext, workingContext: *workingContext, dynamicExplorers: *dynamicExplorers,
 			plannerContext: *plannerContext, parser: *plannerContextRIExecutable, parserHash: *plannerContextRIExecutableSHA256,
 			parseCache: plannerParseCacheVersion, reviewImpact: reviewImpactContextVersion, candidateCache: candidateFactsCacheVersion, autoCompact: *autoCompactTokenLimit}
 		return inspectAutonomousPlan(ctx, root, options, *maxParallel, out)
@@ -192,7 +197,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 		if err := validateAutonomousObjective(objective); err != nil {
 			return err
 		}
-		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, *repairIntelligence, out, *agentContext)
+		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, *repairIntelligence, out, *agentContext, *workingContext, *dynamicExplorers)
 	}
 	if fs.NArg() != 1 || fs.Arg(0) == "" {
 		return errors.New("run --autonomous requires one objective or --file PATH")
@@ -200,7 +205,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	if err := validateAutonomousObjective(fs.Arg(0)); err != nil {
 		return err
 	}
-	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, *repairIntelligence, out, *agentContext)
+	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, *repairIntelligence, out, *agentContext, *workingContext, *dynamicExplorers)
 }
 
 func validatePlannerParseCacheVersion(plannerContext string, version int) error {
@@ -312,7 +317,7 @@ func validateAutonomousObjective(objective string) error {
 	return nil
 }
 
-func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, parallelWriters bool, isolationPolicy *isolatedWriterPolicyFile, plannerContext string, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion int, plannerContextRIExecutable, plannerContextRIExecutableSHA256, promptRecipe string, autoCompactTokenLimit int64, prepareOnly, repairIntelligence bool, out io.Writer, agentContextEnabled ...bool) error {
+func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, parallelWriters bool, isolationPolicy *isolatedWriterPolicyFile, plannerContext string, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion int, plannerContextRIExecutable, plannerContextRIExecutableSHA256, promptRecipe string, autoCompactTokenLimit int64, prepareOnly, repairIntelligence bool, out io.Writer, agentContextEnabled, workingContextEnabled, dynamicExplorersEnabled bool) error {
 	if err := validateAutonomousObjective(objective); err != nil {
 		return err
 	}
@@ -345,7 +350,7 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 	if err != nil {
 		return err
 	}
-	capabilities := autonomousCapabilities{parallel: parallelWriters, isolation: isolationPolicy,
+	capabilities := autonomousCapabilities{parallel: parallelWriters, isolation: isolationPolicy, workingContext: workingContextEnabled, dynamicExplorers: dynamicExplorersEnabled,
 		plannerContext: plannerContext, parser: plannerContextRIExecutable, parserHash: plannerContextRIExecutableSHA256,
 		parseCache: plannerParseCacheVersion, reviewImpact: reviewImpactContextVersion, candidateCache: candidateFactsCacheVersion, autoCompact: autoCompactTokenLimit}
 	if err := capabilities.resolve(cfg); err != nil {
@@ -448,6 +453,14 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 			CodexAutoCompact: autoCompact,
 		},
 	}
+	if workingContextEnabled {
+		creation.Config.ExplorerContract = "json-v2"
+		creation.Execution.WorkingContextVersion = 1
+	}
+	if dynamicExplorersEnabled {
+		creation.Config.ExplorerContract = "json-v2"
+		creation.Execution.ScheduledExplorerDispatchVersion = 1
+	}
 	if repairIntelligence {
 		creation.Execution.RepairIntelligenceVersion = 1
 		if creation.Config.Reviewer != nil && creation.Config.ReviewerContract == "json-v1" {
@@ -455,7 +468,7 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 		}
 	}
 	configureAutonomousScopeReplan(&creation)
-	if len(agentContextEnabled) > 0 && agentContextEnabled[0] {
+	if agentContextEnabled {
 		creation.AgentContext, err = agentcontext.Capture(ctx, identity)
 		if err != nil {
 			return fmt.Errorf("capture committed agent context before run creation: %w", err)

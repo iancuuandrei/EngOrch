@@ -28,6 +28,11 @@ role workflows. See [agent context resolution](agent-context.md); use
 `--agent-context=false` for a new run without that input. Existing runs keep
 their original frozen instructions.
 
+`--working-context` separately opts new configuration-v2 runs into experimental
+editable reasoning for dynamic explorer follow-ups. It is off by default and
+does not change static graph tasks. See the [working-context guide](working-context.md)
+for replacement, replay and pending live qualification.
+
 - A Codex account with local authentication: run `codex login` first so the
   auth file exists (default `~/.codex/auth.json`, or `$CODEX_HOME/auth.json`).
   `fabric init` only binds the auth path; it never reads credential contents.

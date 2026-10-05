@@ -29,7 +29,7 @@ func TestExplorerHostFailureIsJournaled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output, err := canonical.Bytes(Exploration{id, "Unbacked observation", []string{"file.txt"}})
+	output, err := canonical.Bytes(Exploration{CandidateID: id, Summary: "Unbacked observation", Paths: []string{"file.txt"}})
 	if err != nil {
 		t.Fatal(err)
 	}

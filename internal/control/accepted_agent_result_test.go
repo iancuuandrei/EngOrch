@@ -32,9 +32,24 @@ type acceptedExplorerFixture struct {
 }
 
 func newAcceptedExplorerFixture(t *testing.T) acceptedExplorerFixture {
+	return newAcceptedExplorerFixtureWithPolicy(t, nil)
+}
+
+func newAcceptedExplorerFixtureWithPolicy(t *testing.T, policy *ExecutionPolicy) acceptedExplorerFixture {
+	return newExplorerFixtureWithConfig(t, policy, nil, true)
+}
+
+func newExplorerFixtureWithConfig(t *testing.T, policy *ExecutionPolicy, configure func(*Creation), seed bool) acceptedExplorerFixture {
 	t.Helper()
 	creation := creation(t)
+	creation.Execution = policy
 	creation.Config = modelAccessSnapshot(t, "subscription").Creation.Config
+	if policy != nil && policy.ScheduledExplorerDispatchVersion == 1 {
+		creation.Config.ExplorerContract = "json-v2"
+	}
+	if configure != nil {
+		configure(&creation)
+	}
 	command := exec.Command("git", "-C", creation.Repository.Root, "init", "-q")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatal(err, string(output))
@@ -77,12 +92,17 @@ func newAcceptedExplorerFixture(t *testing.T) acceptedExplorerFixture {
 		t.Fatal("fixture root unavailable")
 	}
 	fixture := acceptedExplorerFixture{controllerPath: controllerPath, root: root, question: "Index the accepted fixture exploration."}
-	fixture = addAcceptedExplorerTurn(t, fixture, agenttree.Node{}, strings.Repeat("6", 64), 1, "SENSITIVE-ACCEPTED-EXPLORATION-BODY")
+	if seed {
+		fixture = addAcceptedExplorerTurn(t, fixture, agenttree.Node{}, strings.Repeat("6", 64), 1, "SENSITIVE-ACCEPTED-EXPLORATION-BODY")
+	}
 	return fixture
 }
 
 func addAcceptedExplorerTurn(t *testing.T, fixture acceptedExplorerFixture, existing agenttree.Node, turnID string, sequence int, summary string) acceptedExplorerFixture {
 	t.Helper()
+	if err := maybeAdmitTaskContext(context.Background(), fixture.controllerPath, "explorer", fixture.question); err != nil {
+		t.Fatal(err)
+	}
 	snapshot, err := Inspect(fixture.controllerPath)
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +111,8 @@ func addAcceptedExplorerTurn(t *testing.T, fixture acceptedExplorerFixture, exis
 	if err != nil {
 		t.Fatal(err)
 	}
-	invocation, err := scheduledTurnInvocation(base, taskscheduler.OperationExplorer, turnID)
+	agentID := existing.AgentID
+	invocation, err := scopedExplorerContextInvocation(snapshot, base, turnID, agentID, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +143,22 @@ func addAcceptedExplorerTurn(t *testing.T, fixture acceptedExplorerFixture, exis
 	if err != nil {
 		t.Fatal(err)
 	}
-	output, err := canonical.Bytes(Exploration{CandidateID: candidateID, Summary: summary, Paths: []string{"file.txt"}})
+	observation := Exploration{CandidateID: candidateID, Summary: summary, Paths: []string{"file.txt"}}
+	if workingContextEnabled(snapshot) {
+		var envelope workingContextTurnEnvelope
+		if err := canonical.Decode([]byte(invocation.Input), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		observation.WorkingContextUpdate, err = canonical.Bytes(struct {
+			ExpectedID   string `json:"expected_id"`
+			ExpectedHash string `json:"expected_content_hash"`
+			Content      string `json:"content"`
+		}{envelope.ExpectedID, envelope.ExpectedHash, summary})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	output, err := canonical.Bytes(observation)
 	if err != nil {
 		t.Fatal(err)
 	}

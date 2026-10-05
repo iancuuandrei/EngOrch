@@ -26,11 +26,12 @@ type RuntimeUsageEntry struct {
 // RunUsage reports every journaled Codex host in controller order, not only the
 // latest writer/reviewer. Fake runtime work has no provider accounting entry.
 type RunUsage struct {
-	Admissions     []AdmissionUsage    `json:"admissions,omitempty"`
-	RunID          string              `json:"run_id"`
-	ControllerHead string              `json:"controller_head"`
-	Scope          string              `json:"scope"`
-	Invocations    []RuntimeUsageEntry `json:"invocations"`
+	WorkingContext *WorkingContextUsage `json:"working_context,omitempty"`
+	Admissions     []AdmissionUsage     `json:"admissions,omitempty"`
+	RunID          string               `json:"run_id"`
+	ControllerHead string               `json:"controller_head"`
+	Scope          string               `json:"scope"`
+	Invocations    []RuntimeUsageEntry  `json:"invocations"`
 }
 
 // AdmissionUsage reports controller-authorized resource reservations separately
@@ -222,6 +223,10 @@ func MeasureRunUsage(path string) (RunUsage, error) {
 		return RunUsage{}, errors.New("run journal required")
 	}
 	report := RunUsage{RunID: s.RunID, ControllerHead: events[len(events)-1].Hash, Scope: "journaled_codex_hosts", Invocations: []RuntimeUsageEntry{}}
+	if workingContextEnabled(s) {
+		usage := measureWorkingContextUsage(s)
+		report.WorkingContext = &usage
+	}
 	report.Admissions, err = measureAdmissions(path, s)
 	if err != nil {
 		return RunUsage{}, err

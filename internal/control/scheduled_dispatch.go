@@ -215,11 +215,15 @@ func ExecuteScheduledClaim(ctx context.Context, controllerPath string, claim tas
 		}
 	}
 	correction, isCorrection := scheduledCorrectionForTask(s, claim.Task.ID)
-	if claim.AgentTurn != nil && invocation.Profile.Runtime != "opencode-http" && invocation.Profile.Runtime != "provider-api" && !(isCorrection && invocation.Profile.Runtime == "codex-app-server" && (claim.Task.Operation == taskscheduler.OperationWriter || claim.Task.Operation == taskscheduler.OperationReviewer)) {
+	managedExplorer := claim.AgentTurn != nil && claim.Task.Operation == taskscheduler.OperationExplorer && managedExplorerDispatchEnabled(s) && (invocation.Profile.Runtime == "codex-app-server" || invocation.Profile.Runtime == "fake")
+	if claim.AgentTurn != nil && invocation.Profile.Runtime != "opencode-http" && invocation.Profile.Runtime != "provider-api" && !managedExplorer && !(isCorrection && invocation.Profile.Runtime == "codex-app-server" && (claim.Task.Operation == taskscheduler.OperationWriter || claim.Task.Operation == taskscheduler.OperationReviewer)) {
 		return taskscheduler.Evidence{}, errors.Join(&taskscheduler.ParkError{Reason: taskscheduler.ParkNoEffect}, errors.New("scheduled dynamic agent turns require a provider runtime"))
 	}
 	observationCtx := ctx
 	ctx = withScheduledAgentTurn(ctx, claim.AgentTurn)
+	if managedExplorer {
+		ctx = context.WithValue(ctx, workingContextInvocationKey{}, invocation.ID)
+	}
 	if isCorrection {
 		ctx = withScheduledRoleCorrection(ctx, correction)
 	}
@@ -617,7 +621,7 @@ func scheduledInvocation(task taskscheduler.TaskSpec, turn *taskscheduler.AgentT
 		}
 	}
 	if err == nil && turn != nil && !recordedTurnInvocation {
-		invocation, err = scheduledTurnInvocation(invocation, task.Operation, turn.TurnID)
+		invocation, err = scopedScheduledInvocation(s, invocation, task.Operation, turn, task.InvocationID)
 	}
 	return s, head, invocation, err
 }
@@ -704,7 +708,7 @@ func scheduledInvocationFromSnapshot(s Snapshot, task taskscheduler.TaskSpec, tu
 	}
 	if turn != nil && !recordedTurnInvocation {
 		var err error
-		invocation, err = scheduledTurnInvocation(invocation, task.Operation, turn.TurnID)
+		invocation, err = scopedScheduledInvocation(s, invocation, task.Operation, turn, task.InvocationID)
 		if err != nil {
 			return runtime.Invocation{}, err
 		}
@@ -783,7 +787,7 @@ func resolveScheduledInvocationID(s Snapshot, base runtime.Invocation, invocatio
 	if err != nil {
 		return runtime.Invocation{}, err
 	}
-	scoped, err := scheduledTurnInvocation(base, operation, dispatch.Admission.AgentTurn.TurnID)
+	scoped, err := scopedScheduledInvocation(s, base, operation, dispatch.Admission.AgentTurn, invocationID)
 	if err != nil || scoped != dispatch.Admission.Invocation {
 		return runtime.Invocation{}, errors.Join(errors.New("scheduled role admission invocation differs"), err)
 	}

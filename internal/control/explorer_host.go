@@ -43,6 +43,18 @@ func expectedExplorerHost(s Snapshot, question string) (ExplorerHostIntent, erro
 	if err != nil {
 		return ExplorerHostIntent{}, err
 	}
+	return expectedExplorerHostForInvocation(s, question, i)
+}
+
+func expectedExplorerHostForInvocation(s Snapshot, question string, observed runtime.Invocation) (ExplorerHostIntent, error) {
+	base, err := explorerInvocation(s, question)
+	if err != nil {
+		return ExplorerHostIntent{}, err
+	}
+	i, err := resolveScheduledRecordedInvocation(s, base, observed)
+	if err != nil {
+		return ExplorerHostIntent{}, err
+	}
 	c := s.Creation.Config.Codex
 	if i.Profile.Runtime != "codex-app-server" || c == nil {
 		return ExplorerHostIntent{}, errors.New("configured Codex explorer required")
@@ -175,7 +187,7 @@ func replayExplorerHostParallel(s *Snapshot, e journal.Event) error {
 		if err := canonical.Decode(e.Payload, &intent); err != nil {
 			return err
 		}
-		expected, err := expectedExplorerHost(*s, intent.Question)
+		expected, err := expectedExplorerHostForInvocation(*s, intent.Question, intent.Invocation)
 		if err != nil {
 			return err
 		}
@@ -195,7 +207,7 @@ func replayExplorerHostParallel(s *Snapshot, e journal.Event) error {
 		if !ok || run.Ready {
 			return errors.New("explorer host preparation transition rejected")
 		}
-		expected, err := expectedExplorerHost(*s, intent.Question)
+		expected, err := expectedExplorerHostForInvocation(*s, intent.Question, intent.Invocation)
 		if err != nil || intent != expected || run.Intent != expected {
 			return errors.New("explorer host preparation transition rejected")
 		}
@@ -226,7 +238,7 @@ func replayExplorerHostParallel(s *Snapshot, e journal.Event) error {
 			return errors.New("explorer host observation transition rejected")
 		}
 		run, _ := explorerRunForInvocation(*s, matched)
-		expected, err := expectedExplorerHost(*s, run.Intent.Question)
+		expected, err := expectedExplorerHostForInvocation(*s, run.Intent.Question, run.Intent.Invocation)
 		if err != nil || run.Intent != expected {
 			return errors.New("explorer host observation transition rejected")
 		}
@@ -244,7 +256,7 @@ func replayExplorerHostParallel(s *Snapshot, e journal.Event) error {
 		if !ok || !run.Ready || run.Receipt == nil || run.RuntimeReceipt != nil {
 			return errors.New("explorer runtime receipt transition rejected")
 		}
-		expected, err := expectedExplorerHost(*s, run.Intent.Question)
+		expected, err := expectedExplorerHostForInvocation(*s, run.Intent.Question, run.Intent.Invocation)
 		if err != nil || run.Intent != expected {
 			return errors.New("explorer runtime receipt transition rejected")
 		}

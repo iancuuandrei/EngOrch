@@ -18,6 +18,9 @@ type Exploration struct {
 	CandidateID string   `json:"candidate_id"`
 	Summary     string   `json:"summary"`
 	Paths       []string `json:"paths"`
+	// WorkingContextUpdate is optional non-authoritative reasoning retention.
+	// Malformed updates never replace a valid projection or grant authority.
+	WorkingContextUpdate json.RawMessage `json:"working_context_update,omitempty"`
 }
 
 // ExplorerRecord preserves the exact question, invocation and untrusted result.
@@ -140,6 +143,12 @@ func replayExplorer(s *Snapshot, record ExplorerRecord) error {
 	var observation Exploration
 	if err := canonical.Decode([]byte(record.Result.Output), &observation); err != nil {
 		return err
+	}
+	if len(observation.WorkingContextUpdate) != 0 {
+		var envelope workingContextTurnEnvelope
+		if !workingContextEnabled(*s) || json.Unmarshal([]byte(i.Input), &envelope) != nil || envelope.ContextVersion != 1 {
+			return errors.New("working context update was not requested")
+		}
 	}
 	candidateID, err := s.Candidate.ID()
 	if err != nil {

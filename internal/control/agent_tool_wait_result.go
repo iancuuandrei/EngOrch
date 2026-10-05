@@ -219,6 +219,7 @@ func (p *agentToolProjectionState) resolveWaitActivities(activities []agentcontr
 		if err := canonical.Decode([]byte(record.Result.Output), &exploration); err != nil {
 			return nil, errors.Join(errors.New("accepted exploration body invalid"), err)
 		}
+		exploration.WorkingContextUpdate = nil
 		resolved[index].accepted = &waitAgentAcceptedResult{ActivitySequence: activity.Sequence, Result: accepted, Exploration: exploration}
 	}
 	return resolved, nil

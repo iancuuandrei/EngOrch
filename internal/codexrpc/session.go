@@ -390,8 +390,11 @@ func (c *Client) StartTurn(ctx context.Context, thread ThreadSettings, i runtime
 	}
 	if i.Profile.Role == "explorer" {
 		var envelope struct {
-			OutputSchema json.RawMessage `json:"output_schema"`
-			CandidateID  string          `json:"candidate_id"`
+			OutputSchema   json.RawMessage `json:"output_schema"`
+			CandidateID    string          `json:"candidate_id"`
+			ContextVersion int             `json:"working_context_version"`
+			ExpectedID     string          `json:"expected_context_id"`
+			ExpectedHash   string          `json:"expected_context_hash"`
 		}
 		if json.Unmarshal([]byte(i.Input), &envelope) == nil && len(envelope.OutputSchema) > 0 {
 			got, err := canonical.Hash("explorer-output-schema", envelope.OutputSchema)
@@ -400,6 +403,14 @@ func (c *Client) StartTurn(ctx context.Context, thread ThreadSettings, i runtime
 			if candidateSchema, schemaErr := runtime.ExplorerOutputSchemaForCandidate(envelope.CandidateID); schemaErr == nil {
 				candidateHash, hashErr := canonical.Hash("explorer-output-schema", candidateSchema)
 				allowed = allowed || hashErr == nil && got == candidateHash
+			}
+			if envelope.ContextVersion == 1 {
+				if contextSchema, schemaErr := runtime.WorkingContextExplorerOutputSchema(envelope.CandidateID, envelope.ExpectedID, envelope.ExpectedHash); schemaErr == nil {
+					contextHash, hashErr := canonical.Hash("explorer-output-schema", contextSchema)
+					allowed = hashErr == nil && got == contextHash
+				} else {
+					allowed = false
+				}
 			}
 			if err != nil || !allowed {
 				return wire.Turn, nil, errors.New("explorer output schema substitution")
