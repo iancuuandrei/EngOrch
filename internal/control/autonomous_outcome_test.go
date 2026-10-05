@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"harness.local/engorch/internal/codexhost"
 )
 
 func TestAutonomousFailureClassificationUsesTypesNotProviderText(t *testing.T) {
@@ -33,6 +35,16 @@ func TestAutonomousFailureClassificationUsesTypesNotProviderText(t *testing.T) {
 		if outcome.Status() != tc.status || outcome.Disposition() != tc.disposition || !errors.Is(outcome, tc.cause) || strings.Contains(outcome.Error(), "secret") {
 			t.Fatal("typed outcome lost classification or leaked details", outcome)
 		}
+	}
+}
+
+func TestPlannerCapacityOutcomeRequiresSealedReceipt(t *testing.T) {
+	outcome := ClassifyAutonomousFailure(Snapshot{}, errors.Join(ErrPlannerCapacityRefused, errors.New("private server detail")))
+	if outcome.Status() != "UNKNOWN" || outcome.PublicReason() != "planner_failure_receipt_unverified" || !errors.Is(outcome, ErrPlannerCapacityRefused) || strings.Contains(outcome.Error(), "private") {
+		t.Fatal("capacity sentinel without a sealed receipt was trusted", outcome)
+	}
+	if ClassifyAutonomousFailure(Snapshot{PlannerHost: &codexhost.Launch{}}, ErrPlannerCapacityRefused).Status() != "UNKNOWN" {
+		t.Fatal("capacity sentinel settled a host without a durable planner receipt")
 	}
 }
 

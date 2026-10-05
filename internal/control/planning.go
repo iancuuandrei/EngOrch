@@ -17,14 +17,17 @@ import (
 	"harness.local/engorch/internal/safepath"
 )
 
-// PlannerReceipt binds admitted planning output to a completed runtime journal.
+// PlannerReceipt binds admitted planning output or a classified terminal
+// capacity refusal to its exact runtime journal.
 type PlannerReceipt struct {
-	InvocationID string `json:"invocation_id"`
-	ThreadID     string `json:"thread_id"`
-	TurnID       string `json:"turn_id"`
-	JournalHead  string `json:"journal_head"`
-	ResultHash   string `json:"result_hash"`
-	UsagePending bool   `json:"usage_pending,omitempty"`
+	FailureCode         string `json:"failure_code,omitempty"`
+	FailureResponseHash string `json:"failure_response_hash,omitempty"`
+	InvocationID        string `json:"invocation_id"`
+	ThreadID            string `json:"thread_id"`
+	TurnID              string `json:"turn_id"`
+	JournalHead         string `json:"journal_head"`
+	ResultHash          string `json:"result_hash"`
+	UsagePending        bool   `json:"usage_pending,omitempty"`
 }
 
 func expectedPlannerHost(s Snapshot) (codexhost.Launch, error) {
@@ -108,6 +111,20 @@ func replayPlanner(s *Snapshot, e journal.Event) error {
 				return err
 			}
 		}
+		if receipt.FailureCode != "" {
+			if s.Creation.Config.Version != 1 || s.Creation.Config.Planner.Runtime != "codex-app-server" || len(s.PlannerCorrections) != 0 || s.Plan != nil || receipt.UsagePending || receipt.FailureCode != "serverOverloaded" {
+				return errors.New("invalid planner capacity failure receipt")
+			}
+			if err := safepath.RequireDigest(receipt.FailureResponseHash); err != nil {
+				return err
+			}
+			want, err := plannerCapacityReceiptHash(receipt)
+			if err != nil || want != receipt.ResultHash {
+				return errors.New("planner capacity failure proof hash mismatch")
+			}
+		} else if receipt.FailureResponseHash != "" {
+			return errors.New("unexpected planner failure response hash")
+		}
 		if err := requireModelAccessResult(*s, i, receipt.JournalHead, receipt.ResultHash, receipt.ThreadID, receipt.TurnID, receipt.UsagePending); err != nil {
 			return err
 		}
@@ -125,6 +142,12 @@ func ResumePlanning(ctx context.Context, path string) (snapshot Snapshot, err er
 	}
 	if s.State != "OBJECTIVE" && s.State != "PLANNING" {
 		return s, nil
+	}
+	if s.PlannerReceipt != nil && s.PlannerReceipt.FailureCode == "serverOverloaded" {
+		if err := validatePlannerCapacityFailureRuntime(s, path); err != nil {
+			return s, err
+		}
+		return s, ErrPlannerCapacityRefused
 	}
 	if err := preflightInitialVerification(s); err != nil {
 		return s, err
@@ -306,6 +329,15 @@ func ResumePlanning(ctx context.Context, path string) (snapshot Snapshot, err er
 	if readErr != nil && !os.IsNotExist(readErr) {
 		return s, readErr
 	}
+	if readErr == nil && state.TurnStatus == "failed" {
+		observed, ok, observeErr := observePlannerCapacityFailure(path, s, l, i, runtimePath)
+		if observeErr != nil {
+			return s, observeErr
+		}
+		if ok {
+			return observed, ErrPlannerCapacityRefused
+		}
+	}
 	if readErr == nil && s.Creation.Config.Version == 2 && state.Result == nil && (state.TurnStatus == "failed" || state.TurnStatus == "interrupted") {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 		_, _, terminalErr := completeModelAccess(cleanupCtx, path, runtimePath, i, "harness.planner-result.v1")
@@ -369,6 +401,13 @@ func ResumePlanning(ctx context.Context, path string) (snapshot Snapshot, err er
 			}
 		}
 		if err != nil {
+			observed, ok, capacityErr := observePlannerCapacityFailure(path, s, l, i, runtimePath)
+			if capacityErr != nil {
+				return s, errors.Join(err, capacityErr)
+			}
+			if ok {
+				return observed, ErrPlannerCapacityRefused
+			}
 			if s.Creation.Config.Version == 2 {
 				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 				_, _, terminalErr := completeModelAccess(cleanupCtx, path, runtimePath, i, "harness.planner-result.v1")

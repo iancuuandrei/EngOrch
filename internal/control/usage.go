@@ -44,6 +44,7 @@ type AdmissionUsage struct {
 
 type usageTarget struct {
 	failedExplorer bool
+	failedPlanner  bool
 	invocation     runtime.Invocation
 	path, head     string
 	resultHash     string
@@ -298,6 +299,10 @@ func MeasureRunUsage(path string) (RunUsage, error) {
 				}
 			} else if err := canonical.Decode(e.Payload, &receipt); err != nil {
 				return RunUsage{}, err
+			} else if e.Kind == "planning.runtime-observed" {
+				if index, ok := indices[receipt.InvocationID]; ok {
+					targets[index].failedPlanner = receipt.FailureCode != ""
+				}
 			}
 			index, ok := indices[receipt.InvocationID]
 			if !ok {
@@ -323,7 +328,7 @@ func MeasureRunUsage(path string) (RunUsage, error) {
 			if err != nil {
 				return RunUsage{}, err
 			}
-			if observedHead != target.head || state.Result == nil && !target.failedExplorer {
+			if observedHead != target.head || state.Result == nil && !target.failedExplorer && !target.failedPlanner {
 				return RunUsage{}, errors.New("runtime terminal head no longer matches journal")
 			}
 			if target.failedExplorer {
@@ -334,6 +339,10 @@ func MeasureRunUsage(path string) (RunUsage, error) {
 				hash, err := canonical.Hash("harness.explorer-capacity-failure.v1", *state.TerminalResponse)
 				if err != nil || hash != target.resultHash {
 					return RunUsage{}, errors.New("explorer failure hash changed")
+				}
+			} else if target.failedPlanner {
+				if target.invocation.Profile.Role != "planner" || validatePlannerCapacityFailureRuntime(s, path) != nil {
+					return RunUsage{}, errors.New("planner capacity failure evidence no longer matches receipt")
 				}
 			} else {
 				domain, err := runtimeResultDomain(target.invocation.Profile.Role)
@@ -357,7 +366,7 @@ func MeasureRunUsage(path string) (RunUsage, error) {
 		if usage.InvocationID != target.invocation.ID || usage.Requested != target.invocation.Profile {
 			return RunUsage{}, errors.New("runtime usage invocation substitution")
 		}
-		if target.head != "" && (target.head != usage.JournalHead || !usage.Completed && !target.failedExplorer) {
+		if target.head != "" && (target.head != usage.JournalHead || !usage.Completed && !target.failedExplorer && !target.failedPlanner) {
 			return RunUsage{}, errors.New("runtime usage receipt no longer matches journal")
 		}
 		entry.JournalPresent = true

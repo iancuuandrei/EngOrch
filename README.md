@@ -32,6 +32,12 @@ for development evidence and release checks; published qualification is recorded
 separately with the GitHub release. Further comparative performance
 benchmarking is deferred so this increment can ship.
 
+The latest clean-source evaluation has **8/8 accepted task coverage**, with one
+explicit fresh `logr` successor after a sealed provider capacity refusal. The
+original cohort remains 7/8; all eight accepted candidates passed native checks,
+independent review and unchanged heldouts. See the
+[eight-task closure and diagnostic limits](docs/evaluation/v112-eight-task-closure.md).
+
 **v1.0.29** adds Muse Go execution fixes and graceful optional-capability
 fallbacks. The prior qualified capability checkpoint is v1.0.27 (`6205de9`);
 v1.0.28 updates documentation only. A separate frozen

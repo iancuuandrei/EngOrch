@@ -108,6 +108,11 @@ func ClassifyAutonomousFailure(s Snapshot, cause error) *AutonomousStop {
 		return stop(GateAttention, "semantic_output_invalid", "inspect_completed_receipt_and_correction_budget")
 	case errors.Is(cause, ErrUsageQualification):
 		return stop(GateAttention, "usage_not_qualified", "qualify_usage_accounting_before_new_dispatch")
+	case errors.Is(cause, ErrPlannerCapacityRefused):
+		if !plannerCapacityReceiptAdmitted(s) {
+			return stop(GateReconcile, "planner_failure_receipt_unverified", "inspect_planner_runtime_and_receipt_without_resend")
+		}
+		return stop(GateAttention, "planner_capacity_refused", "wait_for_provider_capacity_then_start_a_new_run")
 	case errors.Is(cause, ErrSemanticUsagePending):
 		return stop(GateAttention, "required_usage_pending", "reconcile_usage_before_new_provider_call")
 	case errors.Is(cause, ErrSemanticCorrectionBudget):

@@ -636,6 +636,9 @@ func Replay(events []journal.Event) (Snapshot, error) {
 			if err != nil {
 				return s, err
 			}
+			if s.PlannerReceipt != nil && s.PlannerReceipt.FailureCode != "" {
+				return s, errors.New("capacity failure receipt cannot authorize a plan")
+			}
 			if err = runtime.ValidateResult(i, r, true); err != nil {
 				return s, err
 			}

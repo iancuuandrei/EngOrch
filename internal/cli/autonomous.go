@@ -17,6 +17,7 @@ import (
 	"harness.local/engorch/internal/control"
 	"harness.local/engorch/internal/controllerstate"
 	"harness.local/engorch/internal/engineeringplan"
+	"harness.local/engorch/internal/opencode"
 	"harness.local/engorch/internal/repository"
 	"harness.local/engorch/internal/runtime"
 )
@@ -554,14 +555,15 @@ func autonomousResumeCommand(ctx context.Context, root string, args []string, ou
 }
 
 type autonomousFailure struct {
-	Status            string                  `json:"status"`
-	Disposition       control.GateDisposition `json:"disposition"`
-	NextAction        string                  `json:"next_action"`
-	CandidateRetained bool                    `json:"candidate_retained"`
-	RunID             string                  `json:"run_id"`
-	State             string                  `json:"state"`
-	Phase             string                  `json:"phase"`
-	BlockedReason     string                  `json:"blocked_reason"`
+	RuntimeDiagnostic *opencode.DispatchDiagnostic `json:"runtime_diagnostic,omitempty"`
+	Status            string                       `json:"status"`
+	Disposition       control.GateDisposition      `json:"disposition"`
+	NextAction        string                       `json:"next_action"`
+	CandidateRetained bool                         `json:"candidate_retained"`
+	RunID             string                       `json:"run_id"`
+	State             string                       `json:"state"`
+	Phase             string                       `json:"phase"`
+	BlockedReason     string                       `json:"blocked_reason"`
 }
 
 // reportAutonomousFailure emits only the durable run identity and coarse
@@ -586,6 +588,7 @@ func reportAutonomousFailure(out io.Writer, path, fallbackID string, cause error
 	} else {
 		outcome = control.ClassifyAutonomousFailure(control.Snapshot{}, errors.Join(cause, err))
 	}
+	summary.RuntimeDiagnostic = opencode.DispatchDiagnosticFromError(cause)
 	summary.BlockedReason, summary.Status = outcome.PublicReason(), outcome.Status()
 	summary.Disposition, summary.NextAction = outcome.Disposition(), outcome.NextAction()
 	boundary := sanitizedAutonomousError(summary, cause)

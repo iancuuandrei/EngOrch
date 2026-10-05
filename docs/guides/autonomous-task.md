@@ -212,5 +212,20 @@ unknown. `NEEDS_REPLAN` retains the candidate when a legal ownership revision
 has not completed. Neither outcome means acceptance. `UNSAFE` identifies an
 authority, identity or history failure; `PAUSED` requires a settled pause.
 
+### Explained runtime stops
+
+Failure JSON retains `run_id`, `phase`, `blocked_reason` and `next_action`.
+For synchronous OpenCode failures, `runtime_diagnostic` adds a bounded stage
+and code: for example `response_decode` / `validation_or_runtime_failure`.
+The runtime's first diagnostic is also retained beside its journal as
+`<runtime journal>.failure.json`. These labels contain no provider response,
+prompt or credentials and never authorize a retry or validate an output.
+
+An exactly sealed initial Codex planner `serverOverloaded` refusal is reported
+as `planner_capacity_refused` / `NEEDS_ATTENTION`. It contains no accepted plan;
+wait for capacity before explicitly starting a new run. The failed invocation
+is preserved. Incomplete terminal evidence or genuinely uncertain provider
+effects remain UNKNOWN and must be reconciled without resending.
+
 These development behaviors require final release qualification; the published
-v1.0.29 release is unchanged.
+release package is qualified separately from later development commits.

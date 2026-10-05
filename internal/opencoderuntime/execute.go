@@ -162,7 +162,7 @@ func Execute(ctx context.Context, cfg ExecuteConfig) (ResultRecord, error) {
 		// failure is recovery-only even when the immediate failing operation
 		// appears to precede the provider POST: its durable effect may be partial
 		// and a second fresh attempt would violate the one-dispatch contract.
-		return ResultRecord{}, errors.Join(ErrRecoveryRequired, err)
+		return ResultRecord{}, errors.Join(ErrRecoveryRequired, err, preserveDispatchDiagnostic(cfg, err))
 	}
 	return prepared.result, err
 }
