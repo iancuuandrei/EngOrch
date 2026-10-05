@@ -91,6 +91,7 @@ param(
     [ValidateSet('Native', 'PR5Matched')][string]$EvalMode = 'Native',
     [string]$Effort = 'high',
     [string]$PlannerContext = '',
+    [ValidateSet('Default', 'Disabled', 'Enabled')][string]$AgentContext = 'Default',
     [string]$PlannerContextRIExecutable = '',
     [string]$PlannerContextRIExecutableSHA256 = '',
     [switch]$ReviewImpactContext,
@@ -117,6 +118,38 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+function Assert-AgentContextRunnerBinding([string]$Mode, [string]$Treatment) {
+    if ($Treatment -notin @('Default', 'Disabled', 'Enabled')) { throw 'Unsupported agent-context treatment.' }
+    if ($Treatment -ne 'Default' -and $Mode -ne 'Native') { throw 'AgentContext treatment requires Native mode.' }
+}
+Assert-AgentContextRunnerBinding $EvalMode $AgentContext
+
+function Assert-AgentContextPreparedBinding($Prior, [string]$Treatment) {
+    $property = $Prior.PSObject.Properties['agent_context_requested']
+    $prepared = if ($null -eq $property) { 'Default' } else { [string]$property.Value }
+    if ($prepared -cne $Treatment) { throw 'AgentContext must match the treatment recorded by the prepared run.' }
+}
+
+function Assert-AgentContextObserved($Snapshot, [string]$Treatment) {
+    $creation = $Snapshot.creation
+    $bundle = $creation.agent_context
+    if ($Treatment -eq 'Disabled' -and $null -ne $bundle) { throw 'Disabled agent-context treatment retained a bundle.' }
+    if ($Treatment -eq 'Enabled' -and $null -eq $bundle) { throw 'Enabled agent-context treatment did not retain a bundle.' }
+    if ($null -eq $bundle) { return [ordered]@{ present = $false } }
+    if ($bundle.version -ne 1 -or $bundle.source_commit -cne $creation.repository.commit -or
+        [string]$bundle.source_id -cnotmatch '^[0-9a-f]{64}$') {
+        throw 'Inspected agent-context bundle has an invalid source binding.'
+    }
+    # Inspect has already validated the canonical source identity and every
+    # document hash through Go replay. Counts describe retained inputs only.
+    return [ordered]@{
+        present = $true; version = $bundle.version
+        source_id = $bundle.source_id; source_commit = $bundle.source_commit
+        instructions = @($bundle.instructions | Where-Object { $null -ne $_ }).Count
+        skills = @($bundle.skills | Where-Object { $null -ne $_ }).Count
+    }
+}
+
 function Assert-AutoCompactRunnerBinding([string]$Mode, [long]$Limit, [bool]$Explicit) {
     if ($Explicit -and ($Limit -le 0 -or $Limit -gt 10000000)) {
         throw 'AutoCompactTokenLimit must be between 1 and 10000000 when supplied.'
@@ -251,7 +284,8 @@ function Get-NativeInitArgs([string]$TaskPath, [string]$RuntimePath, [string]$Wr
     return $nativeArgs
 }
 
-function Get-NativeRunArgs([string]$TaskPath, [string]$Objective, [bool]$EnableParallelWriters, [int]$ParallelLimit, [string]$PlannerContext = '', [string]$PromptRecipe = '', [string]$PlannerContextRIExecutable = '', [string]$PlannerContextRIExecutableSHA256 = '', [bool]$EnableIsolatedWriters = $false, [string]$IsolationPolicyPath = '', [long]$AutoCompactTokenLimit = 0, [bool]$EnableReviewImpactContext = $false, [bool]$EnableCandidateFactsCache = $false) {
+function Get-NativeRunArgs([string]$TaskPath, [string]$Objective, [bool]$EnableParallelWriters, [int]$ParallelLimit, [string]$PlannerContext = '', [string]$PromptRecipe = '', [string]$PlannerContextRIExecutable = '', [string]$PlannerContextRIExecutableSHA256 = '', [bool]$EnableIsolatedWriters = $false, [string]$IsolationPolicyPath = '', [long]$AutoCompactTokenLimit = 0, [bool]$EnableReviewImpactContext = $false, [bool]$EnableCandidateFactsCache = $false, [string]$AgentContext = 'Default') {
+    if ($AgentContext -notin @('Default', 'Disabled', 'Enabled')) { throw 'Unsupported agent-context treatment.' }
     if ($ParallelLimit -lt 0 -or $ParallelLimit -gt 8) { throw 'Scheduler override must be 0 (default) or 1..8.' }
     if ($AutoCompactTokenLimit -lt 0 -or $AutoCompactTokenLimit -gt 10000000) { throw 'AutoCompactTokenLimit must be 0 (omitted) or 1..10000000.' }
     if ($PromptRecipe -notin @('', 'cache-prefix-v1')) { throw 'Unsupported prompt recipe.' }
@@ -262,6 +296,8 @@ function Get-NativeRunArgs([string]$TaskPath, [string]$Objective, [bool]$EnableP
     if ($EnableIsolatedWriters -ne (-not [string]::IsNullOrWhiteSpace($IsolationPolicyPath))) { throw 'IsolatedWriters and IsolationPolicyPath must be supplied together.' }
     if ($EnableIsolatedWriters -and ($ParallelLimit -lt 1 -or $ParallelLimit -gt 8)) { throw 'IsolatedWriters requires MaxParallel from 1 through 8.' }
     $nativeArgs = @('--root', $TaskPath, 'run', '--autonomous')
+    if ($AgentContext -eq 'Disabled') { $nativeArgs += '--agent-context=false' }
+    if ($AgentContext -eq 'Enabled') { $nativeArgs += '--agent-context=true' }
     if ($PlannerContext -ne '') { $nativeArgs += @('--planner-context', $PlannerContext) }
     if (Test-GoSourceContextMode $PlannerContext) {
         $nativeArgs += @('--planner-context-ri-executable', $PlannerContextRIExecutable, '--planner-context-ri-executable-sha256', $PlannerContextRIExecutableSHA256)
@@ -1027,6 +1063,7 @@ function Get-RunnerSourceHashes() {
         'evals/v1/harness/Test-CopyFixtures.ps1',
         'evals/v1/harness/Test-TomlArgvPolicy.ps1',
         'evals/v1/harness/Test-NativeRunArgs.ps1',
+        'evals/v1/harness/Test-AgentContextTreatment.ps1',
         'evals/v1/harness/Test-PublicObjectiveContract.ps1',
         'evals/v1/harness/Test-UsageMetrics.ps1',
         'evals/v1/manifest.json'
@@ -1236,6 +1273,7 @@ if ($Action -eq 'Prepare') {
             windows_exclusion      = if ($native.Scope -eq 'windows-scoped') { '^TestNocmpIntegration$ (Windows-only atomic tasks; rationale in manifest native_verification)' } else { $null }
             task_completion        = 'NOT RUN'
             planner_context_requested = $PlannerContext
+            agent_context_requested = $AgentContext
             planner_context_ri_executable_requested = if (Test-GoSourceContextMode $PlannerContext) { $PlannerContextRIExecutable } else { $null }
             planner_context_ri_executable_sha256_requested = if (Test-GoSourceContextMode $PlannerContext) { $PlannerContextRIExecutableSHA256 } else { $null }
             prompt_recipe_requested = $PromptRecipe
@@ -1285,6 +1323,7 @@ if ($Action -eq 'Prepare') {
         run_id                        = $RunId
         mode                          = 'prepare'
         planner_context_requested  = $PlannerContext
+        agent_context_requested = $AgentContext
         planner_context_ri_executable_requested = if (Test-GoSourceContextMode $PlannerContext) { $PlannerContextRIExecutable } else { $null }
         planner_context_ri_executable_sha256_requested = if (Test-GoSourceContextMode $PlannerContext) { $PlannerContextRIExecutableSHA256 } else { $null }
         planner_context_ri_executable_sha256_verified = if (Test-GoSourceContextMode $PlannerContext) { $actualPlannerContextRIExecutableSHA256 } else { $null }
@@ -1376,6 +1415,7 @@ $runJsonPath = Join-Path $runPath 'run.json'
 if (-not (Test-Path -LiteralPath $runJsonPath)) { throw "Prepared run not found: $runJsonPath. Prepare first with a new run nonce." }
 $priorRunJsonSha = (Get-FileSha256 $runJsonPath).ToLowerInvariant()
 $prior = Get-Content -Raw -LiteralPath $runJsonPath | ConvertFrom-Json
+Assert-AgentContextPreparedBinding $prior $AgentContext
 Assert-AutoCompactPreparedBinding $prior $AutoCompactTokenLimit
 Assert-ReviewImpactPreparedBinding $prior ([bool]$ReviewImpactContext)
 Assert-CandidateFactsCachePreparedBinding $prior ([bool]$CandidateFactsCache)
@@ -1442,6 +1482,7 @@ foreach ($entry in $entries) {
         task_id = $entry.id; eval_mode = $EvalMode; terminal_state = 'BLOCKED'
         blocked_reason = $null; fail_reason = $null
         planner_context_requested = $PlannerContext
+        agent_context_requested = $AgentContext
         planner_context_ri_executable_requested = if (Test-GoSourceContextMode $PlannerContext) { $PlannerContextRIExecutable } else { $null }
         planner_context_ri_executable_sha256_requested = if (Test-GoSourceContextMode $PlannerContext) { $PlannerContextRIExecutableSHA256 } else { $null }
         prompt_recipe_requested = $PromptRecipe
@@ -1499,7 +1540,7 @@ foreach ($entry in $entries) {
             $result.verification_config_sha256 = $verPolicy.ConfigSha
             $result.native_test_scope = $verPolicy.Scope
             Set-Content -NoNewline -Encoding utf8 (Join-Path $taskOutDir 'verification-argv.log') $verPolicy.ArgvText
-            $runArgs = @(Get-NativeRunArgs $taskPath $entry.task ([bool]$ParallelWriters) $MaxParallel $PlannerContext $PromptRecipe $PlannerContextRIExecutable $PlannerContextRIExecutableSHA256 ([bool]$IsolatedWriters) $isolationPolicyBinding.Path $AutoCompactTokenLimit ([bool]$ReviewImpactContext) ([bool]$CandidateFactsCache))
+            $runArgs = @(Get-NativeRunArgs $taskPath $entry.task ([bool]$ParallelWriters) $MaxParallel $PlannerContext $PromptRecipe $PlannerContextRIExecutable $PlannerContextRIExecutableSHA256 ([bool]$IsolatedWriters) $isolationPolicyBinding.Path $AutoCompactTokenLimit ([bool]$ReviewImpactContext) ([bool]$CandidateFactsCache) $AgentContext)
             $result.parallel_writers_requested = [bool]$ParallelWriters
             if ($IsolatedWriters) { $result.isolated_writers_requested = $true }
             if ($AutoCompactTokenLimit -gt 0) { $result.auto_compact_token_limit_requested = $AutoCompactTokenLimit }
@@ -1546,6 +1587,7 @@ foreach ($entry in $entries) {
             $observedPromptRecipe = [string]$snap.creation.execution.prompt_recipe
             $result.prompt_recipe_observed = $observedPromptRecipe
             if ($observedPromptRecipe -ne $PromptRecipe) { throw 'Inspected run prompt_recipe does not match the requested treatment.' }
+            $result.agent_context_observed = Assert-AgentContextObserved $snap $AgentContext
             $autoCompactObserved = Assert-AutoCompactObserved $snap $AutoCompactTokenLimit
             $result.auto_compact_token_limit_observed = if ($null -ne $autoCompactObserved) { $autoCompactObserved.token_limit } else { $null }
             $candidateFactsCacheObserved = Assert-CandidateFactsCacheObserved $snap ([bool]$CandidateFactsCache)
@@ -1877,6 +1919,7 @@ $evalRecord = [ordered]@{
     model                  = $Model
     effort                 = $Effort
     planner_context_requested = $PlannerContext
+    agent_context_requested = $AgentContext
     planner_context_ri_executable_requested = if (Test-GoSourceContextMode $PlannerContext) { $PlannerContextRIExecutable } else { $null }
     planner_context_ri_executable_sha256_requested = if (Test-GoSourceContextMode $PlannerContext) { $PlannerContextRIExecutableSHA256 } else { $null }
     planner_context_ri_executable_sha256_verified = if (Test-GoSourceContextMode $PlannerContext) { $actualPlannerContextRIExecutableSHA256 } else { $null }

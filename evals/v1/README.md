@@ -324,6 +324,29 @@ result but cannot establish parallel implementation benefit. Compare elapsed
 time and token usage only within the accepted, equivalently scoped pair;
 unknown provider request counts or monetary costs remain unknown.
 
+## Agent-context treatment comparison
+
+Native evaluations accept `-AgentContext Disabled` or `-AgentContext Enabled`.
+Pass the same value to Prepare and Evaluate. Both explicitly select the Fabric
+run flag; a mismatched prepared treatment is rejected before provider dispatch.
+`Default` (omitted) preserves the old runner argv and follows the selected
+binary's default; it is not a stable control arm across binary versions.
+PR5Matched rejects explicit treatments.
+
+Each receipt records `agent_context_requested`. After successful inspect/replay,
+the runner records bundle presence, version, source identity/commit and retained
+document/skill counts. Enabled requires a source-bound bundle; Disabled requires
+its absence. Counts do not establish skill selection or instruction compliance;
+inspect invocation inputs and actual candidate behavior for those claims.
+
+Freeze guidance-relevant tasks, exact binary/source/model, context ceilings,
+repair budget and unchanged native/review/held-out oracles before dispatch.
+Use fresh separate run IDs for the two arms. Report raw acceptance, instruction
+violations, calls, repairs, wall time and input/cached/uncached/output tokens.
+An empty guidance bundle cannot establish guidance usefulness. Never rewrite
+canonical task pins to insert guidance; use separately identified canaries.
+Live matched agent-context quality remains NOT RUN until those records exist.
+
 ## Planner-context treatment comparison
 
 Native evaluation can opt into the immutable `source-bounded-v1` planner

@@ -1,27 +1,27 @@
 # Implementation and evidence status
 
-## Current product checkpoint
+## Current product checkpoint — 2026-10-05
 
-The prior qualified product checkpoint is v1.0.27 (`6205de9`). Full clean Go, ten PowerShell
-harnesses, independent review and hosted Sonar/security passed. A separate
-frozen v1.0.25 Sol High cohort reached 7/8 PASS: fixed-six 6/6 plus generated
-numeric ownership, with godotenv BLOCKED after its two repairs. Two independent
-v1.0.27 Windows builds matched byte for byte and passed offline smoke checks;
-this does not qualify a new installed-task release.
+Current goal baseline is v1.1.4 on clean `dev`
+`6ba6a6de90cd53683aa08df2d68a799f57f9ae4b`; `main` has the same source tree.
+The published package remains immutable [v1.1.0](../guides/release.md).
+Its installed acceptance does not qualify later development source.
 
-The persistent v2 goal is paused. Separately authorized Muse and graceful
-capability fixes are in local development. An all-Muse OpenCode Go run reached
-READY on the unchanged go-humanize task: native tests PASS, review APPROVE with
-zero findings, held-out PASS, eight accepted calls and receipts. See the
-[scoped acceptance receipt](../../evals/v1/results/muse-go-humanize-20261004.json)
-and [route guide](../guides/muse-go-route.md). This custom binary does not qualify
-later local fallback additions or a new release.
+[Eight-task coverage](v112-eight-task-closure.md) records raw original 7/8
+plus a separately identified 1/1 terminal-capacity successor. All eight task
+identities have accepted native/review/held-out evidence; no unchanged 8/8
+cohort is claimed. Historical failures and uncertainty remain retained.
 
-Use the [capability guide](../guides/features.md) for
-current functionality and the [product ledger](../roadmap/v2-product-plan.md)
-for exact evidence, effects and open v2 gates. The detailed entries below are
-historical, scoped checkpoints; their pending labels do not override newer
-qualified evidence and their local PASS results are not general release proof.
+v1.1.4 [agent context](../guides/agent-context.md) passed focused source-bound
+scope, skills, replay and CLI regressions. Live guidance/skill quality and
+matched resource benefit are **NOT RUN**. Earlier cohorts cannot qualify it.
+
+The active [v2 goal](../roadmap/v2-product-plan.md) starts with baseline/context
+qualification, then structured repair. Final v2 tests, frozen cohort, language
+canaries, installed acceptance and release qualification remain **NOT RUN**.
+Use [capabilities](../guides/features.md) for implemented behavior. Entries
+below are historical, scoped observations; their pending/current labels do
+not override newer evidence.
 
 ### Anthropic native refusal classification
 

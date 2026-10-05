@@ -1,60 +1,66 @@
-# Fabric v2 product implementation
+# Fabric v2 — evidence-driven engineering runtime
 
-## Goal and publication
+## Current objective and baseline
 
-Complete the attached [user brief](v2-user-brief.md) through usable, qualified
-engineering capabilities. The brief is a proposal; donor claims and its old
-`de61e6f` baseline are not current product qualification evidence.
+The [2026-10-05 user brief](v2-evidence-runtime-brief.md) governs this goal.
+Improve localization, decomposition, model/evidence selection, repair and
+research stopping through useful engineering outcomes. Models perform cognition;
+Fabric owns state, evidence, authority and execution policy.
 
-Publish independently reviewed patch increments on `dev`, with automation
-author and committer. Trusted dev pushes synchronize the rolling major/minor
-checkpoint on `main` (for example dev `v1.1.3` updates main `v1.1`, preserving
-its original creation dates). The illustrated
-[source-history policy](../contributing/source-history.md) governs current
-publication; dated main/dev observations below remain historical evidence.
-Keep fixes, including Sonar fixes, with the increment they repair. Preserve
-existing release identities and frozen evaluations. Publish `v2.0.0` only
-after the full applicable capability and release gates below pass.
+At goal initialization, clean `dev` was
+`6ba6a6de90cd53683aa08df2d68a799f57f9ae4b` (v1.1.4). Public `main` was
+`70b83965dc2cb880c0fb04f9e348dfad12148776`, with the identical source tree.
+The immutable Windows release remains v1.1.0. New source changes do not
+qualify that package or move its tag.
 
-## Capability gates
+Existing capabilities include RI/SCIP queries, candidate graph deltas, bounded
+context compilation, isolated writers and serial integration, resource vectors,
+impact review, deterministic derived caches, model-policy evidence, checkpoints,
+native compaction and resilient typed outcomes. Their presence is separate from
+measured benefit. Agent-context v1.1.4 has deterministic regression coverage;
+its model-quality comparison remains NOT RUN.
 
-| Increment | Deliverable | Required evidence |
+The eight canonical task identities have accepted evidence across two records:
+raw original cohort 7/8, separately identified capacity successor 1/1. This is
+not an unchanged 8/8 cohort or final v2 qualification.
+
+## Sequential capability increments
+
+| Phase | Product deliverable | Adoption evidence |
 | --- | --- | --- |
-| v1.0.x | Finish current token/prompt hardening and eliminate demonstrated regressions | Full Go/PowerShell tests, legacy journal replay, independent review, Sonar/security checks, actual input/cached/uncached/output counters |
-| v1.1 | Unified engineering intelligence over existing RI: per-file facts, immutable base plus candidate graph delta, import/call/generator/test/impact relations, semantic queries, bounded context compiler and planner evidence | Retrieval fixtures before end-to-end evaluation; fresh unchanged fixed-six 6/6 plus godotenv and generated-code ownership; provenance/coverage/corruption tests; measured benefit before default adoption |
-| v1.2 | Coupling-aware decomposition and resource-vector scheduling, isolated cluster worktrees, serial integration, impact-aware bounded review | Current-versus-new topology A/B; shared-hub/generator ownership, resource ceilings, conflict isolation, combined verification/review, no duplicate external effects |
-| v1.3 | Content-addressed parse/fact/context reuse and opt-in deterministic verification observations | Exact keys/input closure/toolchain/environment binding; corruption/invalidation/eviction tests; cold/warm latency, CPU, RAM, disk, token types and time-to-READY; final release checks fresh |
-| v1.4 | Evidence-calibrated model allocation with conservative fallback | Real task/role/risk traces, measured success/cost/latency, calibration and unseen-task evaluation; no invented priors presented as measured results |
-| v1.5 | Verified checkpoints and fresh-context long-horizon continuation | Resume from accepted durable state, interrupted/pending/UNKNOWN effects preserved, independent verification, runtime-native compaction qualification on a sustained coding workload |
-| v2.0.0 | Integrated autonomous engineering release | All applicable rows qualified, fresh full regression/evaluation evidence, independent final review, green hosted checks, documented install/task/inspect/resume happy paths and published release artifacts |
+| A | Coherent baseline, explicit matched agent-context evaluation, useful episode measurements | Source-bound treatment checks, resilience regressions, frozen guidance-relevant task comparison; unknown costs remain unknown |
+| B | Structured findings, localization, RepairSpec, strategy selection and exact closure | Deterministic identity/stale-anchor/ownership cases, real repair-requiring tasks, unchanged final gates |
+| C | Finite evidence-action controller, conservative VOI/JEV and stopping decisions | Inspectable estimates and provenance; frozen trace evaluation then bounded live comparison |
+| D | Hierarchical independent rankings, RRF and bounded context coverage | Matched budgets and downstream task evidence; retain baseline if experiments do not help |
+| E | Dependency/coupling/ownership-aware ready waves and reoptimization | Independent leaves, shared hub and generator cases; isolated attribution and serial integration |
+| F | Conservative empirical route calibration and quality-constrained allocation | Objective semantic outcome labels; baseline fallback; held-out proof before cheaper defaults |
+| G | External language producers and useful test intelligence | Go/Rust/TypeScript/Python producer coverage and real candidate-bound native checks/review |
+| H | Measured efficiency improvements | Real hotspot, exact input closure, honest timing/memory/token types; discard no-benefit treatments |
+| I | Feature freeze and release closure | Exact final tests/security/review, fresh canonical cohort/canaries, reproducible packages, installed task and inspectable demonstration |
 
-Research repomap/SCIP/Serena/Aider, Co-Coder/Agentless, Pact/pi-subagent-tasks/CAID,
-OpenCodeReview, Bazel/Nix, Ultraswarm/router work, LongHorizon, OpenHands/SWE-ReX
-and Symphony individually. Record pinned sources, license compatibility,
-mechanisms and limitations. Reuse concepts without creating a second RI.
-JEV and later runtime integrations require demonstrated benefit; speculative
-vector databases, graph databases, distributed caches, agent DSLs, owned
-sandbox/conversation-memory systems and governance-only work are excluded.
+PPR, heat diffusion, mutation, deterministic transforms, broader action caching
+and solver dependencies are conditional experiments. Learned ranking/RL,
+remote/multirepository execution and owned sandbox infrastructure are deferred.
+No algorithm grants ownership, settles UNKNOWN or weakens acceptance.
 
-## Validation and invariants
+## Evidence and publication
 
-Run Go with the retained toolchain:
+Every substantial increment receives focused tests, independent review and
+applicable Sonar/security checks. Freeze model experiments before dispatch;
+retain every original outcome and separately identify any permitted terminal
+pre-effect capacity successor. No repeated runs until a favorable score.
 
-```powershell
-& 'D:\dev\EngOrch-toolchains\go\1.27.1\go\bin\go.exe' test -p 2 -timeout 20m ./...
-```
+Develop on `dev` with sole automation author/committer. Trusted pushes update
+`main` through the [rolling snapshot workflow](../contributing/source-history.md).
+Existing tags/assets stay immutable. No v2.0.0 tag until the brief's release
+criteria are supported by executed evidence and documented platform limits.
 
-Run relevant Rust and PowerShell regressions for each changed capability.
-Real evaluations retain pinned repositories/objectives, model/runtime identity,
-repair budget, native verification, independent review and unchanged held-out
-acceptance. Never delete, skip, weaken or narrow tests to obtain PASS. A changed
-test contract needs explicit objective support and independent evidence.
+## Historical ledger
 
-Direct product edits are allowed. Self-hosting is optional. Preserve exact
-effect ownership; UNKNOWN stays UNKNOWN and uncertain effects are never
-resent. Cache deterministic observations rather than authority or LLM truth.
-Version invocation-affecting recipes to preserve legacy replay. Every candidate
-must satisfy review/integration as well as executable verification.
+The [original plan header](v2-plan-20261003.md), [older user brief](v2-user-brief.md)
+and entries below retain their original assertions and identities. Labels such
+as “current” and “pending” inside these dated entries describe that checkpoint.
+They do not define today's work order or require rebuilding existing features.
 
 ## Starting checkpoint — 2026-10-03
 
