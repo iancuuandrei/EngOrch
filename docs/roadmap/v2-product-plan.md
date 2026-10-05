@@ -30,6 +30,13 @@ not an unchanged 8/8 cohort or final v2 qualification.
 
 ## Sequential capability increments
 
+Phase B development now supports explicit imported spectrum admission before
+fixer context freeze (v1.1.17). The existing task-context event binds complete
+selected source bytes, candidate, task and failed gate; only a compact scoped
+advisory ranking reaches the writer. [Deterministic integration evidence](../evaluation/repair-spectrum-fixer.md)
+does not establish live repair benefit or final v2 qualification. Automatic
+acquisition and matched live repair acceptance remain pending.
+
 | Phase | Product deliverable | Adoption evidence |
 | --- | --- | --- |
 | A | Coherent baseline, explicit matched agent-context evaluation, useful episode measurements | Source-bound treatment checks, resilience regressions, frozen guidance-relevant task comparison; unknown costs remain unknown |

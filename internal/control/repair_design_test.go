@@ -108,14 +108,18 @@ func repairDesignFakeResult(t *testing.T, invocation runtime.Invocation, output 
 }
 
 func TestRepairDesignPathRevisionWriterAndFreshGatesReachReady(t *testing.T) {
-	exerciseRepairDesignPathRevision(t, false)
+	exerciseRepairDesignPathRevision(t, false, false)
 }
 
 func TestReviewRechecksRepairDesignAndExactClosure(t *testing.T) {
-	exerciseRepairDesignPathRevision(t, true)
+	exerciseRepairDesignPathRevision(t, true, false)
 }
 
-func exerciseRepairDesignPathRevision(t *testing.T, reviewRechecks bool) {
+func TestRepairSpectrumContextWriterAndFreshGatesReachReady(t *testing.T) {
+	exerciseRepairDesignPathRevision(t, false, true)
+}
+
+func exerciseRepairDesignPathRevision(t *testing.T, reviewRechecks, withSpectrum bool) {
 	ctx := context.Background()
 	c := graphCreation(t, 1)
 	c.Config.Version = 1
@@ -279,6 +283,9 @@ func exerciseRepairDesignPathRevision(t *testing.T, reviewRechecks bool) {
 	if err != nil || anchored.AnchoringStatus != "observed" || len(anchored.Anchors) != 1 || anchored.Anchors[0].Status != "file_verified" || anchored.Specifications[0].SuggestedStrategy != "localization_required" {
 		t.Fatalf("read-only anchor widened unrelated repair ownership: %+v err=%v", anchored, err)
 	}
+	if withSpectrum {
+		checkRepairSpectrumAdmission(t, ctx, path, refined)
+	}
 	if err := maybeAdmitTaskContext(ctx, path, "writer", c.Objective); err != nil {
 		t.Fatal(err)
 	}
@@ -306,6 +313,11 @@ func exerciseRepairDesignPathRevision(t *testing.T, reviewRechecks bool) {
 	}
 	if err := json.Unmarshal([]byte(writerInvocation.Input), &repairInput); err != nil || repairInput.Repair == nil || len(repairInput.Repair.Findings) != 1 || len(repairInput.Repair.Specifications) != 1 || !stringListsEqual(repairInput.Repair.Specifications[0].AllowedWritePaths, impl.WritePaths) || repairInput.Repair.ControllerHead != "" {
 		t.Fatalf("repair invocation lacks exact recorded intelligence: %+v %v", repairInput.Repair, err)
+	}
+	if withSpectrum {
+		if repairInput.Repair.Spectrum == nil || repairInput.Repair.Spectrum.SourceStatus != "recorded_task_context_bytes_verified" || len(repairInput.Repair.Spectrum.Blocks) != 0 || strings.Contains(writerInvocation.Input, "\"repair_spectrum\"") || strings.Contains(writerInvocation.Input, "mode: set") {
+			t.Fatal("repair input leaked raw profiles or locations outside write paths")
+		}
 	}
 	candidateID, err = refined.Candidate.ID()
 	if err != nil {

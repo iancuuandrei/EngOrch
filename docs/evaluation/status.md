@@ -58,7 +58,12 @@ Explorer retention remains opt-in: C used more observed tokens, and the single
 task/timing limitations do not establish benefit. The v1.1.16
 [imported coverage localization](repair-spectrum-localization.md) adds bounded
 Ochiai ranking with source-byte validation and explicitly untrusted test labels.
-It does not execute tests or consume rankings automatically in fixer inputs.
+It does not execute tests. The v1.1.17 explicit pre-invocation admission now
+projects compact scoped rankings into fixer inputs through existing task context;
+raw profiles remain private and frozen inputs cannot be replaced. Focused replay,
+bound and repair-lifecycle evidence is recorded in the
+[fixer integration evaluation](repair-spectrum-fixer.md). Live repair benefit
+remains **NOT RUN**.
 
 The active [v2 goal](../roadmap/v2-product-plan.md) starts with baseline/context
 qualification, then structured repair. Final v2 tests, frozen cohort, language

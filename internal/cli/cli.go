@@ -109,6 +109,7 @@ var commands = []Command{
 	{"status", "", "List validated local run IDs, workflow/lifecycle states and plan IDs without input or evidence bodies."},
 	{"inspect", "[RUN] [--export-jsonl]", "Replay one run and show its bound inputs and state, or export its validated canonical event history."},
 	{"diagnose", "RUN [--anchor [--previous REPORT_JSON] | --closure | --spectrum SPECTRUM_JSON]", "Project repair findings and admitted scope; optionally validate current bytes, relocate prior code hints, inspect closure receipts or rank supplied per-test Go coverage, without dispatch or retry authority."},
+	{"repair-context", "RUN SPECTRUM_JSON [--task TASK_ID]", "Admit bounded untrusted coverage localization before freezing a ready repair writer context; no dispatch, retry or closure authority."},
 	{"checkpoint", "RUN", "Emit a payload-free checkpoint with exact source/candidate/graph identity, completed tasks, gate status, uncertainty counts and a bounded acceptance conclusion."},
 	{"resume", "[RUN] [ACTOR NONCE] or --autonomous [RUN]", "Resume planning, explicitly reopen a settled pause with ACTOR and NONCE, or continue one bounded autonomous run without resending uncertain work."},
 	{"approve", "RUN PLAN ACTOR", "Approve one exact plan with an explicit human actor."},
@@ -385,6 +386,8 @@ func Execute(ctx context.Context, args []string, cwd string, out io.Writer) (res
 		return runCommand(ctx, *root, args, out)
 	case "diagnose":
 		return diagnoseCommand(ctx, *root, args, out)
+	case "repair-context":
+		return repairContextCommand(ctx, *root, args, out)
 	case "prepare-explorer", "explore", "usage", "prepare-review", "review", "prepare-writer", "write", "inspect", "resume", "approve", "reconcile", "verify", "close-verification":
 		if command == "resume" && len(args) >= 1 && args[0] == "--autonomous" {
 			return autonomousResumeCommand(ctx, *root, args[1:], out)

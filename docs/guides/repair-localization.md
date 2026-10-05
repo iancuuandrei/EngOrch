@@ -104,9 +104,50 @@ reports private; filenames/test IDs may contain project information.
 
 The flag is exclusive with `--anchor`, `--previous` and `--closure`. Default
 diagnosis serialization and old invocation bytes are unchanged. JEV acquisition
-selection, automatic profile collection, graph/ranking fusion and automatic
-fixer consumption remain future integrations. Independent verification/review
+selection, automatic profile collection and graph/ranking fusion remain future
+integrations. Explicit fixer consumption is described below. Independent verification/review
 and exact closure oracles remain required after any repair.
+
+## Admit localization for the next fixer
+
+For an opted-in run with `repair_intelligence_version: 1` and bounded task
+context, import the spectrum **before** the ready repair writer's context is
+admitted or its invocation prepared:
+
+```powershell
+# Serial writer: exactly one ready repair implementation.
+fabric repair-context RUN C:\private-evidence\spectrum.json
+# Use this form only for the task-bound writer route.
+fabric repair-context RUN C:\private-evidence\spectrum.json --task TASK_ID
+```
+
+This command admits one ordinary `task.context-admitted` record. It uses normal
+bounded source selection and requires complete selected bytes for every mapped
+source. It does not expand source selection or write scope to accommodate a
+profile. If a source is missing, partial, stale or omitted, admission fails;
+ordinary repair can continue using its existing context route without coverage.
+The admission cap is **128 KiB canonical spectrum**, stricter than the read-only
+1 MiB import cap. Existing per-profile/count/source bounds still apply.
+The unchanged selector retains at most 12 files / 48 KiB total / 8 KiB per
+file. A mapped source must fit completely within that selected view; the
+read-only diagnosis's 32 KiB observation limit does not raise this prompt limit.
+
+The compact receipt reports task, candidate, manifest and spectrum input hash.
+Raw profiles remain private durable evidence and are stripped from the writer
+prompt. The fixer receives only the replay-derived ranking under
+`repair_intelligence.spectrum`, with source status
+`recorded_task_context_bytes_verified`. Blocks outside its exact write paths
+are omitted and counted in `omitted_blocks`; aggregate test counts and input hash
+still bind the full artifact. Test labels and source mappings remain untrusted.
+
+Re-importing the identical artifact reuses the record without appending an event.
+A previously admitted context cannot be replaced or retrofitted, even before
+dispatch. Do not delete journals or retry an uncertain model effect to inject
+coverage. The optional 32 KiB repair projection / 256 KiB total prompt limits
+may omit intelligence explicitly; mandatory authority and verification inputs
+remain intact. No test, model call, file mutation, retry authorization or finding
+closure is performed by admission. Resume derives the same prompt from the
+recorded source bytes without rereading the artifact or workspace.
 
 See the [contract](../specifications/repair-diagnosis.md) and
 [executed evidence](../evaluation/repair-spectrum-localization.md).

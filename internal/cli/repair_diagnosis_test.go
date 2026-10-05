@@ -64,6 +64,14 @@ func TestDiagnoseArgumentsRejectBeforeJournalAccess(t *testing.T) {
 	}
 }
 
+func TestRepairContextArgumentsRejectBeforeJournalAccess(t *testing.T) {
+	for _, args := range [][]string{nil, {"run"}, {"run", "s.json", "extra"}, {"run", "s.json", "--unknown"}, {"run", "s.json", "--task"}} {
+		if err := repairContextCommand(context.Background(), t.TempDir(), args, os.Stdout); err == nil {
+			t.Fatalf("invalid repair context arguments accepted %v", args)
+		}
+	}
+}
+
 func TestRepairSpectrumImportBoundsAndStrictEncoding(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "spectrum.json")
 	for _, raw := range []string{`{"version":1,"unknown":true}`, `{"version":1,"version":1}`, strings.Repeat("x", (1<<20)+1), `{"version":1} {}`} {

@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"harness.local/engorch/internal/canonical"
+	"harness.local/engorch/internal/faultlocalization"
 	"harness.local/engorch/internal/taskcontext"
 	"harness.local/engorch/internal/worktree"
 )
@@ -45,6 +46,24 @@ func writerRepairIntelligence(s Snapshot, task *writerImplementationContext, con
 		r.Specifications = append(r.Specifications, spec)
 	}
 	r.attachRepairAnchors()
+	if context != nil && context.RepairSpectrum != nil {
+		if context.RepairSpectrum.TaskID != task.ID || context.CandidateID != r.CandidateID {
+			return nil, errors.New("repair spectrum differs from writer task/candidate")
+		}
+		ranking, err := recordedRepairSpectrum(s, context)
+		if err != nil {
+			return nil, err
+		}
+		filtered := []faultlocalization.Block{}
+		for _, block := range ranking.Blocks {
+			if repairAnchorOwned(block.Path, task.WritePaths) {
+				filtered = append(filtered, block)
+			}
+		}
+		ranking.OmittedBlocks = len(ranking.Blocks) - len(filtered)
+		ranking.Blocks = filtered
+		r.Spectrum = ranking
+	}
 	return boundedWriterRepairProjection(r)
 }
 

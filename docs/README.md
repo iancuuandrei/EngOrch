@@ -15,7 +15,7 @@ the row that matches your question; follow the linked source for the details.
 | Understand the product shape | [System architecture](architecture/system.md) | Control flow, authority boundaries, candidate gates and evidence |
 | See what is implemented | [Capabilities](guides/features.md) | Capability map, entry points, limits and qualification links |
 | Inspect a failed candidate | [Repair diagnosis](guides/repair-diagnosis.md) | Typed evidence and exact admitted repair scope, without dispatch |
-| Localize a native failure | [Coverage localization](guides/repair-localization.md) | Bounded per-test Go spectra, exact Ochiai counts and candidate source validation |
+| Localize a native failure | [Coverage localization](guides/repair-localization.md) | Bounded per-test Go spectra, exact Ochiai counts, source validation and explicit scoped fixer admission |
 | Experiment with retained agent reasoning | [Editable working context](guides/working-context.md) | Opt-in dynamic explorer retention, immutable task inputs and historical pilot evidence |
 | Use a command or flag | [CLI reference](reference/cli.md) | Generated command and option reference |
 | Understand a contract or design choice | [Specifications](specifications/) and [ADRs](adr/) | Normative invariants and accepted architectural decisions |

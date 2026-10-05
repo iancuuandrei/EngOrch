@@ -93,6 +93,50 @@ func readRepairSpectrum(path string) (faultlocalization.Spectrum, error) {
 	return s, nil
 }
 
+func repairContextCommand(ctx context.Context, root string, args []string, out io.Writer) error {
+	if len(args) < 2 {
+		return errors.New("repair-context requires RUN SPECTRUM_JSON [--task TASK_ID]")
+	}
+	flags := flag.NewFlagSet("repair-context", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	task := flags.String("task", "", "select task-bound writer instead of the single serial writer")
+	if err := flags.Parse(args[2:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("repair-context expects RUN SPECTRUM_JSON [--task TASK_ID]")
+	}
+	path, err := runPath(root, args[0])
+	if err != nil {
+		return err
+	}
+	s, err := control.Inspect(path)
+	if err != nil {
+		return err
+	}
+	if s.RunID != args[0] || filepath.Clean(s.Creation.Repository.Root) != filepath.Clean(root) {
+		return errors.New("journal/run repository binding mismatch")
+	}
+	spectrum, err := readRepairSpectrum(args[1])
+	if err != nil {
+		return err
+	}
+	rec, err := control.AdmitRepairSpectrumContext(ctx, path, *task, spectrum)
+	if err != nil {
+		return err
+	}
+	ranking, err := faultlocalization.Analyze(rec.RepairSpectrum.Spectrum)
+	if err != nil {
+		return err
+	}
+	return output(out, struct {
+		TaskID      string `json:"task_id"`
+		CandidateID string `json:"candidate_id"`
+		ManifestID  string `json:"manifest_id"`
+		SpectrumID  string `json:"spectrum_input_hash"`
+	}{rec.RepairSpectrum.TaskID, rec.CandidateID, rec.ManifestID, ranking.InputHash})
+}
+
 func previousRepairAnchors(path, runID string) ([]control.RepairAnchor, error) {
 	if path == "" {
 		return nil, nil

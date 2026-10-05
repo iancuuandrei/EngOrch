@@ -59,15 +59,16 @@ type Block struct {
 // Report is an advisory ranking, independently bracketed by controller source
 // observation before publication. It cannot alter findings, ownership or gates.
 type Report struct {
-	Version      int     `json:"version"`
-	InputHash    string  `json:"input_hash"`
-	RunID        string  `json:"run_id"`
-	CandidateID  string  `json:"candidate_id"`
-	Provenance   string  `json:"provenance"`
-	SourceStatus string  `json:"source_status"`
-	FailedTests  int     `json:"failed_tests"`
-	PassedTests  int     `json:"passed_tests"`
-	Blocks       []Block `json:"blocks"`
+	Version       int     `json:"version"`
+	InputHash     string  `json:"input_hash"`
+	RunID         string  `json:"run_id"`
+	CandidateID   string  `json:"candidate_id"`
+	Provenance    string  `json:"provenance"`
+	SourceStatus  string  `json:"source_status"`
+	FailedTests   int     `json:"failed_tests"`
+	PassedTests   int     `json:"passed_tests"`
+	Blocks        []Block `json:"blocks"`
+	OmittedBlocks int     `json:"omitted_blocks,omitempty"`
 }
 
 // Analyze validates bounded complete block inventories and ranks by Ochiai.

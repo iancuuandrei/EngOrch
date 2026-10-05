@@ -71,6 +71,7 @@ type TaskContextRecord struct {
 	LexicalSearchesID        string                     `json:"lexical_searches_id,omitempty"`
 	LexicalUnavailableReason string                     `json:"lexical_unavailable_reason,omitempty"`
 	Unavailable              string                     `json:"unavailable,omitempty"`
+	RepairSpectrum           *RepairSpectrumEvidence    `json:"repair_spectrum,omitempty"`
 }
 
 // taskContextValidRole reports whether role is a native task-context consumer.
@@ -245,6 +246,10 @@ func AdmitTaskContext(ctx context.Context, path, role, question string) (TaskCon
 }
 
 func admitTaskContext(ctx context.Context, path, role, question, isolationTaskID string) (TaskContextRecord, error) {
+	return admitTaskContextWithSpectrum(ctx, path, role, question, isolationTaskID, nil)
+}
+
+func admitTaskContextWithSpectrum(ctx context.Context, path, role, question, isolationTaskID string, spectrum *RepairSpectrumEvidence) (TaskContextRecord, error) {
 	if !taskContextValidRole(role) {
 		return TaskContextRecord{}, errors.New("invalid task context role")
 	}
@@ -294,7 +299,7 @@ func admitTaskContext(ctx context.Context, path, role, question, isolationTaskID
 	// Reuse without new effects: same role, source, candidate and full query.
 	for _, existing := range s.TaskContexts {
 		if existing.IsolationTaskID == isolationTaskID && existing.Role == role && existing.SourceID == sourceID && existing.CandidateID == candidateID && existing.QueryHash == queryHash {
-			return existing, nil
+			return reuseRepairSpectrumContext(existing, spectrum)
 		}
 	}
 	lease, err := worktree.AcquireRead(workspace.Request)
@@ -469,6 +474,9 @@ func admitTaskContext(ctx context.Context, path, role, question, isolationTaskID
 		return TaskContextRecord{}, err
 	}
 	if len(reads) == 0 {
+		if spectrum != nil {
+			return TaskContextRecord{}, errors.New("repair spectrum requires complete selected source bytes")
+		}
 		rec := TaskContextRecord{
 			Version:         taskContextRecordVersion(lexicalUnavailableReason),
 			Role:            role,
@@ -557,6 +565,10 @@ func admitTaskContext(ctx context.Context, path, role, question, isolationTaskID
 		LexicalSearches:          lexicalSearches,
 		LexicalSearchesID:        lexicalSearchesID,
 		LexicalUnavailableReason: lexicalUnavailableReason,
+		RepairSpectrum:           spectrum,
+	}
+	if _, err := recordedRepairSpectrum(s, &rec); err != nil {
+		return TaskContextRecord{}, err
 	}
 	if err := Append(path, "task.context-admitted", rec); err != nil {
 		latest, inspectErr := Inspect(path)
@@ -565,7 +577,7 @@ func admitTaskContext(ctx context.Context, path, role, question, isolationTaskID
 		}
 		for _, existing := range latest.TaskContexts {
 			if existing.IsolationTaskID == isolationTaskID && existing.Role == role && existing.SourceID == sourceID && existing.CandidateID == candidateID && existing.QueryHash == queryHash && existing.ManifestID == manifestID {
-				return existing, nil
+				return reuseRepairSpectrumContext(existing, spectrum)
 			}
 		}
 		return TaskContextRecord{}, err
@@ -802,6 +814,9 @@ func replayTaskContext(s *Snapshot, e journal.Event) error {
 		return err
 	}
 	if rec.Unavailable != "" {
+		if rec.RepairSpectrum != nil {
+			return errors.New("unavailable context cannot admit repair spectrum")
+		}
 		if len(rec.Unavailable) > 256 || !utf8.ValidString(rec.Unavailable) {
 			return errors.New("invalid task context unavailable reason")
 		}
@@ -884,6 +899,9 @@ func replayTaskContext(s *Snapshot, e journal.Event) error {
 	gotID, err := m.ID()
 	if err != nil || gotID != rec.ManifestID {
 		return errors.New("task context manifest substitution")
+	}
+	if _, err := recordedRepairSpectrum(*s, &rec); err != nil {
+		return err
 	}
 	for _, existing := range s.TaskContexts {
 		// The manifest digest describes selected candidate text and query, not

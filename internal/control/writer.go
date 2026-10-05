@@ -155,19 +155,9 @@ func writerInvocationBody(s Snapshot, taskID string, isolated *isolatedWriterBin
 	if err != nil {
 		return runtime.Invocation{}, err
 	}
-	contextQuestion := s.Creation.Objective
-	if taskID != "" {
-		if s.Graph == nil {
-			return runtime.Invocation{}, errors.New("writer graph task unavailable")
-		}
-		task, ok := s.Graph.Graph.Task(taskID)
-		if !ok {
-			return runtime.Invocation{}, errors.New("writer graph task unavailable")
-		}
-		contextQuestion = fmt.Sprintf("[%s] %s | scope: %s | write paths: %s | objective: %s", task.ID, task.Title, strings.Join(task.ScopePaths, ","), strings.Join(task.WritePaths, ","), s.Creation.Objective)
-		if len(contextQuestion) > 4096 {
-			return runtime.Invocation{}, errors.New("writer task context exceeds bound")
-		}
+	contextQuestion, err := writerTaskContextQuestion(s, taskID)
+	if err != nil {
+		return runtime.Invocation{}, err
 	}
 	var taskCtx *TaskContextRecord
 	if isolated != nil {
@@ -300,7 +290,11 @@ func writerInvocationBody(s Snapshot, taskID string, isolated *isolatedWriterBin
 	baseInstruction := instruction
 	if repair != nil {
 		instruction += " The repair_intelligence object binds observed findings and any complete recorded task-context preimages to this task. Use its exact admitted write paths. A localized_llm suggestion is advisory; validate edits with current candidate tools. Stale, unavailable or ambiguous locations require investigation. Preserve every configured native check and independent review; never treat an anchor or strategy suggestion as finding closure or retry authority."
+		if repair.Spectrum != nil {
+			instruction += " Its spectrum is an advisory ranking from caller-supplied, untrusted test outcomes and mappings, filtered to this task's write paths. Recorded source bytes validate locations, not test execution, causality or closure."
+		}
 	}
+	taskCtx = writerVisibleTaskContext(taskCtx)
 	payload := struct {
 		OutputSchema       json.RawMessage                  `json:"output_schema,omitempty"`
 		Instruction        string                           `json:"instruction"`

@@ -59,7 +59,8 @@ bytes, not authenticity of coverage production or causality.
 Import is bounded to 1 MiB JSON, 64 tests, 24 sources, 64 KiB/profile, 4096
 blocks/profile and 32 KiB complete source/file. It MUST NOT truncate partial
 profiles into valid evidence. No imported ranking is persisted as controller
-truth or injected into existing invocation inputs.
+truth or injected into existing invocation inputs. Explicit pre-invocation
+admission MAY retain untrusted raw evidence as described below.
 
 ## Optional candidate anchoring
 
@@ -86,6 +87,33 @@ It MUST NOT dispatch a model, bypass ownership or imply semantic finding closure
 Code and source hashes in anchored reports are private run evidence.
 
 ## Opt-in fixer input
+
+`repair-context RUN SPECTRUM_JSON [--task TASK_ID]` MAY admit a spectrum through
+the existing `task.context-admitted` event before freezing writer inputs. It
+MUST require enabled repair intelligence, bounded task context, a ready repair
+implementation and its exact failed parent gate. Empty task selection MUST
+use the existing serial writer query; explicit task selection MUST use the
+same query as the task-bound invocation. Isolated child admission is not
+supported by this first integration.
+
+The optional `repair_spectrum` field MUST bind task, failed parent gate, run,
+candidate and invocation query. Absent field MUST preserve old serialization
+and prompt bytes. Canonical spectrum bytes MUST NOT exceed 128 KiB. Replay
+compatibility is additive for the current reader; older builds may reject this
+optional field and MUST NOT silently treat it as authority. Replay
+MUST validate complete recorded manifest source hashes/ranges and MUST NOT read
+mutable files. Missing/partial source context MUST reject spectrum admission.
+Normal selection ceilings remain 12 files, 48 KiB total and 8 KiB per file;
+import MUST NOT expand them to retain a larger coverage preimage.
+Identical re-admission MAY reuse the record; different or missing existing
+evidence MUST NOT permit replacing or retrofitting a frozen context.
+
+Raw profiles MUST remain private durable evidence and MUST NOT enter writer
+inputs. The compact ranking MUST retain untrusted provenance and the full input
+hash; locations MUST be filtered to exact task write paths and omitted blocks
+counted. Source-byte validation MUST NOT authenticate test execution or closure.
+Admission and retention MUST NOT change findings, write authority, effects,
+repair budgets, verification, review or acceptance.
 
 New autonomous creations MAY set `repair_intelligence_version: 1`. It requires
 graph v1, repair planning v1 and bounded task context. Absent/zero policy MUST

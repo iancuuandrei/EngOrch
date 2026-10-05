@@ -75,6 +75,10 @@ New runs can opt into `--repair-intelligence` to provide these structured
 findings and exact repair scope to the fixer, validating preimages from complete
 recorded task context. Strategy suggestions remain advisory; automatic strategy
 routing and live quality gains remain unqualified.
+Explicit [`repair-context` admission](repair-localization.md#admit-localization-for-the-next-fixer)
+adds imported per-test coverage localization before fixer inputs are frozen.
+The compact ranking is scoped to existing write paths; raw profiles remain
+private journal evidence and caller-supplied test labels remain untrusted.
 `diagnose RUN --closure` binds historical native findings to a later exact
 check pass on the accepted candidate; reviewer concerns require explicit recheck.
 New repair-intelligence runs with configured structured review require explicit
