@@ -105,9 +105,44 @@ receipts remain original failures even if the later matching oracle passes.
 Without final acceptance the status MUST remain `open`; a substituted final
 oracle MUST yield `oracle_changed`. Unavailable original checks MUST remain
 `unavailable_not_semantic`. Generic approved review MUST NOT close historical
-review concerns, which remain `recheck_required` pending explicit recheck support.
+review concerns, which remain `recheck_required` unless explicitly rechecked
+under the opt-in contract below.
 
 Derived history MUST retain at most 128 findings, count omissions and hash their
 original finding identities, oracle definitions and journal sequence in order.
 The report MUST NOT expose raw invocation arguments, environment or process
 output. Bounded review messages retain the existing private-evidence boundary.
+
+## Explicit reviewer rechecks
+
+New structured-review creations MAY freeze `review_recheck_version: 1`, requiring
+repair intelligence v1 and configured `json-v1` review. Absent policy MUST preserve
+historical invocation bytes, verdict serialization and replay. No new journal
+event is introduced: history MUST derive from admitted review records.
+
+History MUST preserve original full-record finding IDs and hashes, including
+shortened tails. It MUST retain at most 128 concerns; omitted original IDs MUST
+be counted and bound in an ordered hash chain. Prompt candidate binding MUST
+describe the current candidate without changing original finding identity.
+
+The finite reviewer output schema MUST require one recheck per supplied original
+ID, without duplicates or foreign IDs. Answers MUST be `closed` or `unresolved`
+with a nonblank UTF-8 rationale of at most 512 bytes. Approval MUST require all
+supplied concerns closed and ordinary findings empty. Every unresolved answer
+MUST have an ordinary current finding with the exact original path and rationale
+as message, preserving existing repair/design/fixer feedback and decision gates.
+
+Recheck requests MUST admit at most 64 concerns, matching the existing current
+finding limit; larger histories MUST use ordinary review fallback rather than
+request an impossible unresolved verdict. Optional context MUST be omitted
+beyond 64 KiB or when it takes review
+input beyond 256 KiB. The exact ordinary invocation shape MUST identify fallback
+during replay; omitted concerns MUST NOT acquire closure. Coverage MUST remain
+explicit in the closure report. Native verification and review budgets remain
+unchanged; incomplete recheck coverage MUST NOT imply overall finding closure.
+
+`reviewer_recheck_closed` MUST require the final accepted review on the current
+candidate/verification plan, an explicitly closed original ID, and an original
+concern preceding the final native plan. Closure evidence MUST bind the full
+admitted review record and its invocation. It is model judgment, not native
+execution or proof of semantic correctness.

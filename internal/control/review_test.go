@@ -41,7 +41,7 @@ func TestConfiguredReviewGatesReadiness(t *testing.T) {
 			if decision == "changes_requested" {
 				findings = append(findings, ReviewFinding{"file.txt", "Fixture finding: required behavior is absent."})
 			}
-			verdict := ReviewVerdict{id, s.Verification.PlanID, decision, findings}
+			verdict := ReviewVerdict{CandidateID: id, VerificationPlanID: s.Verification.PlanID, Decision: decision, Findings: findings}
 			makeRecord := func(v ReviewVerdict) ReviewRecord {
 				output, err := canonical.Bytes(v)
 				if err != nil {

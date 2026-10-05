@@ -2,8 +2,9 @@
 
 ## Current product checkpoint — 2026-10-05
 
-Current goal baseline is v1.1.4 on clean `dev`
-`6ba6a6de90cd53683aa08df2d68a799f57f9ae4b`; `main` has the same source tree.
+Goal initialization used v1.1.4 on clean `dev`
+`6ba6a6de90cd53683aa08df2d68a799f57f9ae4b`. Current `main` follows trusted
+development source through the rolling snapshot workflow.
 The published package remains immutable [v1.1.0](../guides/release.md).
 Its installed acceptance does not qualify later development source.
 
@@ -44,6 +45,12 @@ fixture repair, fresh native PASS and deterministic review reach READY with a
 matching receipt. Reviewer concerns remain explicitly `recheck_required`;
 automatic exact reviewer closure and live repair-benefit qualification remain
 **NOT RUN**.
+
+The subsequent v1.1.11 [explicit reviewer recheck](reviewer-rechecks.md) supplies
+original concern IDs to opted-in structured reviewers and validates complete
+answers. Unresolved concerns remain actionable in ordinary repair feedback;
+only the final accepted explicit recheck can report reviewer closure. Focused
+fixtures establish the contract; live quality and token benefits remain NOT RUN.
 
 The active [v2 goal](../roadmap/v2-product-plan.md) starts with baseline/context
 qualification, then structured repair. Final v2 tests, frozen cohort, language

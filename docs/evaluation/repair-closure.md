@@ -31,10 +31,10 @@ It performs no provider or workspace effects and adds no journal schema.
   after READY. Initial expanded scoped suite: control 20.139 s, CLI 0.139 s.
 
 Final focused suite: control 38.421 s, CLI 0.399 s, documentation 0.828 s,
-exit 0. `go vet` for control/CLI and `git diff --check` passed. Independent
+exit 0. `go vet` for control/CLI and `git diff --check` passed.
 The actual CLI planning/resume fixture with `--closure` and unchanged export
 passed separately in 27.020 s; no invented finding or acceptance is returned.
-GPT 6 Luna High static code review: APPROVE; reviewer did not run tests.
+Independent GPT 6 Luna High static code review: APPROVE; reviewer did not run tests.
 The omission hash binds original IDs, oracle definitions and sequence, not
 derived closure statuses for omitted entries.
 

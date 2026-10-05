@@ -10,8 +10,16 @@ import (
 )
 
 func TestReviewSchemaBoundToWire(t *testing.T) {
+	exerciseReviewSchemaBoundToWire(t, runtime.ReviewOutputSchema())
+}
+
+func TestReviewRecheckSchemaBoundToWire(t *testing.T) {
+	exerciseReviewSchemaBoundToWire(t, runtime.RepairReviewOutputSchema())
+}
+
+func exerciseReviewSchemaBoundToWire(t *testing.T, schema json.RawMessage) {
 	p := runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "exact", Effort: "high", Role: "reviewer"}
-	raw, err := json.Marshal(map[string]any{"output_schema": runtime.ReviewOutputSchema()})
+	raw, err := json.Marshal(map[string]any{"output_schema": schema})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +34,7 @@ func TestReviewSchemaBoundToWire(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := canonical.Hash("schema", params["outputSchema"])
-	want, _ := canonical.Hash("schema", runtime.ReviewOutputSchema())
+	want, _ := canonical.Hash("schema", schema)
 	if err != nil || got != want {
 		t.Fatal("review schema changed on wire", err)
 	}

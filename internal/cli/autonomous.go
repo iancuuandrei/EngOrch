@@ -450,6 +450,9 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 	}
 	if repairIntelligence {
 		creation.Execution.RepairIntelligenceVersion = 1
+		if creation.Config.Reviewer != nil && creation.Config.ReviewerContract == "json-v1" {
+			creation.Execution.ReviewRecheckVersion = 1
+		}
 	}
 	configureAutonomousScopeReplan(&creation)
 	if len(agentContextEnabled) > 0 && agentContextEnabled[0] {

@@ -17,9 +17,12 @@ type dispatchStageError struct {
 	cause      error
 }
 
+// Error reports bounded dispatch labels without exposing the underlying cause.
 func (e *dispatchStageError) Error() string {
 	return "OpenCode dispatch failed at " + e.diagnostic.Stage + " (" + e.diagnostic.Code + ")"
 }
+
+// Unwrap preserves the cause for errors.Is and errors.As without printing it.
 func (e *dispatchStageError) Unwrap() error { return e.cause }
 
 func dispatchFailure(stage string, cause error) error {

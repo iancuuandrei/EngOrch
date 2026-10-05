@@ -92,6 +92,9 @@ type ExecutionPolicy struct {
 	// RepairIntelligenceVersion derives bounded fixer evidence from existing
 	// recorded task context. Zero preserves historical invocation bytes.
 	RepairIntelligenceVersion int `json:"repair_intelligence_version,omitempty"`
+	// ReviewRecheckVersion binds explicit reviewer answers to prior concern IDs.
+	// Absent policy preserves historical review invocation bytes.
+	ReviewRecheckVersion int `json:"review_recheck_version,omitempty"`
 	// ParallelImplementationVersion opts new graph runs into a bounded static
 	// cohort of at most two independent implementation writers. Their proposals
 	// are collected on one candidate and applied through one aggregate effect.
@@ -125,6 +128,9 @@ func codexAutoCompactForExecution(policy *ExecutionPolicy, profile runtime.Profi
 // RepairPlanningVersion 1 requires graph execution and a matching graph-v3
 // planner contract at creation replay; zero preserves the prior repair recipe.
 func (p ExecutionPolicy) Validate() error {
+	if p.ReviewRecheckVersion != 0 && (p.ReviewRecheckVersion != 1 || p.RepairIntelligenceVersion != 1) {
+		return errors.New("unsupported review recheck policy")
+	}
 	if p.RepairIntelligenceVersion != 0 && (p.RepairIntelligenceVersion != 1 || p.GraphVersion != 1 || p.RepairPlanningVersion != 1 || p.Context != taskContextBoundedV1) {
 		return errors.New("unsupported repair intelligence policy")
 	}
@@ -309,6 +315,7 @@ type Snapshot struct {
 	ReviewHost                *ReviewHostState                   `json:"review_host,omitempty"`
 	ScheduledReviewHosts      map[string]ReviewHostState         `json:"scheduled_review_hosts,omitempty"`
 	Review                    *ReviewRecord                      `json:"review,omitempty"`
+	ReviewRecheckHistory      *ReviewRecheckHistory              `json:"review_recheck_history,omitempty"`
 	WriterHost                *WriterHostState                   `json:"writer_host,omitempty"`
 	WriterProposal            *WriterRecord                      `json:"writer_proposal,omitempty"`
 	GraphWriterHosts          map[string]WriterHostState         `json:"graph_writer_hosts,omitempty"`
@@ -589,6 +596,9 @@ func Replay(events []journal.Event) (Snapshot, error) {
 			if c.Execution != nil {
 				if err := c.Execution.Validate(); err != nil {
 					return s, err
+				}
+				if c.Execution.ReviewRecheckVersion == 1 && (c.Config.Reviewer == nil || c.Config.ReviewerContract != "json-v1") {
+					return s, errors.New("review rechecks require structured configured review")
 				}
 			}
 			if c.AgentContext != nil {

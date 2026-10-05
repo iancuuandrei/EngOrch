@@ -414,7 +414,8 @@ func (c *Client) StartTurn(ctx context.Context, thread ThreadSettings, i runtime
 		if json.Unmarshal([]byte(i.Input), &envelope) == nil && len(envelope.OutputSchema) > 0 {
 			got, err := canonical.Hash("review-output-schema", envelope.OutputSchema)
 			want, _ := canonical.Hash("review-output-schema", runtime.ReviewOutputSchema())
-			if err != nil || got != want {
+			recheck, _ := canonical.Hash("review-output-schema", runtime.RepairReviewOutputSchema())
+			if err != nil || (got != want && got != recheck) {
 				return wire.Turn, nil, errors.New("review output schema substitution")
 			}
 			params["outputSchema"] = envelope.OutputSchema

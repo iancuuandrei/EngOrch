@@ -12,16 +12,17 @@ import (
 // RepairClosureReport exposes original failures and exact native recheck receipts.
 // It is a read-only journal projection and grants no execution authority.
 type RepairClosureReport struct {
-	Version             int                    `json:"version"`
-	RunID               string                 `json:"run_id"`
-	SourceID            string                 `json:"source_id"`
-	ControllerHead      string                 `json:"controller_head"`
-	CandidateID         string                 `json:"candidate_id,omitempty"`
-	Accepted            bool                   `json:"accepted_checkpoint"`
-	Findings            []RepairFindingClosure `json:"findings"`
-	OmittedFindings     int                    `json:"omitted_findings"`
-	OmittedEvidenceHash string                 `json:"omitted_evidence_hash,omitempty"`
-	Authority           string                 `json:"authority"`
+	Version               int                    `json:"version"`
+	RunID                 string                 `json:"run_id"`
+	SourceID              string                 `json:"source_id"`
+	ControllerHead        string                 `json:"controller_head"`
+	CandidateID           string                 `json:"candidate_id,omitempty"`
+	Accepted              bool                   `json:"accepted_checkpoint"`
+	Findings              []RepairFindingClosure `json:"findings"`
+	OmittedFindings       int                    `json:"omitted_findings"`
+	OmittedEvidenceHash   string                 `json:"omitted_evidence_hash,omitempty"`
+	ReviewRecheckCoverage string                 `json:"review_recheck_coverage,omitempty"`
+	Authority             string                 `json:"authority"`
 }
 
 // RepairFindingClosure separates an original finding from later closure evidence.
@@ -83,8 +84,20 @@ func repairClosureFromValidatedEvents(s Snapshot, events []journal.Event) (Repai
 	if err != nil {
 		return r, err
 	}
+	reviewWitnesses, coverage, err := repairReviewWitnesses(s, r.Accepted)
+	if err != nil {
+		return r, err
+	}
+	r.ReviewRecheckCoverage = coverage
 	for _, original := range history.findings {
 		closure := nativeFindingClosure(s, r, original, latestPlanSequence, witnesses)
+		if original.finding.Source == "reviewer" && original.sequence < latestPlanSequence {
+			if witness, ok := reviewWitnesses[original.finding.ID]; ok {
+				closure.Status = "reviewer_recheck_closed"
+				closure.ClosureCandidateID, closure.ClosurePlanID = r.CandidateID, s.Verification.PlanID
+				closure.ClosureInvocationID, closure.ClosureEvidenceID = witness.invocationID, witness.evidenceID
+			}
+		}
 		r.Findings = append(r.Findings, closure)
 	}
 	return r, nil

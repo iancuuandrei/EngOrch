@@ -141,6 +141,7 @@ func Capture(ctx context.Context, source repository.Identity) (*Bundle, error) {
 
 type bufferCloser struct{ *bytes.Buffer }
 
+// Close satisfies the source reader contract; the buffer owns no external resource.
 func (bufferCloser) Close() error { return nil }
 
 func parseSkill(d Document) (Skill, error) {

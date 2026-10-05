@@ -107,6 +107,7 @@ input remains intact. These are byte limits, not measured token savings.
 
 The flag is stored in immutable creation policy and cannot retrofit an old run.
 It defaults off; ordinary run inputs retain their historical serialization.
+With configured `json-v1` review, new runs also freeze explicit reviewer rechecks.
 The fixer still proposes changes through its existing contract and candidate
 tools. Every configured native check and independent review remains required.
 See [executed integration evidence](../evaluation/repair-fixer-context.md).
@@ -137,9 +138,8 @@ candidate-bound review remain required. Changed executable/environment/check
 definitions produce `oracle_changed`; missing acceptance stays `open`.
 
 Unavailable/NOT_RUN checks are `unavailable_not_semantic`, never invented
-successful repairs. Reviewer concerns remain `recheck_required`: ordinary
-approval is not an explicit recheck of an identified prior concern. Exact reviewer
-recheck support remains pending. An empty list does not settle UNKNOWN effects.
+successful repairs. Ordinary approval does not close reviewer concerns.
+An empty list does not settle UNKNOWN effects.
 
 At most 128 findings from the most recent gate records are retained. Omitted
 entries contribute to `omitted_findings` and `omitted_evidence_hash`.
@@ -149,6 +149,35 @@ Original finding identity includes complete source evidence, including shortened
 Review text is private, untrusted run evidence. Check arguments, environment
 values and raw process output are not copied into this report. See the
 [scoped closure evidence](../evaluation/repair-closure.md).
+
+## Require explicit reviewer rechecks
+
+New `--repair-intelligence` runs with configured `json-v1` review preserve a
+bounded cumulative history of reviewer concerns. Each subsequent review receives
+original IDs, paths and bounded messages, with full source-evidence hashes.
+The reviewer must answer each supplied ID exactly once with `closed` or
+`unresolved` and a concrete rationale. Approval requires every supplied concern
+closed. An unresolved answer must also appear in ordinary current findings with
+the same path and rationale, so design/fixer feedback remains actionable.
+
+`--closure` reports `reviewer_recheck_closed` only for an explicit recheck in
+the final accepted candidate-bound review. It binds the original finding to that
+review invocation, native verification plan and full review-record hash. This is
+reviewer judgment, distinct from `native_oracle_passed` and semantic proof.
+
+History retains at most 128 concerns and hashes/counts omitted original IDs.
+Each admitted review occurrence has its own evidence-bound identity. Unresolved
+feedback echoed into current findings is retained as a new occurrence; Fabric
+does not guess semantic deduplication between reviewer messages.
+Recheck requests cover at most 64 concerns to fit ordinary unresolved feedback;
+larger histories use the ordinary review fallback.
+Optional recheck context is bounded to 64 KiB; it is omitted if the full review
+input would exceed 256 KiB. The ordinary review contract remains available.
+`review_recheck_coverage` exposes `not_requested`, `requested` or
+`partial_history`; unsupplied/omitted concerns are never inferred closed.
+These limits are byte bounds, not measured token savings. Existing runs keep
+their original review inputs and generic approval semantics. See the
+[recheck evidence](../evaluation/reviewer-rechecks.md).
 
 Repair Intelligence supplies typed diagnosis, exact scope inspection, bounded
 preimage validation and explicit unique code relocation. Deterministic

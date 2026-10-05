@@ -108,6 +108,14 @@ func repairDesignFakeResult(t *testing.T, invocation runtime.Invocation, output 
 }
 
 func TestRepairDesignPathRevisionWriterAndFreshGatesReachReady(t *testing.T) {
+	exerciseRepairDesignPathRevision(t, false)
+}
+
+func TestReviewRechecksRepairDesignAndExactClosure(t *testing.T) {
+	exerciseRepairDesignPathRevision(t, true)
+}
+
+func exerciseRepairDesignPathRevision(t *testing.T, reviewRechecks bool) {
 	ctx := context.Background()
 	c := graphCreation(t, 1)
 	c.Config.Version = 1
@@ -116,6 +124,9 @@ func TestRepairDesignPathRevisionWriterAndFreshGatesReachReady(t *testing.T) {
 	c.Execution.RepairPlanningVersion = 1
 	c.Execution.Context = taskContextBoundedV1
 	c.Execution.RepairIntelligenceVersion = 1
+	if reviewRechecks {
+		c.Execution.ReviewRecheckVersion = 1
+	}
 	initial := engineeringplan.Graph{Version: engineeringplan.Version, Mode: engineeringplan.ModeGraph, Summary: "generated repair fixture", Tasks: []engineeringplan.Task{
 		{ID: "impl", Kind: engineeringplan.Implementation, Title: "Initial implementation", ScopePaths: []string{"."}, WritePaths: []string{"file.txt"}, ExpectedEvidence: []engineeringplan.Evidence{{Kind: "file", Description: "candidate"}}, EstimatedSeconds: 20},
 		{ID: "verify", Kind: engineeringplan.Verification, Title: "Verify", Dependencies: []string{"impl"}, ScopePaths: []string{"."}, ExpectedEvidence: []engineeringplan.Evidence{{Kind: "test", Description: "native"}}, EstimatedSeconds: 10},
@@ -343,7 +354,50 @@ func TestRepairDesignPathRevisionWriterAndFreshGatesReachReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reviewOutput, err := canonical.Bytes(ReviewVerdict{CandidateID: candidateID, VerificationPlanID: s.Verification.PlanID, Decision: "approve", Findings: []ReviewFinding{}})
+	verdict := ReviewVerdict{CandidateID: candidateID, VerificationPlanID: s.Verification.PlanID, Decision: "approve", Findings: []ReviewFinding{}}
+	if reviewRechecks {
+		var input struct {
+			Rechecks *reviewRecheckPrompt `json:"repair_rechecks"`
+		}
+		if err := json.Unmarshal([]byte(freshReview.Input), &input); err != nil || input.Rechecks == nil || len(input.Rechecks.Findings) != 1 || input.Rechecks.Findings[0].ID != originalReviewDiagnosis.Findings[0].ID {
+			t.Fatal("explicit original review concern missing", err)
+		}
+		badOutput, err := canonical.Bytes(verdict)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before, err := Inspect(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		largeState := before
+		largePlan := *before.Plan
+		largePlan.Output += strings.Repeat("x", (256<<10)-len(freshReview.Input)+1)
+		largeState.Plan = &largePlan
+		largeInvocation, err := reviewInvocationBase(largeState)
+		var largeInput struct {
+			Plan     string               `json:"plan"`
+			Rechecks *reviewRecheckPrompt `json:"repair_rechecks"`
+		}
+		if err != nil {
+			t.Fatal("optional rechecks blocked ordinary large input", err)
+		}
+		if err := json.Unmarshal([]byte(largeInvocation.Input), &largeInput); err != nil || largeInput.Plan != largePlan.Output || largeInput.Rechecks != nil {
+			t.Fatal("large review fallback altered mandatory input", err)
+		}
+		if err := validateReviewRechecks(largeState, largeInvocation, verdict); err != nil {
+			t.Fatal("ordinary fallback lost its legacy output contract", err)
+		}
+		if _, err := RecordReview(path, ReviewRecord{Invocation: freshReview, Result: repairDesignFakeResult(t, freshReview, string(badOutput))}); err == nil {
+			t.Fatal("generic approval bypassed explicit rechecks")
+		}
+		after, err := Inspect(path)
+		if err != nil || before.ControllerHead != after.ControllerHead {
+			t.Fatal("rejected review changed journal", err)
+		}
+		verdict.Rechecks = []ReviewFindingRecheck{{FindingID: input.Rechecks.Findings[0].ID, Decision: "closed", Rationale: "The candidate now preserves the wrapper methods."}}
+	}
+	reviewOutput, err := canonical.Bytes(verdict)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +415,11 @@ func TestRepairDesignPathRevisionWriterAndFreshGatesReachReady(t *testing.T) {
 		t.Fatal("READY lacks complete actual repair evidence", err)
 	}
 	closure, err := ReadRepairClosure(path, ready.Creation.Repository.Root, ready.RunID)
-	if err != nil || !closure.Accepted || len(closure.Findings) != 1 || closure.Findings[0].Status != "recheck_required" || closure.Findings[0].Finding.ID != originalReviewDiagnosis.Findings[0].ID {
+	expectedStatus := "recheck_required"
+	if reviewRechecks {
+		expectedStatus = "reviewer_recheck_closed"
+	}
+	if err != nil || !closure.Accepted || len(closure.Findings) != 1 || closure.Findings[0].Status != expectedStatus || closure.Findings[0].Finding.ID != originalReviewDiagnosis.Findings[0].ID {
 		t.Fatalf("generic approved review silently closed original concern: %+v %v", closure, err)
 	}
 }
