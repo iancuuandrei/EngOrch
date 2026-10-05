@@ -43,9 +43,10 @@ type AdmissionUsage struct {
 }
 
 type usageTarget struct {
-	invocation runtime.Invocation
-	path, head string
-	resultHash string
+	failedExplorer bool
+	invocation     runtime.Invocation
+	path, head     string
+	resultHash     string
 }
 
 func admittedRuntimeTerminal(s Snapshot, invocation runtime.Invocation) (string, string) {
@@ -286,6 +287,15 @@ func MeasureRunUsage(path string) (RunUsage, error) {
 					return RunUsage{}, errors.New("graph writer usage receipt lacks task binding")
 				}
 				receipt = PlannerReceipt{InvocationID: event.RuntimeReceipt.InvocationID, JournalHead: event.RuntimeReceipt.JournalHead, ResultHash: event.RuntimeReceipt.ResultHash}
+			} else if e.Kind == "explorer.runtime-observed" {
+				var explorer ExplorerRuntimeReceipt
+				if err := canonical.Decode(e.Payload, &explorer); err != nil {
+					return RunUsage{}, err
+				}
+				receipt = PlannerReceipt{InvocationID: explorer.InvocationID, JournalHead: explorer.JournalHead, ResultHash: explorer.ResultHash}
+				if index, ok := indices[explorer.InvocationID]; ok {
+					targets[index].failedExplorer = explorer.FailureCode != ""
+				}
 			} else if err := canonical.Decode(e.Payload, &receipt); err != nil {
 				return RunUsage{}, err
 			}
@@ -313,16 +323,27 @@ func MeasureRunUsage(path string) (RunUsage, error) {
 			if err != nil {
 				return RunUsage{}, err
 			}
-			if observedHead != target.head || state.Result == nil {
+			if observedHead != target.head || state.Result == nil && !target.failedExplorer {
 				return RunUsage{}, errors.New("runtime terminal head no longer matches journal")
 			}
-			domain, err := runtimeResultDomain(target.invocation.Profile.Role)
-			if err != nil {
-				return RunUsage{}, err
-			}
-			resultHash, err := canonical.Hash(domain, *state.Result)
-			if err != nil || resultHash != target.resultHash {
-				return RunUsage{}, errors.New("runtime terminal output no longer matches receipt")
+			if target.failedExplorer {
+				host, ok := explorerRunForInvocation(s, target.invocation.ID)
+				if !ok || !explorerCapacityFailure(state, *host, s) {
+					return RunUsage{}, errors.New("explorer failure evidence no longer matches receipt")
+				}
+				hash, err := canonical.Hash("harness.explorer-capacity-failure.v1", *state.TerminalResponse)
+				if err != nil || hash != target.resultHash {
+					return RunUsage{}, errors.New("explorer failure hash changed")
+				}
+			} else {
+				domain, err := runtimeResultDomain(target.invocation.Profile.Role)
+				if err != nil {
+					return RunUsage{}, err
+				}
+				resultHash, err := canonical.Hash(domain, *state.Result)
+				if err != nil || resultHash != target.resultHash {
+					return RunUsage{}, errors.New("runtime terminal output no longer matches receipt")
+				}
 			}
 		}
 		usage, err := codexruntime.MeasureContext(target.path)
@@ -336,7 +357,7 @@ func MeasureRunUsage(path string) (RunUsage, error) {
 		if usage.InvocationID != target.invocation.ID || usage.Requested != target.invocation.Profile {
 			return RunUsage{}, errors.New("runtime usage invocation substitution")
 		}
-		if target.head != "" && (target.head != usage.JournalHead || !usage.Completed) {
+		if target.head != "" && (target.head != usage.JournalHead || !usage.Completed && !target.failedExplorer) {
 			return RunUsage{}, errors.New("runtime usage receipt no longer matches journal")
 		}
 		entry.JournalPresent = true

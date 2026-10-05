@@ -360,7 +360,8 @@ func executeExplorer(ctx context.Context, path string, s Snapshot, expected Expl
 				cancel()
 				return result, errors.Join(err, terminalErr)
 			}
-			return result, err
+			_, settleErr := reconcileExplorerCapacityFailures(path, s)
+			return result, errors.Join(err, settleErr)
 		}
 	}
 	state, head, err := codexruntime.InspectWithHead(runtimePath)

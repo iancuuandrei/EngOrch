@@ -680,7 +680,7 @@ func explorerQuestionForTask(s Snapshot, task engineeringplan.Task) (string, err
 	if question == "" || len(question) > 4096 {
 		return "", errors.New("graph explorer question bound exceeded")
 	}
-	return question, nil
+	return explorerCapacityRetryQuestion(s, question)
 }
 
 // ensureGraphRecorded parses the accepted plan and persists revision 1.

@@ -115,7 +115,7 @@ func replayExplorer(s *Snapshot, record ExplorerRecord) error {
 	}
 	if i.Profile.Runtime == "codex-app-server" {
 		host, ok := explorerRunForInvocation(*s, i.ID)
-		if !ok || host.Intent.Invocation != i || host.RuntimeReceipt == nil {
+		if !ok || host.Intent.Invocation != i || host.RuntimeReceipt == nil || host.RuntimeReceipt.FailureCode != "" {
 			return errors.New("explorer runtime receipt required")
 		}
 		hash, err := canonical.Hash("harness.explorer-result.v1", record.Result)

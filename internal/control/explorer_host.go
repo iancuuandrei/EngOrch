@@ -29,6 +29,7 @@ type ExplorerHostState struct {
 
 // ExplorerRuntimeReceipt binds a completed runtime observation to its journal head.
 type ExplorerRuntimeReceipt struct {
+	FailureCode  string `json:"failure_code,omitempty"`
 	InvocationID string `json:"invocation_id"`
 	ThreadID     string `json:"thread_id"`
 	TurnID       string `json:"turn_id"`
@@ -116,6 +117,9 @@ func replayExplorerHost(s *Snapshot, e journal.Event) error {
 		var receipt ExplorerRuntimeReceipt
 		if err := canonical.Decode(e.Payload, &receipt); err != nil {
 			return err
+		}
+		if receipt.FailureCode != "" && (receipt.FailureCode != "serverOverloaded" || receipt.UsagePending || s.Creation.Config.Version != 1) {
+			return errors.New("invalid explorer failure receipt")
 		}
 		if receipt.InvocationID != expected.Invocation.ID || strings.TrimSpace(receipt.ThreadID) == "" || len(receipt.ThreadID) > 256 || strings.TrimSpace(receipt.TurnID) == "" || len(receipt.TurnID) > 256 {
 			return errors.New("explorer runtime receipt identity mismatch")
@@ -243,6 +247,9 @@ func replayExplorerHostParallel(s *Snapshot, e journal.Event) error {
 		expected, err := expectedExplorerHost(*s, run.Intent.Question)
 		if err != nil || run.Intent != expected {
 			return errors.New("explorer runtime receipt transition rejected")
+		}
+		if receipt.FailureCode != "" && (receipt.FailureCode != "serverOverloaded" || receipt.UsagePending || s.Creation.Config.Version != 1) {
+			return errors.New("invalid explorer failure receipt")
 		}
 		if receipt.InvocationID != expected.Invocation.ID || strings.TrimSpace(receipt.ThreadID) == "" || len(receipt.ThreadID) > 256 || strings.TrimSpace(receipt.TurnID) == "" || len(receipt.TurnID) > 256 {
 			return errors.New("explorer runtime receipt identity mismatch")

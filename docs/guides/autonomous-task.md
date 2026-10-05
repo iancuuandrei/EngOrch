@@ -182,6 +182,13 @@ coverage metadata. Results land in the isolated workspace at
 
 ### v1.1 development behavior
 
+For configuration v1, a Codex read-only explorer rejected with a sealed
+`serverOverloaded` failure can continue on `resume --autonomous RUN`. Fabric
+retains that failed invocation and admits at most one new invocation for the
+same graph task. Missing terminal evidence remains UNKNOWN and is never resent.
+Failed invocation usage remains incomplete; it is not counted as successful
+exploration. Configuration v2 retains its model-access settlement rules.
+
 New autonomous runs admit at most two separate output-correction turns per
 role. Each correction has a new invocation identity and retains the exact
 completed predecessor receipt and rejected output. An unapplied invalid anchor

@@ -241,6 +241,10 @@ func RunAutonomous(ctx context.Context, path string) (result Snapshot, failure e
 	if err != nil {
 		return s, err
 	}
+	s, err = reconcileExplorerCapacityFailures(path, s)
+	if err != nil {
+		return s, err
+	}
 	s, err = reconcileUnrecordedSemanticUsagePending(ctx, path, s)
 	if err != nil {
 		return s, err
