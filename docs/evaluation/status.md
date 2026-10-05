@@ -25,8 +25,10 @@ The next Repair Intelligence increment adds
 review findings, full-evidence identities, conservative Go diagnostic locations,
 explicit stale/unvalidated labels and specs limited to already ready repair
 tasks. [Executed diagnosis checks](repair-diagnosis.md) cover gate/scope isolation, pending launches,
-hidden diagnostic tails, ambiguous paths and no journal mutation. Automatic
-re-anchoring/routing and live repair-benefit qualification remain **NOT RUN**.
+hidden diagnostic tails, ambiguous paths and no journal mutation. The subsequent
+[`--anchor` increment](repair-anchors.md) validates bounded current preimages and uniquely relocates
+explicit prior code hints, with optional failure degradation. Automatic strategy
+execution and live repair-benefit qualification remain **NOT RUN**.
 
 The active [v2 goal](../roadmap/v2-product-plan.md) starts with baseline/context
 qualification, then structured repair. Final v2 tests, frozen cohort, language

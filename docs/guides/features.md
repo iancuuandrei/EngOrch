@@ -69,6 +69,8 @@ bundle includes both executables. See the [packaging guide](release.md) and
 Current development also provides [repair diagnosis](repair-diagnosis.md)
 through `fabric diagnose RUN`: source-typed findings, conservative Go diagnostic
 locations, stale-candidate labels and exact ready repair-task write scope.
+`--anchor` validates bounded file preimages and explicitly relocates unique
+previous code hints; verified owned findings can suggest a localized repair.
 It is advisory inspection; automatic repair routing and live quality gains
 remain unqualified.
 

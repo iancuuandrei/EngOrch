@@ -114,6 +114,12 @@ func TestLocalPlanApprovalAndResume(t *testing.T) {
 	if !bytes.Equal(exported, run("inspect", s.RunID, "--export-jsonl")) {
 		t.Fatal("diagnosis appended controller events")
 	}
+	if err := json.Unmarshal(run("diagnose", s.RunID, "--anchor"), &diagnosis); err != nil || diagnosis.AnchoringStatus != "unavailable" {
+		t.Fatal("missing workspace erased the base diagnosis", err)
+	}
+	if !bytes.Equal(exported, run("inspect", s.RunID, "--export-jsonl")) {
+		t.Fatal("anchored diagnosis appended controller events")
+	}
 	var paused control.Snapshot
 	if err := json.Unmarshal(run("pause", s.RunID, "fixture-human", "pause-1"), &paused); err != nil || paused.Lifecycle.Status != control.LifecyclePauseRequested {
 		t.Fatal("pause request missing", err)

@@ -39,6 +39,7 @@ type RepairSpecification struct {
 	AllowedWritePaths []string `json:"allowed_write_paths"`
 	SuggestedStrategy string   `json:"suggested_strategy"`
 	ClosureOracleIDs  []string `json:"closure_oracle_ids"`
+	AnchorIDs         []string `json:"anchor_ids,omitempty"`
 }
 
 // RepairDiagnosis is a pure journal projection, not a filesystem observation or
@@ -55,6 +56,8 @@ type RepairDiagnosis struct {
 	RepairAttempts              int                   `json:"repair_attempts"`
 	MaxRepairs                  *int                  `json:"max_repairs"`
 	Authority                   string                `json:"authority"`
+	AnchoringStatus             string                `json:"anchoring_status,omitempty"`
+	Anchors                     []RepairAnchor        `json:"anchors,omitempty"`
 }
 
 // DiagnoseRepair derives bounded findings and ready-task repair specifications
@@ -184,7 +187,7 @@ func (r *RepairDiagnosis) specificationForGate(task engineeringplan.Task, gateID
 		FindingIDs: []string{}, AllowedWritePaths: append([]string(nil), task.WritePaths...),
 		SuggestedStrategy: "localization_required", ClosureOracleIDs: []string{}}
 	for _, f := range r.Findings {
-		if f.CandidateBinding == "matching_recorded_candidate" && f.GateID == gateID {
+		if r.findingMatchesCandidate(f) && f.GateID == gateID {
 			spec.FindingIDs = append(spec.FindingIDs, f.ID)
 			spec.ClosureOracleIDs = append(spec.ClosureOracleIDs, f.ClosureOracleID)
 		}

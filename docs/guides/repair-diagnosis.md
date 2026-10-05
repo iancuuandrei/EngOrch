@@ -11,6 +11,43 @@ the existing journal and returns canonical JSON. It does not call a model,
 read candidate files, append an event, consume a repair slot or authorize retry.
 It also works for an exhausted run; a report does not reopen its budget.
 
+## Validate current file evidence
+
+```powershell
+fabric diagnose RUN --anchor
+fabric diagnose RUN --anchor > C:\private-evidence\prior-repair.json
+# After an admitted candidate change, use prior code as localization hints:
+fabric diagnose RUN --anchor --previous C:\private-evidence\prior-repair.json
+```
+
+Keep saved reports outside the candidate worktree, because an unadmitted new
+report file would itself change candidate identity. `--anchor` acquires the
+existing shared read lease, validates the recorded candidate and journal head,
+and reads at most 24 files in sorted path order with 32 KiB retained per file.
+Each file hash covers the complete file; code excerpts do not establish whole
+file coverage. No lease is acquired by the default projection.
+
+The optional `anchors` array preserves the original finding separately from
+current `candidate_id`, `file_hash`, byte column, line and bounded code. Matching
+candidate positions are labelled `range_verified`; a reviewer file without a
+line is `file_verified`. Source excerpts can contain private code or embedded
+secrets: keep these reports private. Public diagnostics do not include them.
+
+For a stale finding, a prior report is an **untrusted hint**. Its content hash
+detects accidental alteration; it does not authenticate historical authority.
+The hint must match the same run, finding, original candidate and path. Only one
+exact complete-line match in the fully retained current file can become
+`code_reanchored`. The original finding's candidate and position stay unchanged.
+Missing, repeated, substring-only, foreign and incompletely covered anchors do
+not silently relocate. No guessed symbol resolution or cross-file search occurs.
+
+The strategy suggestion becomes `localized_llm` only when every spec finding
+has a current verified anchor inside that ready task's exact write paths. It
+does not dispatch a fixer or prove the original defect persists or is closed.
+If file observation is unavailable, `anchoring_status` is `unavailable` and the
+base diagnosis remains available. Individual unavailable or out-of-bound ranges
+remain explicit; they do not erase useful failures or weaken readiness.
+
 ## Read the result
 
 | Field | Meaning |
@@ -47,9 +84,10 @@ After a permitted repair, the new candidate still requires fresh configured
 native checks and independent review. UNKNOWN provider effects remain UNKNOWN.
 This command never resends them or infers their completion from missing findings.
 
-This first Repair Intelligence increment supplies typed diagnosis and exact
-scope inspection. Automatic re-anchoring, deterministic transformations,
-strategy execution and finding closure are not implemented by this report.
+Repair Intelligence supplies typed diagnosis, exact scope inspection, bounded
+preimage validation and explicit unique code relocation. Deterministic
+transformations, strategy execution and finding closure are not implemented
+by this report.
 No live repair-quality or token-efficiency improvement is claimed. See the
 [contract](../specifications/repair-diagnosis.md) and
 [evidence status](../evaluation/status.md).

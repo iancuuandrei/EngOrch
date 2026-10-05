@@ -258,6 +258,10 @@ func TestRepairDesignPathRevisionWriterAndFreshGatesReachReady(t *testing.T) {
 	if err != nil || refined.State != "REPAIRING" || len(diagnosis.Specifications) != 1 || !stringListsEqual(diagnosis.Specifications[0].AllowedWritePaths, impl.WritePaths) {
 		t.Fatalf("replay-valid repair lost its admitted diagnosis scope: %+v err=%v", diagnosis, err)
 	}
+	anchored, err := DiagnoseRepairAnchored(ctx, path, refined, nil)
+	if err != nil || anchored.AnchoringStatus != "observed" || len(anchored.Anchors) != 1 || anchored.Anchors[0].Status != "file_verified" || anchored.Specifications[0].SuggestedStrategy != "localization_required" {
+		t.Fatalf("read-only anchor widened unrelated repair ownership: %+v err=%v", anchored, err)
+	}
 	if err := maybeAdmitTaskContext(ctx, path, "writer", c.Objective); err != nil {
 		t.Fatal(err)
 	}

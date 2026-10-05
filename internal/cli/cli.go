@@ -108,7 +108,7 @@ var commands = []Command{
 	{"plan", "OBJECTIVE or --file PATH", "Create a plan from exact objective text or a bounded UTF-8 file using the explicitly configured runtime and access profile."},
 	{"status", "", "List validated local run IDs, workflow/lifecycle states and plan IDs without input or evidence bodies."},
 	{"inspect", "[RUN] [--export-jsonl]", "Replay one run and show its bound inputs and state, or export its validated canonical event history."},
-	{"diagnose", "RUN", "Project candidate-bound repair findings and admitted ready-task scope without dispatch or retry authority."},
+	{"diagnose", "RUN [--anchor] [--previous REPORT_JSON]", "Project repair findings and admitted scope; optionally validate current bytes or uniquely relocate prior code hints, without dispatch or retry authority."},
 	{"checkpoint", "RUN", "Emit a payload-free checkpoint with exact source/candidate/graph identity, completed tasks, gate status, uncertainty counts and a bounded acceptance conclusion."},
 	{"resume", "[RUN] [ACTOR NONCE] or --autonomous [RUN]", "Resume planning, explicitly reopen a settled pause with ACTOR and NONCE, or continue one bounded autonomous run without resending uncertain work."},
 	{"approve", "RUN PLAN ACTOR", "Approve one exact plan with an explicit human actor."},
@@ -381,7 +381,9 @@ func Execute(ctx context.Context, args []string, cwd string, out io.Writer) (res
 		return output(out, s)
 	case "run":
 		return runCommand(ctx, *root, args, out)
-	case "prepare-explorer", "explore", "usage", "prepare-review", "review", "prepare-writer", "write", "inspect", "diagnose", "resume", "approve", "reconcile", "verify", "close-verification":
+	case "diagnose":
+		return diagnoseCommand(ctx, *root, args, out)
+	case "prepare-explorer", "explore", "usage", "prepare-review", "review", "prepare-writer", "write", "inspect", "resume", "approve", "reconcile", "verify", "close-verification":
 		if command == "resume" && len(args) >= 1 && args[0] == "--autonomous" {
 			return autonomousResumeCommand(ctx, *root, args[1:], out)
 		}
@@ -427,13 +429,6 @@ func Execute(ctx context.Context, args []string, cwd string, out io.Writer) (res
 		}
 		if bound.RunID != args[0] || filepath.Clean(bound.Creation.Repository.Root) != filepath.Clean(*root) {
 			return errors.New("journal/run repository binding mismatch")
-		}
-		if command == "diagnose" {
-			report, err := control.DiagnoseRepair(bound)
-			if err != nil {
-				return err
-			}
-			return output(out, report)
 		}
 		if command == "prepare-writer" {
 			i, err := control.PrepareWriterInvocation(p)
