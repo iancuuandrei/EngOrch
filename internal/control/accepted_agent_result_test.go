@@ -47,9 +47,6 @@ func newExplorerFixtureWithConfig(t *testing.T, policy *ExecutionPolicy, configu
 	if policy != nil && policy.ScheduledExplorerDispatchVersion == 1 {
 		creation.Config.ExplorerContract = "json-v2"
 	}
-	if configure != nil {
-		configure(&creation)
-	}
 	command := exec.Command("git", "-C", creation.Repository.Root, "init", "-q")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatal(err, string(output))
@@ -67,6 +64,9 @@ func newExplorerFixtureWithConfig(t *testing.T, policy *ExecutionPolicy, configu
 	creation.Repository, err = repository.Discover(context.Background(), creation.Repository.Root, creation.Config.Repository)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if configure != nil {
+		configure(&creation)
 	}
 	controllerPath := filepath.Join(t.TempDir(), "run.jsonl")
 	if err := Append(controllerPath, "run.created", creation); err != nil {

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"harness.local/engorch/internal/access"
+	"harness.local/engorch/internal/agentcontext"
 	"harness.local/engorch/internal/agentcontrol"
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/config"
@@ -33,6 +34,11 @@ func TestExplorerWorkingContextCodexSettledResultUsesCachedReceipt(t *testing.T)
 	}
 	policy := &ExecutionPolicy{Mode: "autonomous-v1", GraphVersion: 1, MaxParallel: 1, Context: taskContextBoundedV1, WorkingContextVersion: 1, ScheduledExplorerDispatchVersion: 1}
 	fixture := newExplorerFixtureWithConfig(t, policy, func(c *Creation) {
+		c.Config.ReviewerContract = "json-v1" // Structured planner envelope, as on autonomous runs.
+		c.AgentContext, err = agentcontext.Capture(context.Background(), c.Repository)
+		if err != nil {
+			t.Fatal(err)
+		}
 		c.Config.Explorer = &runtime.Profile{Runtime: "codex-app-server", Provider: "openai", Model: "explorer-fixture", Effort: "high", Role: "explorer"}
 		c.Config.Codex = &config.Codex{Executable: executable, ExecutableHash: executableHash, StateRoot: stateRoot, AuthSource: authSource, UsageQualified: true}
 		c.Config.Access.Profiles = append(c.Config.Access.Profiles, access.Profile{Version: 1, Name: "chatgpt", Kind: "subscription", Runtime: "codex-app-server", Provider: "openai", AuthMode: "chatgpt-session", RepositoryClasses: []access.Class{access.Private}})
@@ -109,6 +115,52 @@ func TestExplorerWorkingContextCodexSettledResultUsesCachedReceipt(t *testing.T)
 	admitted, err := Inspect(fixture.controllerPath)
 	if err != nil || len(admitted.Explorations) != 1 || !sameCanonical(admitted.Explorations[0].Result, result) || len(admitted.WorkingContextHistory) != 1 {
 		t.Fatal("cached recovery changed result or lost context", err)
+	}
+}
+
+func TestExplorerWorkingContextCompletedTurnKeepsFrozenGuidanceScope(t *testing.T) {
+	for _, version := range []int{0, 1} {
+		t.Run(string(rune('A'+version)), func(t *testing.T) {
+			policy := &ExecutionPolicy{Mode: "autonomous-v1", GraphVersion: 1, MaxParallel: 1, Context: taskContextBoundedV1, ScheduledExplorerDispatchVersion: 1, WorkingContextVersion: version}
+			fixture := newExplorerFixtureWithConfig(t, policy, func(c *Creation) {
+				c.Config.ReviewerContract = "json-v1"
+				var err error
+				c.AgentContext, err = agentcontext.Capture(context.Background(), c.Repository)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}, true)
+			s, err := Inspect(fixture.controllerPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			base := mustExplorerBase(t, s, fixture.question)
+			rederived, err := scopedScheduledInvocation(s, base, fixture.task.Operation, &fixture.turn, "")
+			if err != nil || rederived.ID == fixture.invocation.ID {
+				t.Fatal("fixture failed to change guidance scope after observation", err)
+			}
+			got, err := scheduledInvocationFromSnapshot(s, fixture.task, &fixture.turn)
+			if err != nil || got != fixture.invocation {
+				t.Fatal("completed turn lost its frozen input", err)
+			}
+			if repeated, err := ExecuteScheduledClaim(context.Background(), fixture.controllerPath, fixture.claim); err != nil || repeated.Status != taskscheduler.StatusSucceeded {
+				t.Fatal("completed scope-drift turn was not observed", err)
+			}
+			for _, mutation := range []string{"question", "invocation", "turn"} {
+				task, turn := fixture.task, fixture.turn
+				switch mutation {
+				case "question":
+					task.Input += " changed"
+				case "invocation":
+					task.InvocationID = strings.Repeat("f", 64)
+				case "turn":
+					turn.AgentID = strings.Repeat("e", 64)
+				}
+				if _, ok := acceptedScheduledExplorerInvocation(s, task, &turn); ok {
+					t.Fatal("accepted result granted a different frozen task", mutation)
+				}
+			}
+		})
 	}
 }
 

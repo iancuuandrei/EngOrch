@@ -158,3 +158,13 @@ registered planner root. No dynamic explorer dispatched. Preserve that run as
 a setup failure; it does not count as an A-arm treatment outcome. The bounded
 repair registers the existing accepted planner result for the shared executor
 opt-in, using the existing agent-tree mechanism. Default runs remain unaffected.
+
+The next historical probe on `ae10cfcce03e` admitted a successful Codex explorer
+result, but scheduler post-dispatch inspection failed when the observation's new
+paths changed source-guidance selection. Runtime and access receipts were
+completed; the provider effect was not UNKNOWN. Completed dynamic turns now use
+their exact replay-admitted invocation, question and agent-turn binding for
+inspection. New/unmatched turns still derive and validate their frozen identity.
+Source-guidance regressions cover both retention-off and retention-on modes,
+including rejection of changed question, invocation or agent identity. These
+debugging probes are not pooled into a matched-treatment acceptance claim.

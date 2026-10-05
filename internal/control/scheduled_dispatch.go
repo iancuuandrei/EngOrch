@@ -595,7 +595,11 @@ func scheduledInvocation(task taskscheduler.TaskSpec, turn *taskscheduler.AgentT
 		case taskscheduler.OperationPlanner:
 			invocation, err = plannerInvocationForSnapshot(s)
 		case taskscheduler.OperationExplorer:
-			invocation, err = explorerInvocation(s, task.Input)
+			if recorded, ok := acceptedScheduledExplorerInvocation(s, task, turn); ok {
+				invocation, recordedTurnInvocation = recorded, true
+			} else {
+				invocation, err = explorerInvocation(s, task.Input)
+			}
 		case taskscheduler.OperationWriter:
 			if graphWriterCohortEnabled(s) {
 				if task.ID == "" {
@@ -678,7 +682,11 @@ func scheduledInvocationFromSnapshot(s Snapshot, task taskscheduler.TaskSpec, tu
 		case taskscheduler.OperationPlanner:
 			invocation, err = plannerInvocationForSnapshot(s)
 		case taskscheduler.OperationExplorer:
-			invocation, err = explorerInvocation(s, task.Input)
+			if recorded, ok := acceptedScheduledExplorerInvocation(s, task, turn); ok {
+				invocation, recordedTurnInvocation = recorded, true
+			} else {
+				invocation, err = explorerInvocation(s, task.Input)
+			}
 		case taskscheduler.OperationWriter:
 			if graphWriterCohortEnabled(s) {
 				if task.ID == "" {
@@ -733,6 +741,25 @@ func scheduledTurnInvocation(base runtime.Invocation, operation taskscheduler.Op
 		return runtime.Invocation{}, err
 	}
 	return runtime.NewInvocationWithCodexAutoCompact(base.Profile, string(input), base.CodexAutoCompactOption())
+}
+
+// An admitted observation is bound to its exact original invocation. Later
+// observations can change source-guidance selection for new work; they cannot
+// rewrite this completed turn's input when probing or reconciling its receipt.
+func acceptedScheduledExplorerInvocation(s Snapshot, task taskscheduler.TaskSpec, turn *taskscheduler.AgentTurnBinding) (runtime.Invocation, bool) {
+	if turn == nil || task.Operation != taskscheduler.OperationExplorer || turn.TurnID != task.ID {
+		return runtime.Invocation{}, false
+	}
+	dispatch, ok := s.AgentDispatch[task.InvocationID]
+	if !ok || dispatch.Admission.AgentTurn == nil || *dispatch.Admission.AgentTurn != *turn {
+		return runtime.Invocation{}, false
+	}
+	for _, record := range s.Explorations {
+		if record.Question == task.Input && record.Invocation.ID == task.InvocationID && record.Invocation == dispatch.Admission.Invocation && record.Invocation.Validate() == nil {
+			return record.Invocation, true
+		}
+	}
+	return runtime.Invocation{}, false
 }
 
 func scheduledInvocationFromContext(ctx context.Context, operation taskscheduler.Operation, base runtime.Invocation) (runtime.Invocation, error) {
