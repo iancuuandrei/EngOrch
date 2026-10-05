@@ -57,7 +57,7 @@ func TestPreviousRepairAnchorsBindRunAndBoundFile(t *testing.T) {
 }
 
 func TestDiagnoseArgumentsRejectBeforeJournalAccess(t *testing.T) {
-	for _, args := range [][]string{nil, {"run", "--previous", "report.json"}, {"run", "--unknown"}, {"run", "--anchor", "extra"}} {
+	for _, args := range [][]string{nil, {"run", "--previous", "report.json"}, {"run", "--unknown"}, {"run", "--anchor", "extra"}, {"run", "--closure", "--anchor"}, {"run", "--closure", "--previous", "report.json"}} {
 		if err := diagnoseCommand(context.Background(), t.TempDir(), args, os.Stdout); err == nil {
 			t.Fatalf("invalid diagnosis accepted %v", args)
 		}

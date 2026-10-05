@@ -111,6 +111,45 @@ The fixer still proposes changes through its existing contract and candidate
 tools. Every configured native check and independent review remains required.
 See [executed integration evidence](../evaluation/repair-fixer-context.md).
 
+## Inspect native recheck evidence after a repair
+
+```powershell
+fabric diagnose RUN --closure
+```
+
+This reads one validated journal prefix and reports historical findings separately
+from later evidence. It does not call a model, read workspace files, append
+events or reopen a budget. Use it on the repository that owns RUN. It cannot be
+combined with `--anchor` or `--previous`.
+
+`native_oracle_passed` means the exact configured check was observed PASS in a
+chronologically later, distinct plan on the final accepted READY candidate.
+The comparison excludes candidate identity and preserves every other frozen
+invocation field: check arguments and timeout, directory, root executable path/
+hash and complete selected environment. The report binds original finding and
+oracle IDs to the new candidate, plan, invocation and observation hash.
+
+This proves the native oracle passed, not that Fabric established a root cause,
+that project test code was unchanged, or that every possible defect is absent.
+A prior timeout, cancellation or output overflow can also be followed by a PASS;
+that later receipt does not explain the earlier failure. Final native checks and
+candidate-bound review remain required. Changed executable/environment/check
+definitions produce `oracle_changed`; missing acceptance stays `open`.
+
+Unavailable/NOT_RUN checks are `unavailable_not_semantic`, never invented
+successful repairs. Reviewer concerns remain `recheck_required`: ordinary
+approval is not an explicit recheck of an identified prior concern. Exact reviewer
+recheck support remains pending. An empty list does not settle UNKNOWN effects.
+
+At most 128 findings from the most recent gate records are retained. Omitted
+entries contribute to `omitted_findings` and `omitted_evidence_hash`.
+The omission hash binds original finding IDs, oracle definitions and sequence;
+it does not include derived closure statuses for omitted entries.
+Original finding identity includes complete source evidence, including shortened tails.
+Review text is private, untrusted run evidence. Check arguments, environment
+values and raw process output are not copied into this report. See the
+[scoped closure evidence](../evaluation/repair-closure.md).
+
 Repair Intelligence supplies typed diagnosis, exact scope inspection, bounded
 preimage validation and explicit unique code relocation. Deterministic
 transformations, strategy execution and finding closure are not implemented

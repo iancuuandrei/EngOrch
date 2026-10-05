@@ -162,6 +162,10 @@ func TestRepairDesignPathRevisionWriterAndFreshGatesReachReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	originalReviewDiagnosis, err := DiagnoseRepair(s)
+	if err != nil || len(originalReviewDiagnosis.Findings) != 1 {
+		t.Fatal("original review finding unavailable", err)
+	}
 	s, err = autonomousGraphRepairing(ctx, path, s)
 	if err != nil || s.RepairAttempts != 1 || s.Graph.Revision != 2 {
 		t.Fatalf("failed review did not add bounded repair design: revision=%d slot=%d err=%v", s.Graph.Revision, s.RepairAttempts, err)
@@ -355,6 +359,10 @@ func TestRepairDesignPathRevisionWriterAndFreshGatesReachReady(t *testing.T) {
 	}
 	if err := requireGraphReady(ready); err != nil {
 		t.Fatal("READY lacks complete actual repair evidence", err)
+	}
+	closure, err := ReadRepairClosure(path, ready.Creation.Repository.Root, ready.RunID)
+	if err != nil || !closure.Accepted || len(closure.Findings) != 1 || closure.Findings[0].Status != "recheck_required" || closure.Findings[0].Finding.ID != originalReviewDiagnosis.Findings[0].ID {
+		t.Fatalf("generic approved review silently closed original concern: %+v %v", closure, err)
 	}
 }
 

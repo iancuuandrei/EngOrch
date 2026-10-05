@@ -75,6 +75,8 @@ New runs can opt into `--repair-intelligence` to provide these structured
 findings and exact repair scope to the fixer, validating preimages from complete
 recorded task context. Strategy suggestions remain advisory; automatic strategy
 routing and live quality gains remain unqualified.
+`diagnose RUN --closure` binds historical native findings to a later exact
+check pass on the accepted candidate; reviewer concerns require explicit recheck.
 
 New autonomous runs additionally use [source-bound agent context](agent-context.md):
 scope-aware repository instructions and role/task-selected workflows from

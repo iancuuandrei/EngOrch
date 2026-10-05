@@ -37,6 +37,14 @@ degradation. The existing real Git fixture reaches READY after a repair, fresh
 native checks and independent fixture review. This is integration evidence;
 live model quality and token/cost benefit remain **NOT RUN**.
 
+v1.1.10 adds [historical native recheck evidence](repair-closure.md) through
+`diagnose RUN --closure`. Original finding identities remain separate from
+matching final native oracle receipts. A real Git check failure, authorized
+fixture repair, fresh native PASS and deterministic review reach READY with a
+matching receipt. Reviewer concerns remain explicitly `recheck_required`;
+automatic exact reviewer closure and live repair-benefit qualification remain
+**NOT RUN**.
+
 The active [v2 goal](../roadmap/v2-product-plan.md) starts with baseline/context
 qualification, then structured repair. Final v2 tests, frozen cohort, language
 canaries, installed acceptance and release qualification remain **NOT RUN**.

@@ -85,7 +85,7 @@ Output is canonical JSON except help, aggregated run-snapshot JSON, and `inspect
 | `plan` | `OBJECTIVE or --file PATH` | Create a plan from exact objective text or a bounded UTF-8 file using the explicitly configured runtime and access profile. |
 | `status` | `` | List validated local run IDs, workflow/lifecycle states and plan IDs without input or evidence bodies. |
 | `inspect` | `[RUN] [--export-jsonl]` | Replay one run and show its bound inputs and state, or export its validated canonical event history. |
-| `diagnose` | `RUN [--anchor] [--previous REPORT_JSON]` | Project repair findings and admitted scope; optionally validate current bytes or uniquely relocate prior code hints, without dispatch or retry authority. |
+| `diagnose` | `RUN [--anchor [--previous REPORT_JSON] | --closure]` | Project repair findings and admitted scope; optionally validate current bytes or uniquely relocate prior code hints; closure reports historical findings and exact final native recheck receipts, without dispatch or retry authority. |
 | `checkpoint` | `RUN` | Emit a payload-free checkpoint with exact source/candidate/graph identity, completed tasks, gate status, uncertainty counts and a bounded acceptance conclusion. |
 | `resume` | `[RUN] [ACTOR NONCE] or --autonomous [RUN]` | Resume planning, explicitly reopen a settled pause with ACTOR and NONCE, or continue one bounded autonomous run without resending uncertain work. |
 | `approve` | `RUN PLAN ACTOR` | Approve one exact plan with an explicit human actor. |

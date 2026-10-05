@@ -77,3 +77,37 @@ MUST be removed if it would exceed a 256 KiB writer input; mandatory existing
 input MUST remain intact. Byte bounds MUST NOT be presented as token savings.
 Strategy suggestions MUST remain advisory. Existing proposal validation,
 repair budgets, provider authority, native checks and review remain unchanged.
+
+## Historical native recheck projection
+
+`--closure` MUST read and fully replay-validate one journal prefix, then check
+the requested run/repository and configured controller path against that same
+prefix. It MUST NOT replay every prefix, observe the workspace, append events,
+dispatch effects or grant repair authority. It MUST remain exclusive with
+`--anchor`/`--previous`; default diagnosis bytes MUST remain unchanged.
+
+Historical native findings MUST use the complete terminal VerificationState
+and original ordinal through the existing finding identity function. Review
+findings MUST use the original full ReviewRecord context hash, shortening rules
+and ordinal. Partial current plans and operator quiescence records MUST remain
+truthful; quiescence MUST NOT become a successful result.
+
+A native finding MAY report `native_oracle_passed` only when its failed plan
+precedes a distinct final plan, that plan belongs to the accepted candidate-bound
+READY checkpoint, and the original and final invocation definitions match with
+only candidate identity excluded. All other invocation fields MUST be bound,
+including full environment, executable hash, directory and timeout. Original
+finding/gate/oracle identities MUST remain separate from closure candidate,
+plan, invocation and observation hash. This status MUST NOT claim semantic
+root-cause proof or immutable project test code. Timeout/cancellation/overflow
+receipts remain original failures even if the later matching oracle passes.
+
+Without final acceptance the status MUST remain `open`; a substituted final
+oracle MUST yield `oracle_changed`. Unavailable original checks MUST remain
+`unavailable_not_semantic`. Generic approved review MUST NOT close historical
+review concerns, which remain `recheck_required` pending explicit recheck support.
+
+Derived history MUST retain at most 128 findings, count omissions and hash their
+original finding identities, oracle definitions and journal sequence in order.
+The report MUST NOT expose raw invocation arguments, environment or process
+output. Bounded review messages retain the existing private-evidence boundary.

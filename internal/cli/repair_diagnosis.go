@@ -19,16 +19,24 @@ func diagnoseCommand(ctx context.Context, root string, args []string, out io.Wri
 	flags := flag.NewFlagSet("diagnose", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	anchor := flags.Bool("anchor", false, "validate current candidate bytes")
+	closure := flags.Bool("closure", false, "inspect historical findings and exact native recheck receipts")
 	previous := flags.String("previous", "", "use prior report anchors as untrusted localization hints")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
-	if flags.NArg() != 0 || (*previous != "" && !*anchor) {
-		return errors.New("diagnose expects RUN [--anchor] [--previous REPORT_JSON]")
+	if flags.NArg() != 0 || (*previous != "" && !*anchor) || (*closure && (*anchor || *previous != "")) {
+		return errors.New("diagnose expects RUN [--anchor [--previous REPORT_JSON] | --closure]")
 	}
 	path, err := runPath(root, args[0])
 	if err != nil {
 		return err
+	}
+	if *closure {
+		r, err := control.ReadRepairClosure(path, root, args[0])
+		if err != nil {
+			return err
+		}
+		return output(out, r)
 	}
 	s, err := control.Inspect(path)
 	if err != nil {
