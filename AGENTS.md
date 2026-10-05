@@ -1,90 +1,89 @@
-# Fabric contributor instructions
+# Fabric agent instructions
 
-## Product objective
+## Scope and navigation
 
-Fabric builds useful agent infrastructure. Prioritize the documented journey:
-clone, install/build, configure a model, initialize, perform a real coding task,
-plan/delegate/execute/review, and inspect durable results. Ship capabilities;
-harden demonstrated failures. Self-hosting is dogfooding, not mandatory authoring.
-Direct Codex/human product edits are allowed.
+These instructions apply throughout the repository unless a deeper AGENTS.md
+provides more specific guidance. Explicit user instructions take precedence.
 
-Freeze unnecessary controller/replay/settlement expansion. Infrastructure repairs
-must address data corruption, duplicate external effects, or a demonstrated
-normal-use blocker. Bound investigations and prefer the smallest useful repair.
-Do not start repeated benchmarks or governance-only work packages.
+Before changing behavior, read:
 
-## Branches and commits
+1. [README.md](README.md) for the product and documented entry points.
+2. [docs/README.md](docs/README.md) to locate the authoritative area guide.
+3. [CONTRIBUTING.md](CONTRIBUTING.md) for development and verification workflow.
+4. The relevant specification or ADR before changing a documented contract.
 
-- Work on `dev` and preserve its complete incremental history. New development
-  commit titles begin with the current patch version, e.g. `v1.1.3: explain ...`.
-- `main` contains one rolling snapshot per major/minor line, e.g. `v1.0`, `v1.1`.
-  The historical v0.0.0/v0.0.1 bootstrap checkpoints remain separate.
-- Each trusted push to `dev` updates the matching `main` snapshot to the exact
-  dev tree. For the same major/minor line, replace only the latest checkpoint,
-  preserving its title, sole parent, original author date and committer date.
-- A newer major/minor line creates one new checkpoint with the previous main
-  snapshot as its parent. Older-line promotions are refused.
-- All new commits use author AND committer
-  `automation:fabric-v1-sol-supervisor <automation@fabric.invalid>`.
-  Do not add human coauthors or `Co-authored-by` trailers.
-- Never fast-forward `dev` onto `main`, merge the development lineage into main,
-  or add ordinary fix/docs/merge commits to main. Keep every dev commit intact.
-- The `automation:fabric-v1-sol-supervisor` workflow performs rolling snapshot
-  updates from exact trusted current dev SHAs, using a main force-with-lease.
-  The user has explicitly authorized these updates on every dev push; do not
-  request confirmation again for each update.
-- Review changes and perform applicable requested verification before publishing
-  dev. Milestone source snapshots are separate from installed/release qualification.
-  Published releases still require their applicable review, acceptance and
-  Sonar/security gates.
-- If explicitly asked to create a PR targeting main, use a separate automation
-  bot-backed publication procedure and
-  a snapshot branch; do not submit the full dev lineage. Attach created PRs to
-  the Codex task. The rolling synchronization job itself does not create PRs.
-- Preserve published tags, release assets and SHA-bound evidence. Never move
-  them to match a rolling checkpoint. The main commit SHA changes as its tree
-  changes; its preserved date does not mean the source tree is unchanged.
-- Other public history restructures require explicit authorization, an exact
-  remote backup first, and `--force-with-lease` with the expected old ref.
+| Responsibility | Authoritative location |
+| --- | --- |
+| Component structure and boundaries | docs/architecture/ |
+| Required behavior and invariants | docs/specifications/ |
+| Architectural decisions and rationale | docs/adr/ |
+| Current user workflows | docs/guides/ |
+| Command and interface reference | docs/reference/ |
+| Scoped measurements and qualification | docs/evaluation/ and release records |
+| Planned work and product priorities | docs/roadmap/ |
+| Contribution and publication | CONTRIBUTING.md and docs/contributing/ |
 
-The authorized October 2026 consolidation leaves `v0.0.0`, `v0.0.1`, `v1.0`,
-and `v1.1` on main. The v1.1 snapshot includes subsequent v1.1.1-v1.1.3 fixes
-and these rules, with the original v1.1.0 checkpoint date. It does not replace
-that already published tag or package. The full development history is on dev.
+Historical records describe their exact source, artifact or run. Do not infer
+current behavior from them. Link to authoritative details instead of copying
+changing rules into this file.
 
-## Correctness and evidence
+## Engineering workflow
 
-Preserve external-effect ownership, invocation/candidate/source identity,
-immutable policies and bounded repair budgets. Never resend an uncertain effect.
-UNKNOWN stays UNKNOWN until admissible evidence settles it. Diagnostics cannot
-grant retry authority or count as semantic results.
+Inspect relevant code, checks and documentation before editing. Establish the
+affected contracts for substantial features or refactors, then make the
+smallest coherent change that satisfies the task. Avoid speculative machinery.
 
-Failures should expose the stage, a safe bounded diagnostic, retained run/result
-identity and a legal next action. Keep credentials, raw provider responses and
-prompts out of public diagnostics. Prefer graceful optional-capability degradation
-and measured resource admission over unexplained abrupt termination.
+Go orchestration code is under cmd/ and internal/; Rust repository intelligence
+stays behind its documented interfaces. Preserve schemas and ownership across
+these boundaries.
 
-Do not weaken oracles, alter frozen acceptance criteria, pool attempts into an
-unchanged-cohort claim, or count controller generations as product completion.
-Report PASS, FAIL, NOT RUN, BLOCKED and unavailable usage honestly. Cached input
-is a subset of input; reasoning output is a subset of output.
+Preserve unrelated dirty changes, worktrees, journals and provider state.
+Never reset or discard user work to obtain a clean checkout. Review the diff
+and update documentation with externally visible behavior changes.
 
-## Development workflow
+## Correctness and authority
 
-Read the current README and relevant guides/evaluation records before changing
-behavior. Go code is under `cmd/` and `internal/`; repository intelligence and
-release tooling have documented interfaces. Preserve schemas and ownership
-contracts across those boundaries. Update user documentation with behavior changes.
+Preserve external-effect ownership, retry authority, invocation/candidate/source/
+run identity, immutable policies, durable evidence and bounded repair budgets.
+Keep candidates isolated until their applicable verification and review pass.
 
-Run/add tests when requested by the user; prefer discriminating regressions and
-targeted checks to repeated full-suite/benchmark runs. Formatting and static
-inspection are routine checks. Never report unexecuted qualification.
+Never repeat an external effect with an uncertain outcome to discover whether
+it succeeded. UNKNOWN stays distinct from success and failure until admissible
+evidence settles it. Diagnostics and telemetry cannot grant authority, approve
+candidates or count as semantic results.
 
-Preserve unrelated dirty changes, journals, worktrees and provider state. Use
-an isolated checkout when needed. Do not reset dirty checkouts or delete evidence.
+Expose the failed stage, a safe bounded diagnostic, retained identity and a
+legal next action. Keep credentials, raw provider responses and prompts out of
+public diagnostics. Prefer graceful degradation of optional capabilities and
+measured resource admission over unexplained termination.
 
-Use subagents only when explicitly requested or authorized for delegation; when
-used, select GPT 6 Luna with High reasoning. Give writers explicit ownership
-and warn that other agents share the codebase. Muse Spark through OpenCode is
-preferred when usable; an uncertain route failure is not permission to repeat
-effects or claim success.
+## Verification and evidence
+
+Follow the pinned toolchains and checks in [CONTRIBUTING.md](CONTRIBUTING.md).
+Format changed code. When tests or verification are requested, start with
+discriminating checks for the changed surface; broaden only as justified.
+Do not start repeated benchmarks merely to claim progress.
+
+Report PASS, FAIL, NOT RUN, BLOCKED and unavailable usage honestly. Never claim
+an unexecuted check, benchmark, provider run or qualification. Local tests do
+not establish installed, hosted or release qualification. Do not weaken frozen
+oracles or combine separate attempts into an unchanged-cohort claim. Cached
+input is a subset of input; reasoning output is a subset of output.
+
+## Documentation and publication
+
+Follow [the documentation standard](docs/contributing/documentation-standard.md).
+Preserve historical evaluation scope; specifications define required behavior
+and do not prove implementation or qualification.
+
+Branch, commit, automation identity and publication rules have one authoritative
+home: [source-history.md](docs/contributing/source-history.md). Read it before
+committing or publishing. Preserve immutable tags, assets and SHA-bound evidence.
+Other public-history rewrites and destructive Git operations require explicit
+user authorization and must satisfy that policy.
+
+## Completion
+
+Confirm the requested change, relevant executed checks, matching documentation
+and preservation of unrelated work. Summarize what changed and the exact
+verification performed without extending evidence beyond its demonstrated scope.

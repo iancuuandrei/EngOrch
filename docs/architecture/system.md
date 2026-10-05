@@ -10,8 +10,8 @@ intelligence through configured snapshot and query interfaces.
 flowchart LR
   objective["Objective"] --> cli["Fabric CLI"]
   cli --> control["Go control plane"]
-  control --> graph["Validated task graph"]
-  graph --> explore["Read-only research and design"]
+  control --> taskGraph["Validated task graph"]
+  taskGraph --> explore["Read-only research and design"]
   explore --> context["Bounded, candidate-aware context"]
   context --> writer["Scoped implementation"]
   writer --> candidate["Isolated Git worktree"]
@@ -25,7 +25,7 @@ flowchart LR
   subgraph authority["Control and evidence"]
     control --> journal["Append-only run journal"]
     control --> gates["Identity, scope and effect gates"]
-    gates --> graph
+    gates --> taskGraph
     candidate -. identity-bound evidence .-> journal
     verify -. result .-> journal
     review -. verdict .-> journal
@@ -47,7 +47,7 @@ flowchart LR
   classDef teal fill:#d9f1ec,color:#123b43,stroke:#167d83,stroke-width:2px
   classDef slate fill:#edf1f5,color:#27384a,stroke:#8393a4,stroke-width:1px
   classDef amber fill:#fff0d8,color:#563b12,stroke:#b97819,stroke-width:2px
-  class objective,cli,control,graph,explore,context,writer,adapters navy
+  class objective,cli,control,taskGraph,explore,context,writer,adapters navy
   class candidate,verify,review,journal,gates,ri teal
   class codex,opencode,provider slate
   class ready teal

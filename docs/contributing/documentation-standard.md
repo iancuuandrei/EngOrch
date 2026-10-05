@@ -60,6 +60,11 @@ short node text, consistent direction and explicit labels on non-obvious
 relationships. Avoid decorative gradients, unsupported icons, dense crossings
 and diagrams that imply unqualified performance or release status.
 
+Render changed Mermaid blocks before publication; a fenced block and valid
+Markdown do not establish valid diagram syntax. Avoid reserved syntax words
+as node identifiers. Check every repository diagram when changing shared
+diagram conventions, and report the renderer version and executed scope.
+
 When a diagram describes a process, keep its decision points consistent with
 the corresponding guide and source. When a branch or release diagram describes
 repository history, link the source-history policy and label rolling snapshots

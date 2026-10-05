@@ -1,21 +1,33 @@
 # Contributing
 
-Read [AGENTS.md](AGENTS.md) first. Fabric development happens on `dev`; keep its
-complete incremental history. Use patch-version commit titles such as
-`v1.1.3: describe the change` and the prescribed automation author/committer.
+Read [AGENTS.md](AGENTS.md) for repository navigation, then the
+[source-history policy](docs/contributing/source-history.md) before committing
+or publishing. It defines branch, version-title and automation identity rules.
 Go 1.27.1 and the repository's pinned Rust tooling are the documented toolchains.
 
 ## Source publication
 
-Trusted dev pushes synchronize a rolling major/minor view on `main`, such as
-`v1.1`. The workflow rewrites only the current line's snapshot and preserves
-its original dates. A newer line adds one checkpoint. Published tags, packages
-and evidence remain immutable. See the illustrated
-[source-history policy](docs/contributing/source-history.md).
+Follow the illustrated [source-history policy](docs/contributing/source-history.md)
+for development branches, rolling snapshots and immutable releases.
 
 Review changes and complete applicable requested verification before pushing
 dev. Direct human/Codex edits are supported; self-hosting is optional dogfooding.
 Preserve unrelated changes, immutable policies and external-effect ownership.
+
+## Product focus and agent tooling
+
+Ship useful capabilities and harden demonstrated failures. Self-hosting is
+optional dogfooding; direct Codex/human product edits are supported. Bound
+infrastructure investigations to data corruption, duplicate external effects
+or demonstrated normal-use blockers. Avoid governance-only work packages and
+repeated benchmarks. The [roadmap](docs/roadmap/v2-product-plan.md) records the
+current product priorities.
+
+Use subagents only when explicitly requested or authorized for delegation.
+When used, select GPT 6 Luna with High reasoning, give writers explicit ownership
+and warn that other agents share the checkout. Muse Spark through OpenCode is
+preferred when usable. An uncertain route failure never permits repeating an
+effect or claiming success.
 
 ## Formatting and verification
 

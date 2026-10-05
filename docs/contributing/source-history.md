@@ -1,7 +1,7 @@
 # Source history and version policy
 
 **Audience:** contributors and release operators.  
-**Authority:** [AGENTS.md](../../AGENTS.md).  
+**Authority:** this document defines repository history and publication policy.
 **Automation:** [`automation:fabric-v1-sol-supervisor`](../../.github/workflows/automation-pr.yml).
 
 ## Two views of the same source
@@ -72,6 +72,16 @@ no-op. A queued older dev event cannot restore outdated source.
 A newer line, such as dev `v1.2.0`, adds `main` checkpoint `v1.2`. A source from
 an older line is refused. Every new commit uses author and committer
 `automation:fabric-v1-sol-supervisor <automation@fabric.invalid>`.
+Do not add human coauthors or `Co-authored-by` trailers. Development commit
+titles begin with the current patch version; main titles contain only the
+major/minor checkpoint label. Never fast-forward dev onto main or add ordinary
+fix, documentation or merge commits to main.
+
+The user has authorized rolling synchronization on every trusted dev push;
+no per-push confirmation is required. Other public-history restructures require
+explicit authorization, an exact remote backup first, and force-with-lease
+against the expected old ref. Published tags and assets must never move to
+match a rolling checkpoint.
 
 ## Review, recovery and releases
 
@@ -84,6 +94,7 @@ Routine synchronization does not open a PR for each development push. If a
 main-targeting PR is explicitly requested, create it through automation using a
 snapshot branch and a separate bot-backed publication procedure; the rolling
 synchronization job does not create PRs. Never merge the dev lineage into main.
+Attach any created PR to the originating Codex task.
 
 After a missed synchronization, inspect the latest dev workflow and current refs.
 Rerun that workflow only if its source SHA is still the current dev tip, or
