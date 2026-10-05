@@ -20,6 +20,14 @@ compatibility fix passed focused wire/replay regressions and independent review.
 Live guidance/skill quality and matched benefit remain unqualified; earlier
 cohorts cannot qualify this behavior.
 
+The next Repair Intelligence increment adds
+[read-only repair diagnosis](../guides/repair-diagnosis.md): typed native versus
+review findings, full-evidence identities, conservative Go diagnostic locations,
+explicit stale/unvalidated labels and specs limited to already ready repair
+tasks. [Executed diagnosis checks](repair-diagnosis.md) cover gate/scope isolation, pending launches,
+hidden diagnostic tails, ambiguous paths and no journal mutation. Automatic
+re-anchoring/routing and live repair-benefit qualification remain **NOT RUN**.
+
 The active [v2 goal](../roadmap/v2-product-plan.md) starts with baseline/context
 qualification, then structured repair. Final v2 tests, frozen cohort, language
 canaries, installed acceptance and release qualification remain **NOT RUN**.

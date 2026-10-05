@@ -1,9 +1,8 @@
 # Fabric capabilities
 
-This guide describes the v1.1.3 product implementation checkpoint
-(`09a646522d3bfa0eb8cfbe545406971c695b7ffd`), and links to evidence at its
-recorded scope. It is not an installed-release qualification. The published
-v1.0.0 acceptance applies to Windows amd64; the broader v2.0.0 product goal
+This guide describes development capabilities and links to evidence at its
+recorded source scope. It is not an installed-release qualification. The
+published v1.1.0 acceptance applies to Windows amd64; the broader v2.0.0 product goal
 remains open. See the [source history policy](../contributing/source-history.md)
 for the difference between incremental `dev` history, rolling `main` snapshots
 and immutable release tags.
@@ -66,6 +65,12 @@ bundle includes both executables. See the [packaging guide](release.md) and
 [RI query examples](engineering-orientation.md) for paths and pinning.
 
 ## Implemented capabilities
+
+Current development also provides [repair diagnosis](repair-diagnosis.md)
+through `fabric diagnose RUN`: source-typed findings, conservative Go diagnostic
+locations, stale-candidate labels and exact ready repair-task write scope.
+It is advisory inspection; automatic repair routing and live quality gains
+remain unqualified.
 
 New autonomous runs additionally use [source-bound agent context](agent-context.md):
 scope-aware repository instructions and role/task-selected workflows from

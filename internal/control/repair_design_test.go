@@ -254,6 +254,10 @@ func TestRepairDesignPathRevisionWriterAndFreshGatesReachReady(t *testing.T) {
 	if !ok || !stringListsEqual(impl.WritePaths, []string{"bool_ext.go"}) {
 		t.Fatalf("repair write ownership differs from design: %+v", impl)
 	}
+	diagnosis, err := DiagnoseRepair(refined)
+	if err != nil || refined.State != "REPAIRING" || len(diagnosis.Specifications) != 1 || !stringListsEqual(diagnosis.Specifications[0].AllowedWritePaths, impl.WritePaths) {
+		t.Fatalf("replay-valid repair lost its admitted diagnosis scope: %+v err=%v", diagnosis, err)
+	}
 	if err := maybeAdmitTaskContext(ctx, path, "writer", c.Objective); err != nil {
 		t.Fatal(err)
 	}

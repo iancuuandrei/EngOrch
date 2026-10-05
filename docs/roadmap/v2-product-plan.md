@@ -18,7 +18,11 @@ context compilation, isolated writers and serial integration, resource vectors,
 impact review, deterministic derived caches, model-policy evidence, checkpoints,
 native compaction and resilient typed outcomes. Their presence is separate from
 measured benefit. Agent-context v1.1.4 has deterministic regression coverage;
-its model-quality comparison remains NOT RUN.
+its first parser canary is
+[NOT QUALIFIED](../evaluation/agent-context-parser-canary.md): control failed
+its repair budget and treatment retained an unresolved effect. The local
+planner wire-schema blocker was corrected with focused regressions and review;
+fresh model-quality qualification remains pending.
 
 The eight canonical task identities have accepted evidence across two records:
 raw original cohort 7/8, separately identified capacity successor 1/1. This is

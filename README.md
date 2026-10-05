@@ -28,6 +28,7 @@ the result is an isolated Git worktree and durable run evidence.
 | Native verification | Your project's commands run on the changed candidate |
 | Independent review | A separate role evaluates the candidate before READY |
 | Bounded repair | Failed checks or requested changes lead to repairs within the admitted scope and budget |
+| Repair diagnosis | `fabric diagnose RUN` separates recorded failures from review concerns and exposes existing admitted repair scope |
 | Context selection | Bounded repository evidence selected for the task and role; optional Rust intelligence |
 | Runtime choice | Configured Codex, OpenCode or direct-provider adapters, with explicit model choices |
 | Durable inspection | Run identity, diff, checks, review, checkpoints and token categories remain inspectable |

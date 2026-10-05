@@ -104,6 +104,16 @@ func TestLocalPlanApprovalAndResume(t *testing.T) {
 	if !bytes.Equal(exported, run("inspect", s.RunID, "--export-jsonl")) {
 		t.Fatal("read-only export changed history")
 	}
+	var diagnosis control.RepairDiagnosis
+	if err := json.Unmarshal(run("diagnose", s.RunID), &diagnosis); err != nil {
+		t.Fatal(err)
+	}
+	if diagnosis.RunID != s.RunID || diagnosis.Authority != "advisory_only" || len(diagnosis.Findings) != 0 {
+		t.Fatal("planning run acquired invented findings", diagnosis)
+	}
+	if !bytes.Equal(exported, run("inspect", s.RunID, "--export-jsonl")) {
+		t.Fatal("diagnosis appended controller events")
+	}
 	var paused control.Snapshot
 	if err := json.Unmarshal(run("pause", s.RunID, "fixture-human", "pause-1"), &paused); err != nil || paused.Lifecycle.Status != control.LifecyclePauseRequested {
 		t.Fatal("pause request missing", err)

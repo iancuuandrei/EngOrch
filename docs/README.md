@@ -14,6 +14,7 @@ the row that matches your question; follow the linked source for the details.
 | Read the earlier source-built first-task record | [Real-task guide](getting-started/real-task.md) | The workflow accepted at its recorded source identity |
 | Understand the product shape | [System architecture](architecture/system.md) | Control flow, authority boundaries, candidate gates and evidence |
 | See what is implemented | [Capabilities](guides/features.md) | Capability map, entry points, limits and qualification links |
+| Inspect a failed candidate | [Repair diagnosis](guides/repair-diagnosis.md) | Typed evidence and exact admitted repair scope, without dispatch |
 | Use a command or flag | [CLI reference](reference/cli.md) | Generated command and option reference |
 | Understand a contract or design choice | [Specifications](specifications/) and [ADRs](adr/) | Normative invariants and accepted architectural decisions |
 | Contribute code or docs | [Contributing](../CONTRIBUTING.md) and [documentation standard](contributing/documentation-standard.md) | Local workflow, evidence rules, links, references and documentation structure |
