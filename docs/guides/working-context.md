@@ -17,6 +17,8 @@ follow-ups has not exercised the treatment.
 opt-in. The latter permits the same Codex explorer runtime without editable notes.
 All A/B/C experiment arms must enable that shared executor; only C enables
 working-context retention. Both immutable policies are absent on historical runs.
+Autonomous preparation registers the accepted planner result as the read-only
+parent for these dynamic children; registration does not invoke another model.
 
 The parent's useful sequence is: spawn a child, wait for its accepted structured
 result, then follow up that same child. The first turn has no retained notes.

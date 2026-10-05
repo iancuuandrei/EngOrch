@@ -285,6 +285,49 @@ func ensureDirectDispatchCapacity(snapshot Snapshot, invocation runtime.Invocati
 	return err
 }
 
+// prepareManagedExplorerRoot registers the already accepted planner result for
+// opt-in dynamic explorers. It does not dispatch a planner or grant new scope.
+func prepareManagedExplorerRoot(controllerPath string, snapshot Snapshot) error {
+	if !managedExplorerDispatchEnabled(snapshot) {
+		return nil
+	}
+	if err := autonomousDispatchBlocked(snapshot); err != nil {
+		return err
+	}
+	path := controllerPath + ".agent-tree"
+	tree, err := agenttree.Inspect(path)
+	if err != nil {
+		return err
+	}
+	if tree.TreeID == "" {
+		_, err = bootstrapAgentTreeRoot(path, snapshot)
+		return err
+	}
+	planner, err := plannerInvocationForSnapshot(snapshot)
+	if err != nil {
+		return err
+	}
+	contextHash, err := access.InputID(planner.Input)
+	if err != nil {
+		return err
+	}
+	root, ok := agentNodeByID(tree, tree.RootAgentID)
+	if tree.TreeID != snapshot.RunID || !ok || !exactNodeFields(root, "", "/root", agenttree.NodeSpec{Name: "root", Role: "planner", Authority: agenttree.AuthorityReadOnly, InvocationID: planner.ID, ContextSHA256: contextHash}) {
+		return errors.New("managed explorer planner root differs")
+	}
+	if snapshot.Plan == nil {
+		return errors.New("managed explorer accepted planner result unavailable")
+	}
+	if err := runtime.ValidateResult(planner, *snapshot.Plan, true); err != nil {
+		return err
+	}
+	resultHash, err := canonical.Hash("harness.planner-result.v1", *snapshot.Plan)
+	if err != nil || root.Status != agenttree.StatusSucceeded || root.ResultSHA256 != resultHash {
+		return errors.Join(errors.New("managed explorer planner result binding differs"), err)
+	}
+	return nil
+}
+
 func bootstrapAgentTreeRoot(journalPath string, snapshot Snapshot) (agenttree.Snapshot, error) {
 	if snapshot.Plan == nil {
 		return agenttree.Snapshot{}, errors.New("agent tree planner root unavailable")

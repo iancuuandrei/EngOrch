@@ -150,6 +150,7 @@ and acceptance records. Development and publication follow the
 - [Documentation hub](docs/README.md)
 - [System architecture](docs/architecture/system.md)
 - [Capabilities and evidence boundaries](docs/guides/features.md)
+- [Experimental editable working context](docs/guides/working-context.md)
 - [CLI reference](docs/reference/cli.md)
 - [Product roadmap](docs/roadmap/v2-product-plan.md)
 - [Current implementation evidence](docs/evaluation/status.md)

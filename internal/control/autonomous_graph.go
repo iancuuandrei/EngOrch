@@ -1310,6 +1310,9 @@ func prepareAutonomousGraphBoundary(ctx context.Context, path string, s Snapshot
 	if err != nil || digest != s.Graph.Digest || !sameCanonicalGraph(accepted, s.Graph.Graph) {
 		return s, errors.New("autonomous preparation graph differs from accepted plan")
 	}
+	if err := prepareManagedExplorerRoot(path, s); err != nil {
+		return s, err
+	}
 	return s, nil
 }
 
@@ -1357,6 +1360,9 @@ func autonomousGraphImplementing(ctx context.Context, path string, s Snapshot) (
 			return s, false, fmt.Errorf("autonomous file effect remains UNKNOWN: %w", err)
 		}
 		return s, true, nil
+	}
+	if err := prepareManagedExplorerRoot(path, s); err != nil {
+		return s, false, err
 	}
 	if err := preflightAutonomousVerification(s); err != nil {
 		return s, false, err

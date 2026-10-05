@@ -151,3 +151,10 @@ primitive 0.206 s). The separate Codex cached-receipt regression passed in
 timeout during an existing Git finalization test; it is not a full-suite PASS.
 The narrower results do not qualify the frozen v2 cohort or demonstrate a
 token, wall-time or acceptance improvement.
+
+The first historical live preparation on source `f672fc172cd6` completed planning
+in 36.997 s, then stopped at `agent-list` because the Codex graph path had no
+registered planner root. No dynamic explorer dispatched. Preserve that run as
+a setup failure; it does not count as an A-arm treatment outcome. The bounded
+repair registers the existing accepted planner result for the shared executor
+opt-in, using the existing agent-tree mechanism. Default runs remain unaffected.
