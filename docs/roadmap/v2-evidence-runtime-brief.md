@@ -1787,6 +1787,13 @@ NOT QUALIFIED. The v1.1.19 preflight rejects unsupported destinations before new
 effects. A fresh short-checkout cohort must remain separate from this pilot;
 there is no demonstrated repair benefit yet.
 
+The subsequent [separate short-root pilot](../evaluation/repair-intelligence-short-root-20261005.md)
+demonstrates treatment READY/external PASS with native and reviewer-recheck
+closure after two repairs; control remains BLOCKED on a rejected precondition.
+One ordered historical task does not establish general quality or efficiency
+benefit. Retain the treatment opt-in and proceed to the finite Evidence Value
+Controller using the recorded action/token/time observations.
+
 ## Context selector experiment
 
 Compare:

@@ -1,0 +1,148 @@
+{
+  "schema": "fabric.repair-intelligence-pilot-summary.v1",
+  "cohort": "repair-short-root-v1119-20261005",
+  "source": "5155ccd4f1c8e815a4ed26ca32968b527c60e41d",
+  "binary_sha256": "6366543bfcf58cc9e015c58219a8c2c85fbf130c4166f266d671aa9e1aab8492",
+  "runtime_sha256": "1722907aa64401bcc9b34467ef5c2af43f6aef9a5045ef04d11d19dfae4589fb",
+  "runner_sha256": "6c76514ce0987a74d2abd195818c55a3e1018a1619b7341e43fce3fb8531b175",
+  "candidate_copy_sha256": "4e8041427563edd1351a57061b76bba6c2d15a26fd024eb2c47c637f778021a0",
+  "task": "godotenv",
+  "task_source": "ddf83eb33bbb136f62617a409142b74b91dbcff3",
+  "model": "gpt-6-luna",
+  "effort": "high",
+  "order": [
+    "control",
+    "treatment"
+  ],
+  "wall_limit_seconds_per_arm": 900,
+  "repair_limit": 2,
+  "maximum_concurrency_per_arm": 1,
+  "benefit": "NOT_ESTABLISHED",
+  "aggregate_agent_active_seconds": null,
+  "cost": null,
+  "arms": [
+    {
+      "arm": "control",
+      "run_id": "c94b7fd0d02370c10176e4e22434dc29c36ebdb7d85394701ded67201b294717",
+      "state": "REPAIRING",
+      "evaluator_terminal": "BLOCKED",
+      "last_verified_candidate_id": "919fe392fa0839d142d91726191d1c8bc1c8dd80bc96f830248afa9974fc0aad",
+      "repair_attempts": 1,
+      "repair_writer_runtime_observations": 1,
+      "structured_repair_projections": [],
+      "runtime_invocations": 7,
+      "matched_completed_runtime_invocations": 7,
+      "pending_calls": 0.0,
+      "candidate_verification_executions": 1,
+      "native_statuses": [
+        "PASS"
+      ],
+      "review_executions": 1,
+      "file_effect_observations": 1,
+      "workspace_outcome": "CONFIRMED",
+      "file_outcome": "CONFIRMED",
+      "source_read_requests": 4.0,
+      "source_list_requests": 1.0,
+      "tool_content_bytes": 156742.0,
+      "tokens": {
+        "input_tokens": 599772,
+        "cached_input_tokens": 398336,
+        "uncached_input_tokens": 201436,
+        "output_tokens": 10948,
+        "reasoning_tokens": 5421
+      },
+      "evaluation_task_wall_seconds": 326.015,
+      "outer_evaluator_wall_seconds": 327.7371173,
+      "timed_out": false,
+      "closed_findings": 0,
+      "time_to_ready_seconds": null,
+      "external_acceptance": "NOT RUN",
+      "accepted_candidate": false,
+      "closure_statuses": [
+        {
+          "status": "recheck_required",
+          "candidate_id": null,
+          "evidence_id": null,
+          "invocation_id": null,
+          "plan_id": null
+        }
+      ],
+      "rejection_observation": "Read-only retained proposal check: godotenv.go before_hash mismatches retained candidate bytes. No repair proposal/file intent accepted."
+    },
+    {
+      "arm": "treatment",
+      "run_id": "e409e32999edb9eedf812df50110eab1b5136db36e1d02812316aa8671a09c47",
+      "state": "READY",
+      "evaluator_terminal": "PASS",
+      "last_verified_candidate_id": "9343d7edef0301e2a7879d57f007e320f8fc3f338dff7e697451f9fbda80c7ec",
+      "repair_attempts": 2,
+      "repair_writer_runtime_observations": 2,
+      "structured_repair_projections": [
+        {
+          "invocation_id": "06c5df1d42787ddb031d6a3495d8eb23b782769673eb0eb9d01b119c3f3103a2",
+          "findings": 1,
+          "candidate_id": "405eb09706326fb74dd461c17fc00ff522ebfd682589692891cbc1e78ab34a11",
+          "specifications": 1,
+          "anchoring_status": "recorded_context"
+        },
+        {
+          "invocation_id": "55ad97dc3bee218029dbc60253ed6fe975017d23f4105268c469b7d18e6c8254",
+          "findings": 1,
+          "candidate_id": "04fd9b5eddb90b82fb6ab17c0e40996f7776175dd37902a6be9747f10604e4ca",
+          "specifications": 1,
+          "anchoring_status": "recorded_context"
+        }
+      ],
+      "runtime_invocations": 10,
+      "matched_completed_runtime_invocations": 10,
+      "pending_calls": 0.0,
+      "candidate_verification_executions": 3,
+      "native_statuses": [
+        "FAIL",
+        "PASS",
+        "PASS"
+      ],
+      "review_executions": 2,
+      "file_effect_observations": 3,
+      "workspace_outcome": "CONFIRMED",
+      "file_outcome": "CONFIRMED",
+      "source_read_requests": 10.0,
+      "source_list_requests": 4.0,
+      "tool_content_bytes": 248049.0,
+      "tokens": {
+        "input_tokens": 1169224,
+        "cached_input_tokens": 865792,
+        "uncached_input_tokens": 303432,
+        "output_tokens": 19646,
+        "reasoning_tokens": 12336
+      },
+      "evaluation_task_wall_seconds": 620.747,
+      "outer_evaluator_wall_seconds": 619.8703567,
+      "timed_out": false,
+      "closed_findings": 2,
+      "time_to_ready_seconds": null,
+      "external_acceptance": "PASS",
+      "accepted_candidate": true,
+      "closure_statuses": [
+        {
+          "status": "native_oracle_passed",
+          "candidate_id": "9343d7edef0301e2a7879d57f007e320f8fc3f338dff7e697451f9fbda80c7ec",
+          "evidence_id": "22d9f4fbfcda0bda12a257c4c4b189707f95e9f162973c10cfdf62465c44097e",
+          "invocation_id": "f0394fddc111d6e583b13bad1d6f2d99885142ea2704a6d0df84109de198b1c6",
+          "plan_id": "aea24b5d177aa05bb374939035b53f4860ac4431cee922cd0638193b7329f8b4"
+        },
+        {
+          "status": "reviewer_recheck_closed",
+          "candidate_id": "9343d7edef0301e2a7879d57f007e320f8fc3f338dff7e697451f9fbda80c7ec",
+          "evidence_id": "bfaaa51eae818b7682dd7d1860e048dd563561434bd738c6fd91804af8bd61fa",
+          "invocation_id": "1812d5605d7e5b080d4e2366d5caff4aebb341f460b7af3528a6a9a81ca15853",
+          "plan_id": "aea24b5d177aa05bb374939035b53f4860ac4431cee922cd0638193b7329f8b4"
+        }
+      ],
+      "accepted_candidate_id": "9343d7edef0301e2a7879d57f007e320f8fc3f338dff7e697451f9fbda80c7ec",
+      "accepted_verification_plan_id": "aea24b5d177aa05bb374939035b53f4860ac4431cee922cd0638193b7329f8b4"
+    }
+  ],
+  "result": "TREATMENT_PASS_CONTROL_BLOCKED_SINGLE_HISTORICAL_TASK",
+  "repair_quality": "EXERCISED; treatment accepted after two repairs; not general qualification"
+}

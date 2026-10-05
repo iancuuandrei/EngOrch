@@ -74,6 +74,15 @@ workspace registration. It requires a shorter checkout for unsupported paths;
 it neither supplies long-path support nor settles existing effects. A subsequent
 short-root experiment must be a separate cohort, preserving these observations.
 
+That [separate short-root pilot](repair-intelligence-short-root-20261005.md)
+ran on clean v1.1.19: control BLOCKED on a rejected repair precondition;
+treatment READY and external PASS after two repairs. Its exact final candidate
+has native-oracle and explicit reviewer-recheck closure receipts. This
+demonstrates live structured-repair integration on one historical task, while
+general quality/efficiency benefit remains unqualified. Treatment used more
+observed tokens and wall time; retain it opt-in. Next product work is the finite
+Evidence Value Controller rather than another equivalent repair pilot.
+
 The active [v2 goal](../roadmap/v2-product-plan.md) starts with baseline/context
 qualification, then structured repair. Final v2 tests, frozen cohort, language
 canaries, installed acceptance and release qualification remain **NOT RUN**.

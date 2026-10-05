@@ -184,6 +184,13 @@ These limits are byte bounds, not measured token savings. Existing runs keep
 their original review inputs and generic approval semantics. See the
 [recheck evidence](../evaluation/reviewer-rechecks.md).
 
+The [historical live pilot](../evaluation/repair-intelligence-short-root-20261005.md)
+demonstrates two repairs reaching READY and external PASS, with separate native
+oracle and explicit reviewer-recheck closure receipts for the accepted candidate.
+The control remained blocked on a rejected file precondition. This single-task
+integration result does not establish general quality or token/time improvement;
+the treatment remains opt-in.
+
 Repair Intelligence supplies typed diagnosis, exact scope inspection, bounded
 preimage validation and explicit unique code relocation. Deterministic
 transformations, strategy execution and finding closure are not implemented
