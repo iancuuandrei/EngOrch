@@ -6,6 +6,16 @@ outcomes and token accounting are recorded separately in the
 [product ledger](../../../docs/roadmap/v2-product-plan.md); fixture PASS is
 not a hosted or complete product acceptance result.
 
+`Test-RepairIntelligenceTreatment.ps1` checks the Native-only structured-repair
+treatment: exact run argv, matching Prepare/Evaluate request, observed immutable
+policy, rejection of substitution and unchanged legacy omission. Invoke
+`scripts/evaluate-v1.ps1 -RepairIntelligence` for both Prepare and Evaluate of
+the treatment arm; omit it for the control arm. The product flag also enables
+explicit reviewer rechecks, so this compares the bundled treatment. Coverage
+spectra are not collected or injected by this option. Trials require fresh
+pinned clones, unchanged external acceptance and exact usage/time evidence;
+no fixer invocation means NOT_EXERCISED for repair quality.
+
 `Classify-CheckOutput.ps1` (`Get-FabricV1CheckClassification`) exists so the
 old `evaluate-v1-baseline.ps1` defect cannot return silently:
 

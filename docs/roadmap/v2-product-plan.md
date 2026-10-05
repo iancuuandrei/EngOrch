@@ -36,6 +36,10 @@ selected source bytes, candidate, task and failed gate; only a compact scoped
 advisory ranking reaches the writer. [Deterministic integration evidence](../evaluation/repair-spectrum-fixer.md)
 does not establish live repair benefit or final v2 qualification. Automatic
 acquisition and matched live repair acceptance remain pending.
+The v1.1.18 Native evaluation runner now supports a frozen explicit structured
+repair treatment. The [historical matched pilot](../evaluation/repair-intelligence-pilot-20261005.md)
+uses unchanged acceptance and reports whether repair was actually exercised;
+runner regressions alone do not establish model quality or efficiency.
 
 | Phase | Product deliverable | Adoption evidence |
 | --- | --- | --- |

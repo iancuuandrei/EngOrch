@@ -58,6 +58,11 @@ Resource-bounded isolated writers are an optional Native-only treatment:
 `-IsolatedWriters -IsolationPolicyPath ABSOLUTE_PATH -MaxParallel N`. It is
 exclusive with `-ParallelWriters`; the policy path and exact file SHA-256 are
 bound at Prepare and must match at Evaluate.
+The Native-only `-RepairIntelligence` treatment propagates the existing
+`--repair-intelligence` flag and binds version 1 across Prepare/Evaluate and
+the replay-validated creation policy. Omitted treatment preserves old argv.
+This is the product's bundled structured-repair/reviewer-recheck treatment,
+not an isolated test of coverage localization or an automatic profile collector.
 PR5Matched mode uses the explicit -PR5BaselineScript with the
 supplied baseline exe (init with baseline exe/model first, inspect+usage
 with the baseline exe, exact run-identity parsing, diff collected from the
@@ -95,6 +100,7 @@ param(
     [string]$PlannerContextRIExecutable = '',
     [string]$PlannerContextRIExecutableSHA256 = '',
     [switch]$ReviewImpactContext,
+    [switch]$RepairIntelligence,
     [switch]$CandidateFactsCache,
     [string]$FixerModel = '',
     [string]$FixerEffort = '',
@@ -123,6 +129,46 @@ function Assert-AgentContextRunnerBinding([string]$Mode, [string]$Treatment) {
     if ($Treatment -ne 'Default' -and $Mode -ne 'Native') { throw 'AgentContext treatment requires Native mode.' }
 }
 Assert-AgentContextRunnerBinding $EvalMode $AgentContext
+
+function Assert-RepairIntelligenceRunnerBinding([string]$Mode, [bool]$Enabled) {
+    if ($Enabled -and $Mode -ne 'Native') { throw 'RepairIntelligence requires Native mode.' }
+}
+Assert-RepairIntelligenceRunnerBinding $EvalMode ([bool]$RepairIntelligence)
+
+function Assert-RepairIntelligencePreparedBinding($Prior, [bool]$Enabled) {
+    $requested = $Prior.PSObject.Properties['repair_intelligence_version_requested']
+    $version = if ($null -eq $requested) { 0 } else { $requested.Value }
+    $expected = if ($Enabled) { 1 } else { 0 }
+    if (($version -isnot [int] -and $version -isnot [long]) -or $version -ne $expected) {
+        throw 'RepairIntelligence must match the version recorded by the prepared run.'
+    }
+}
+
+function Assert-RepairIntelligenceObserved($Snapshot, [bool]$Enabled) {
+    $execution = $Snapshot.creation.execution
+    $version = if ($null -eq $execution.repair_intelligence_version) { 0 } else { $execution.repair_intelligence_version }
+    $expected = if ($Enabled) { 1 } else { 0 }
+    if (($version -isnot [int] -and $version -isnot [long]) -or $version -ne $expected) {
+        throw 'Inspected repair intelligence version differs from the requested treatment.'
+    }
+    if ($Enabled) {
+        foreach ($required in @($execution.graph_version, $execution.repair_planning_version)) {
+            if (($required -isnot [int] -and $required -isnot [long]) -or $required -ne 1) {
+                throw 'Inspected repair intelligence lacks its required graph/repair/context policy.'
+            }
+        }
+        if ($execution.context -isnot [string] -or $execution.context -cne 'bounded-v1') {
+            throw 'Inspected repair intelligence lacks its required graph/repair/context policy.'
+        }
+        if ($Snapshot.creation.config.reviewer_contract -ceq 'json-v1' -and $null -ne $Snapshot.creation.config.reviewer) {
+            $recheck = $execution.review_recheck_version
+            if (($recheck -isnot [int] -and $recheck -isnot [long]) -or $recheck -ne 1) {
+                throw 'Inspected structured reviewer lacks the bundled recheck policy.'
+            }
+        }
+    }
+    return $version
+}
 
 function Assert-AgentContextPreparedBinding($Prior, [string]$Treatment) {
     $property = $Prior.PSObject.Properties['agent_context_requested']
@@ -284,7 +330,7 @@ function Get-NativeInitArgs([string]$TaskPath, [string]$RuntimePath, [string]$Wr
     return $nativeArgs
 }
 
-function Get-NativeRunArgs([string]$TaskPath, [string]$Objective, [bool]$EnableParallelWriters, [int]$ParallelLimit, [string]$PlannerContext = '', [string]$PromptRecipe = '', [string]$PlannerContextRIExecutable = '', [string]$PlannerContextRIExecutableSHA256 = '', [bool]$EnableIsolatedWriters = $false, [string]$IsolationPolicyPath = '', [long]$AutoCompactTokenLimit = 0, [bool]$EnableReviewImpactContext = $false, [bool]$EnableCandidateFactsCache = $false, [string]$AgentContext = 'Default') {
+function Get-NativeRunArgs([string]$TaskPath, [string]$Objective, [bool]$EnableParallelWriters, [int]$ParallelLimit, [string]$PlannerContext = '', [string]$PromptRecipe = '', [string]$PlannerContextRIExecutable = '', [string]$PlannerContextRIExecutableSHA256 = '', [bool]$EnableIsolatedWriters = $false, [string]$IsolationPolicyPath = '', [long]$AutoCompactTokenLimit = 0, [bool]$EnableReviewImpactContext = $false, [bool]$EnableCandidateFactsCache = $false, [string]$AgentContext = 'Default', [bool]$EnableRepairIntelligence = $false) {
     if ($AgentContext -notin @('Default', 'Disabled', 'Enabled')) { throw 'Unsupported agent-context treatment.' }
     if ($ParallelLimit -lt 0 -or $ParallelLimit -gt 8) { throw 'Scheduler override must be 0 (default) or 1..8.' }
     if ($AutoCompactTokenLimit -lt 0 -or $AutoCompactTokenLimit -gt 10000000) { throw 'AutoCompactTokenLimit must be 0 (omitted) or 1..10000000.' }
@@ -298,6 +344,7 @@ function Get-NativeRunArgs([string]$TaskPath, [string]$Objective, [bool]$EnableP
     $nativeArgs = @('--root', $TaskPath, 'run', '--autonomous')
     if ($AgentContext -eq 'Disabled') { $nativeArgs += '--agent-context=false' }
     if ($AgentContext -eq 'Enabled') { $nativeArgs += '--agent-context=true' }
+    if ($EnableRepairIntelligence) { $nativeArgs += '--repair-intelligence' }
     if ($PlannerContext -ne '') { $nativeArgs += @('--planner-context', $PlannerContext) }
     if (Test-GoSourceContextMode $PlannerContext) {
         $nativeArgs += @('--planner-context-ri-executable', $PlannerContextRIExecutable, '--planner-context-ri-executable-sha256', $PlannerContextRIExecutableSHA256)
@@ -1292,6 +1339,7 @@ if ($Action -eq 'Prepare') {
             candidate_sha          = $null
             candidate_tree_sha256  = $null
         }
+        if ($RepairIntelligence) { $records[-1].repair_intelligence_version_requested = 1 }
         if ($ReviewImpactContext) { $records[-1].review_impact_context_requested = $true }
         if ($CandidateFactsCache) { $records[-1].candidate_facts_cache_version_requested = 1 }
         if ($FixerModelExplicit) { $records[-1].fixer_model_requested = $FixerModel }
@@ -1344,6 +1392,7 @@ if ($Action -eq 'Prepare') {
         credentials_retained          = $false
         task_records                  = $records
     }
+    if ($RepairIntelligence) { $record.repair_intelligence_version_requested = 1 }
     if ($ReviewImpactContext) { $record.review_impact_context_requested = $true }
     if ($CandidateFactsCache) { $record.candidate_facts_cache_version_requested = 1 }
     if ($FixerModelExplicit) { $record.fixer_model_requested = $FixerModel }
@@ -1416,6 +1465,7 @@ if (-not (Test-Path -LiteralPath $runJsonPath)) { throw "Prepared run not found:
 $priorRunJsonSha = (Get-FileSha256 $runJsonPath).ToLowerInvariant()
 $prior = Get-Content -Raw -LiteralPath $runJsonPath | ConvertFrom-Json
 Assert-AgentContextPreparedBinding $prior $AgentContext
+Assert-RepairIntelligencePreparedBinding $prior ([bool]$RepairIntelligence)
 Assert-AutoCompactPreparedBinding $prior $AutoCompactTokenLimit
 Assert-ReviewImpactPreparedBinding $prior ([bool]$ReviewImpactContext)
 Assert-CandidateFactsCachePreparedBinding $prior ([bool]$CandidateFactsCache)
@@ -1488,6 +1538,7 @@ foreach ($entry in $entries) {
         prompt_recipe_requested = $PromptRecipe
         auto_compact_token_limit_requested = if ($AutoCompactTokenLimit -gt 0) { $AutoCompactTokenLimit } else { $null }
     }
+    if ($RepairIntelligence) { $result.repair_intelligence_version_requested = 1 }
     if ($ReviewImpactContext) { $result.review_impact_context_requested = $true }
     if ($CandidateFactsCache) { $result.candidate_facts_cache_version_requested = 1 }
     if ($FixerModelExplicit) { $result.fixer_model_requested = $FixerModel }
@@ -1540,7 +1591,7 @@ foreach ($entry in $entries) {
             $result.verification_config_sha256 = $verPolicy.ConfigSha
             $result.native_test_scope = $verPolicy.Scope
             Set-Content -NoNewline -Encoding utf8 (Join-Path $taskOutDir 'verification-argv.log') $verPolicy.ArgvText
-            $runArgs = @(Get-NativeRunArgs $taskPath $entry.task ([bool]$ParallelWriters) $MaxParallel $PlannerContext $PromptRecipe $PlannerContextRIExecutable $PlannerContextRIExecutableSHA256 ([bool]$IsolatedWriters) $isolationPolicyBinding.Path $AutoCompactTokenLimit ([bool]$ReviewImpactContext) ([bool]$CandidateFactsCache) $AgentContext)
+            $runArgs = @(Get-NativeRunArgs $taskPath $entry.task ([bool]$ParallelWriters) $MaxParallel $PlannerContext $PromptRecipe $PlannerContextRIExecutable $PlannerContextRIExecutableSHA256 ([bool]$IsolatedWriters) $isolationPolicyBinding.Path $AutoCompactTokenLimit ([bool]$ReviewImpactContext) ([bool]$CandidateFactsCache) $AgentContext ([bool]$RepairIntelligence))
             $result.parallel_writers_requested = [bool]$ParallelWriters
             if ($IsolatedWriters) { $result.isolated_writers_requested = $true }
             if ($AutoCompactTokenLimit -gt 0) { $result.auto_compact_token_limit_requested = $AutoCompactTokenLimit }
@@ -1588,6 +1639,7 @@ foreach ($entry in $entries) {
             $result.prompt_recipe_observed = $observedPromptRecipe
             if ($observedPromptRecipe -ne $PromptRecipe) { throw 'Inspected run prompt_recipe does not match the requested treatment.' }
             $result.agent_context_observed = Assert-AgentContextObserved $snap $AgentContext
+            $result.repair_intelligence_version_observed = Assert-RepairIntelligenceObserved $snap ([bool]$RepairIntelligence)
             $autoCompactObserved = Assert-AutoCompactObserved $snap $AutoCompactTokenLimit
             $result.auto_compact_token_limit_observed = if ($null -ne $autoCompactObserved) { $autoCompactObserved.token_limit } else { $null }
             $candidateFactsCacheObserved = Assert-CandidateFactsCacheObserved $snap ([bool]$CandidateFactsCache)
@@ -1960,6 +2012,7 @@ $evalRecord = [ordered]@{
     credentials_retained   = $false
     results                = $results
 }
+if ($RepairIntelligence) { $evalRecord.repair_intelligence_version_requested = 1 }
 if ($ReviewImpactContext) { $evalRecord.review_impact_context_requested = $true }
 if ($CandidateFactsCache) { $evalRecord.candidate_facts_cache_version_requested = 1 }
 if ($FixerModelExplicit) { $evalRecord.fixer_model_requested = $FixerModel }
