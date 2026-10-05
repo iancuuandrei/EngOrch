@@ -57,9 +57,35 @@ func TestPreviousRepairAnchorsBindRunAndBoundFile(t *testing.T) {
 }
 
 func TestDiagnoseArgumentsRejectBeforeJournalAccess(t *testing.T) {
-	for _, args := range [][]string{nil, {"run", "--previous", "report.json"}, {"run", "--unknown"}, {"run", "--anchor", "extra"}, {"run", "--closure", "--anchor"}, {"run", "--closure", "--previous", "report.json"}} {
+	for _, args := range [][]string{nil, {"run", "--previous", "report.json"}, {"run", "--unknown"}, {"run", "--anchor", "extra"}, {"run", "--closure", "--anchor"}, {"run", "--closure", "--previous", "report.json"}, {"run", "--spectrum", "s.json", "--anchor"}, {"run", "--spectrum", "s.json", "--closure"}, {"run", "--spectrum", "s.json", "--previous", "r.json"}} {
 		if err := diagnoseCommand(context.Background(), t.TempDir(), args, os.Stdout); err == nil {
 			t.Fatalf("invalid diagnosis accepted %v", args)
 		}
+	}
+}
+
+func TestRepairSpectrumImportBoundsAndStrictEncoding(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "spectrum.json")
+	for _, raw := range []string{`{"version":1,"unknown":true}`, `{"version":1,"version":1}`, strings.Repeat("x", (1<<20)+1), `{"version":1} {}`} {
+		if err := os.WriteFile(p, []byte(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readRepairSpectrum(p); err == nil {
+			t.Fatal("invalid spectrum file accepted")
+		}
+	}
+	if err := os.WriteFile(p, []byte(`{"version":1,"run_id":"r","candidate_id":"c","sources":[],"tests":[]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := readRepairSpectrum(p)
+	if err != nil || s.RunID != "r" {
+		t.Fatal("valid shape not decoded", err)
+	}
+}
+
+func TestReferenceEscapesAlternativeFlags(t *testing.T) {
+	r := Reference()
+	if !strings.Contains(r, `\| --spectrum SPECTRUM_JSON`) || !strings.Contains(r, `ri definition\|references`) {
+		t.Fatal("argument alternatives broke generated Markdown table")
 	}
 }

@@ -52,6 +52,14 @@ answers. Unresolved concerns remain actionable in ordinary repair feedback;
 only the final accepted explicit recheck can report reviewer closure. Focused
 fixtures establish the contract; live quality and token benefits remain NOT RUN.
 
+The [historical working-context pilot](working-context-pilot-20261005.md)
+reached accepted B/C candidates and external PASS, with A retained UNKNOWN.
+Explorer retention remains opt-in: C used more observed tokens, and the single
+task/timing limitations do not establish benefit. The v1.1.16
+[imported coverage localization](repair-spectrum-localization.md) adds bounded
+Ochiai ranking with source-byte validation and explicitly untrusted test labels.
+It does not execute tests or consume rankings automatically in fixer inputs.
+
 The active [v2 goal](../roadmap/v2-product-plan.md) starts with baseline/context
 qualification, then structured repair. Final v2 tests, frozen cohort, language
 canaries, installed acceptance and release qualification remain **NOT RUN**.

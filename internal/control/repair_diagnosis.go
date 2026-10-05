@@ -8,6 +8,7 @@ import (
 
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/engineeringplan"
+	"harness.local/engorch/internal/faultlocalization"
 	"harness.local/engorch/internal/safepath"
 )
 
@@ -45,21 +46,22 @@ type RepairSpecification struct {
 // RepairDiagnosis is a pure journal projection, not a filesystem observation or
 // a persisted policy. Unknown invocations are never converted into failures.
 type RepairDiagnosis struct {
-	Version                     int                   `json:"version"`
-	RunID                       string                `json:"run_id"`
-	ControllerHead              string                `json:"controller_head"`
-	CandidateID                 string                `json:"candidate_id,omitempty"`
-	Findings                    []RepairFinding       `json:"findings"`
-	Specifications              []RepairSpecification `json:"specifications"`
-	VerificationPending         bool                  `json:"verification_pending"`
-	VerificationClosureRecorded bool                  `json:"verification_closure_recorded"`
-	RepairAttempts              int                   `json:"repair_attempts"`
-	MaxRepairs                  *int                  `json:"max_repairs"`
-	Authority                   string                `json:"authority"`
-	AnchoringStatus             string                `json:"anchoring_status,omitempty"`
-	Anchors                     []RepairAnchor        `json:"anchors,omitempty"`
-	OmittedFindings             int                   `json:"omitted_findings,omitempty"`
-	ProjectionHash              string                `json:"projection_hash,omitempty"`
+	Version                     int                       `json:"version"`
+	RunID                       string                    `json:"run_id"`
+	ControllerHead              string                    `json:"controller_head"`
+	CandidateID                 string                    `json:"candidate_id,omitempty"`
+	Findings                    []RepairFinding           `json:"findings"`
+	Specifications              []RepairSpecification     `json:"specifications"`
+	VerificationPending         bool                      `json:"verification_pending"`
+	VerificationClosureRecorded bool                      `json:"verification_closure_recorded"`
+	RepairAttempts              int                       `json:"repair_attempts"`
+	MaxRepairs                  *int                      `json:"max_repairs"`
+	Authority                   string                    `json:"authority"`
+	AnchoringStatus             string                    `json:"anchoring_status,omitempty"`
+	Anchors                     []RepairAnchor            `json:"anchors,omitempty"`
+	OmittedFindings             int                       `json:"omitted_findings,omitempty"`
+	ProjectionHash              string                    `json:"projection_hash,omitempty"`
+	Spectrum                    *faultlocalization.Report `json:"spectrum,omitempty"`
 }
 
 // DiagnoseRepair derives bounded findings and ready-task repair specifications

@@ -29,6 +29,38 @@ interpreted as a passing closure receipt. Acceptance still requires the existing
 fresh candidate-bound verification and review gates. Findings are bounded to
 128 entries and review-message excerpts to 384 UTF-8-safe bytes.
 
+## Optional imported coverage localization
+
+`--spectrum SPECTRUM_JSON` MAY add an advisory Ochiai ranking from explicitly
+supplied individual Go coverage profiles. It MUST remain exclusive with
+`--anchor`, `--previous` and `--closure`. Absent spectrum MUST preserve default
+diagnosis serialization. No native test or model effect is executed by import.
+
+The artifact MUST bind the exact run and current recorded candidate. It MUST
+retain caller-supplied provenance rather than imply authenticated test outcomes
+or oracle closure. PASS/FAIL are the only accepted assertions; UNKNOWN and
+missing profiles MUST NOT become observed failures or uncovered blocks.
+Profiles MUST have matching coverage mode, complete block inventories and
+statement counts. Duplicate test IDs, source mappings or block coordinates
+MUST be rejected. At least one asserted failed test MUST exist.
+
+The exact squared Ochiai fraction MUST retain raw failed/passed test counts,
+with deterministic range ordering for ties. Visit counts MUST NOT be counted
+as independent tests. Unexecuted blocks MUST retain a zero denominator.
+
+Candidate source hashes/ranges MUST be observed under the existing shared read
+lease, bracketed by candidate observations and matching journal heads. A failed
+guard close MUST withhold candidate-bound rankings. Optional observation
+failure MUST preserve base diagnosis with explicitly unavailable source status;
+it MUST NOT erase recorded findings or change write scope, repair budgets,
+acceptance, effects or closure requirements. Hash/range observation validates
+bytes, not authenticity of coverage production or causality.
+
+Import is bounded to 1 MiB JSON, 64 tests, 24 sources, 64 KiB/profile, 4096
+blocks/profile and 32 KiB complete source/file. It MUST NOT truncate partial
+profiles into valid evidence. No imported ranking is persisted as controller
+truth or injected into existing invocation inputs.
+
 ## Optional candidate anchoring
 
 `--anchor` MUST use the existing shared worktree read lease and ownership guard.

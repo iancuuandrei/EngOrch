@@ -74,6 +74,11 @@ review text remains untrusted and is not automatically safe for public sharing.
 
 ## Use the evidence
 
+For explicitly obtained individual Go test coverage, use
+[spectrum-based localization](repair-localization.md). The optional
+`--spectrum` report validates candidate source bytes and keeps caller-supplied
+test outcomes untrusted. It does not change findings, admitted scope or closure.
+
 Inspect the reported candidate file using the existing candidate tools before
 editing. A reported line alone does not validate its current bytes. Stale
 findings require explicit localization against the current candidate. Empty

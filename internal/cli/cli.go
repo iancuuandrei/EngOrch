@@ -108,7 +108,7 @@ var commands = []Command{
 	{"plan", "OBJECTIVE or --file PATH", "Create a plan from exact objective text or a bounded UTF-8 file using the explicitly configured runtime and access profile."},
 	{"status", "", "List validated local run IDs, workflow/lifecycle states and plan IDs without input or evidence bodies."},
 	{"inspect", "[RUN] [--export-jsonl]", "Replay one run and show its bound inputs and state, or export its validated canonical event history."},
-	{"diagnose", "RUN [--anchor [--previous REPORT_JSON] | --closure]", "Project repair findings and admitted scope; optionally validate current bytes or uniquely relocate prior code hints; closure reports historical findings and exact final native recheck receipts, without dispatch or retry authority."},
+	{"diagnose", "RUN [--anchor [--previous REPORT_JSON] | --closure | --spectrum SPECTRUM_JSON]", "Project repair findings and admitted scope; optionally validate current bytes, relocate prior code hints, inspect closure receipts or rank supplied per-test Go coverage, without dispatch or retry authority."},
 	{"checkpoint", "RUN", "Emit a payload-free checkpoint with exact source/candidate/graph identity, completed tasks, gate status, uncertainty counts and a bounded acceptance conclusion."},
 	{"resume", "[RUN] [ACTOR NONCE] or --autonomous [RUN]", "Resume planning, explicitly reopen a settled pause with ACTOR and NONCE, or continue one bounded autonomous run without resending uncertain work."},
 	{"approve", "RUN PLAN ACTOR", "Approve one exact plan with an explicit human actor."},
@@ -133,12 +133,14 @@ func Reference() string {
 	var b strings.Builder
 	b.WriteString("# CLI reference\n\nGenerated from `internal/cli`; do not edit by hand.\n\nUse `fabric [--root PATH] COMMAND`; `harness` remains a compatibility executable.\nOutput is canonical JSON except help, aggregated run-snapshot JSON, and `inspect --export-jsonl`.\n\n| Command | Arguments | Behavior |\n| --- | --- | --- |\n")
 	for _, c := range commands {
-		fmt.Fprintf(&b, "| `%s` | `%s` | %s |\n", c.Name, c.Arguments, c.Summary)
+		fmt.Fprintf(&b, "| `%s` | `%s` | %s |\n", markdownTableCell(c.Name), markdownTableCell(c.Arguments), markdownTableCell(c.Summary))
 	}
 	b.WriteString("\n`fabric help` shows commands; `fabric reference` regenerates this file.\nErrors exit 1; success exits 0. Workspaces and exact approved file proposals are\nimplemented, with journaled verification and Codex planning. GitHub effects follow.\n`reconcile` observes UNKNOWN workspace/file state without retrying writes.\n")
 	b.WriteString("Commands that return a run snapshot encode the complete replay-validated state as JSON; this aggregate is not an identity payload and may exceed the canonical single-value bound. Other command output remains canonical JSON. `inspect RUN --export-jsonl` emits the validated event history as per-event canonical JSONL.\n")
 	return b.String()
 }
+
+func markdownTableCell(text string) string { return strings.ReplaceAll(text, "|", `\|`) }
 
 func output(w io.Writer, v any) error {
 	if snapshot, ok := v.(control.Snapshot); ok {

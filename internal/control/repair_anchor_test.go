@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"harness.local/engorch/internal/config"
+	"harness.local/engorch/internal/faultlocalization"
 	"harness.local/engorch/internal/worktree"
 )
 
@@ -175,5 +176,11 @@ func TestRepairAnchorCloseOwnershipFailureWithholdsObservedEvidence(t *testing.T
 	result, err := finishRepairAnchoring(s, r, proposed, closeErr)
 	if err != nil || result.AnchoringStatus != "unavailable" || len(result.Anchors) != 0 {
 		t.Fatal("ownership failure published verified source", result, err)
+	}
+	unavailable := faultlocalization.Report{SourceStatus: "unavailable", Blocks: []faultlocalization.Block{}}
+	r.Spectrum = &unavailable
+	rank := faultlocalization.Report{Blocks: []faultlocalization.Block{{Path: "file.txt"}}}
+	if got := finishRepairSpectrum(r, rank, closeErr); got.Spectrum.SourceStatus != "unavailable" || len(got.Spectrum.Blocks) != 0 {
+		t.Fatal("guard failure published spectrum ranking")
 	}
 }

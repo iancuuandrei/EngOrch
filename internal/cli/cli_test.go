@@ -167,6 +167,7 @@ func TestLocalPlanApprovalAndResume(t *testing.T) {
 	if workspace.WorkspaceOutcome != "CONFIRMED" || workspace.Workspace == nil {
 		t.Fatal("workspace not admitted")
 	}
+	checkRepairSpectrumCLI(t, workspace, run)
 	changesPath := filepath.Join(root, "changes.json")
 	if err := os.WriteFile(changesPath, []byte(`[{"path":"added.txt","before_hash":null,"content_base64":"aGVsbG8K","executable":false}]`), 0600); err != nil {
 		t.Fatal(err)
