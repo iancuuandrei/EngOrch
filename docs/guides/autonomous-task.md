@@ -39,6 +39,15 @@ for replacement, replay and pending live qualification.
 - A Go toolchain, and a committed Git repository for the task (real-model
   `init` requires one).
 
+On Windows, use a short repository path such as `D:\work\project`. Fabric adds
+`.harness\worktrees\` plus a 64-character run ID to that checkout. The current
+Git for Windows working-directory route cannot observe paths of 260 or more
+UTF-16 code units, even with `core.longpaths=true`. New runs check this before
+calling the planner and report `workspace_path_unsupported` with the action
+`use_shorter_repository_checkout_before_new_run`. This is a platform limitation,
+not long-path support. Existing UNKNOWN workspaces remain UNKNOWN: preserve
+their journals and use explicit reconciliation rather than recreating them.
+
 Fabric Git operations resolve Git from conventional system installation paths instead
 of searching `PATH`. For a nonstandard installation, set
 `FABRIC_GIT_EXECUTABLE` to the absolute path of the Git executable you trust.

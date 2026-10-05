@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"harness.local/engorch/internal/opencoderuntime"
+	"harness.local/engorch/internal/worktree"
 )
 
 // ErrAutonomousReconciliation prohibits new work until existing effects settle.
@@ -104,6 +105,8 @@ func ClassifyAutonomousFailure(s Snapshot, cause error) *AutonomousStop {
 		return stop(GateAttention, "durable_progress_stalled", "inspect_last_transition_and_remaining_tasks")
 	case errors.Is(cause, ErrAutonomousVerificationNotRun):
 		return stop(GateAttention, "verification_not_run", "repair_verification_environment_before_dispatch")
+	case errors.Is(cause, worktree.ErrDestinationUnsupported):
+		return stop(GateAttention, "workspace_path_unsupported", "use_shorter_repository_checkout_before_new_run")
 	case errors.Is(cause, ErrSemanticOutputInvalid):
 		return stop(GateAttention, "semantic_output_invalid", "inspect_completed_receipt_and_correction_budget")
 	case errors.Is(cause, ErrUsageQualification):

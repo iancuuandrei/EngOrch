@@ -1780,6 +1780,13 @@ Measure:
 
 Require no reduction in acceptance rigor.
 
+The [2026-10-05 historical pilot](../evaluation/repair-intelligence-pilot-20261005.md)
+executed both arms but did not reach repair: Windows workspace observation failed
+after registration. Its two workspace effects remain UNKNOWN and the pilot is
+NOT QUALIFIED. The v1.1.19 preflight rejects unsupported destinations before new
+effects. A fresh short-checkout cohort must remain separate from this pilot;
+there is no demonstrated repair benefit yet.
+
 ## Context selector experiment
 
 Compare:

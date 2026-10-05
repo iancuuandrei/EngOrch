@@ -131,7 +131,7 @@ func inventory(ctx context.Context, r Request) ([]blob, error) {
 // owns the lease and has persisted this exact intent. Any error after registration
 // may leave partial state; never automatically call Create again to recover.
 func Create(ctx context.Context, r Request) (Binding, error) {
-	if err := r.Validate(); err != nil {
+	if err := CheckDestination(r); err != nil {
 		return Binding{}, err
 	}
 	current, err := repository.Discover(ctx, r.Source.Root, r.Source.Name)

@@ -65,6 +65,15 @@ bound and repair-lifecycle evidence is recorded in the
 [fixer integration evaluation](repair-spectrum-fixer.md). Live repair benefit
 remains **NOT RUN**.
 
+The v1.1.18 [historical repair pilot](repair-intelligence-pilot-20261005.md)
+executed one completed planner per arm, but both registered workspaces hit the
+Windows working-directory limit. Workspace effects remain **UNKNOWN**;
+repair quality is **NOT_EXERCISED** and the pilot is **NOT QUALIFIED**.
+v1.1.19 adds a tested pre-effect destination check before new planner calls and
+workspace registration. It requires a shorter checkout for unsupported paths;
+it neither supplies long-path support nor settles existing effects. A subsequent
+short-root experiment must be a separate cohort, preserving these observations.
+
 The active [v2 goal](../roadmap/v2-product-plan.md) starts with baseline/context
 qualification, then structured repair. Final v2 tests, frozen cohort, language
 canaries, installed acceptance and release qualification remain **NOT RUN**.

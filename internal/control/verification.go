@@ -81,6 +81,13 @@ func preflightInitialVerification(s Snapshot) error {
 	if s.State == "PLANNING" && (s.PlannerAccess != nil || s.PlannerHost != nil || s.PlannerReceipt != nil || s.PlannerProvider != nil || len(s.ModelAccess) != 0 || len(s.AgentDispatch) != 0) {
 		return nil
 	}
+	r, err := worktree.Prepare(s.RunID, s.Creation.Repository)
+	if err != nil {
+		return err
+	}
+	if err := worktree.CheckDestination(r); err != nil {
+		return err
+	}
 	id, err := s.Creation.Repository.ID()
 	if err != nil {
 		return errors.Join(ErrAutonomousUnsafe, err)
