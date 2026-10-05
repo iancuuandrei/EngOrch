@@ -23,6 +23,8 @@ records qualification separately from published release acceptance.
 add bounded semantic corrections and ownership replanning, typed autonomous
 outcomes, progress-aware execution, optional context/metadata degradation,
 future-worker memory admission and an effective read-only doctor plan.
+Writer and fixer prompts also require preservation of existing behavior and
+focused regression tests around the behavior being changed.
 Completed semantic results are preserved when accounting is unavailable;
 required accounting still gates subsequent model calls. See the
 [v1.1 implementation and release ledger](docs/roadmap/v1.1-resilience.md)

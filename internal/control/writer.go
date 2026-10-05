@@ -281,6 +281,7 @@ func writerInvocationBody(s Snapshot, taskID string, isolated *isolatedWriterBin
 	if isolated != nil {
 		instruction += " This invocation is bound to the task's separately confirmed pristine child workspace and child candidate ID. Keep every change within the exact implementation_task write_paths and do not claim these child-proposed changes were applied; the controller will independently reprepare them against the parent integration candidate."
 	}
+	instruction += " Preserve established behavior outside the requested feature. Compare base and candidate behavior at relevant boundaries, and add a focused regression test that distinguishes the intended change from nearby unchanged cases. For parser or stateful-format work, use explicit lexical boundaries rather than lookahead heuristics; exercise quote, escape, comment, and end-of-input transitions."
 	instruction = promptRecipeInstruction(s.Creation.Execution, role, s.Creation.Config.WriterContract, instruction)
 	input, err := promptRecipeBytes(s.Creation.Execution, struct {
 		OutputSchema       json.RawMessage                  `json:"output_schema,omitempty"`
