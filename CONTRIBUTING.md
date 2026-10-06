@@ -24,10 +24,8 @@ repeated benchmarks. The [roadmap](docs/roadmap/v2-product-plan.md) records the
 current product priorities.
 
 Use subagents only when explicitly requested or authorized for delegation.
-When used, select GPT 6 Luna with High reasoning, give writers explicit ownership
-and warn that other agents share the checkout. Muse Spark through OpenCode is
-preferred when usable. An uncertain route failure never permits repeating an
-effect or claiming success.
+For implementation, independent review, and repair, use Muse Spark 1.3 Contributor High through OpenCode, exact route opencode-go/muse-spark-1.3-contributor with --variant high; do not use subscription Luna agents for these roles. Give writers explicit ownership
+and warn that other agents share the checkout. An uncertain route failure never permits repeating an effect or claiming success. If this route is unavailable, report the blocker rather than silently switching model or repeating an uncertain effect.
 
 ## Formatting and verification
 
