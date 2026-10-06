@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"io"
 
 	"harness.local/engorch/internal/config"
@@ -152,6 +153,24 @@ func inspectAutonomousPlan(ctx context.Context, root string, options autonomousC
 		resources["memory_admission_preview"] = decision
 		resources["memory_admission_preview_status"] = "ESTIMATED_NOT_ADMITTED"
 		resources["memory_admission_recheck"] = "BEFORE_FUTURE_ISOLATED_WRITER_CLAIMS"
+	}
+	if options.evidence != nil {
+		if err := control.ValidateEvidenceAutoPolicyTemplate(*options.evidence); err != nil {
+			return err
+		}
+		if options.parallel || options.isolation != nil {
+			return errors.New("evidence-policy requires serial graph writers; parallel-writers and isolated-writers are incompatible")
+		}
+		if len(options.fallbacks) != 0 {
+			for _, fallback := range options.fallbacks {
+				if fallback.Capability == "parallel_writers" {
+					return errors.New("evidence-policy requires serial graph writers; capability fallback cannot silently drop this policy")
+				}
+			}
+		}
+		plan["evidence_policy"] = map[string]any{"version": options.evidence.Version, "actions": len(options.evidence.Model.Actions), "queries": len(options.evidence.Queries), "scope": "one_automatic_serial_graph_acquisition_before_initial_writer", "estimates": "caller_supplied_unvalidated_advisory", "runtime_dispatch": "NOT_RUN"}
+	} else {
+		plan["evidence_policy"] = map[string]any{"enabled": false, "runtime_dispatch": "NOT_RUN"}
 	}
 	plan["context"] = contextMode
 	plan["agent_context"] = map[string]any{"enabled": options.agentContext, "source": "COMMITTED_TREE", "skills": "ROLE_FILTERED_METADATA_AND_TASK_SELECTED_BODIES", "runtime_execution": "NOT_RUN"}

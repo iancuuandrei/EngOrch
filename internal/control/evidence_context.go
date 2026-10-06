@@ -25,6 +25,9 @@ type EvidenceContextDecision struct {
 	ID      string                   `json:"id"`
 	Request EvidenceContextRequest   `json:"request"`
 	Report  evidencevalue.WireReport `json:"report"`
+	// EvidencePolicyHash tags the single automatic policy acquisition. Empty
+	// preserves ordinary operator evidence-acquire records.
+	EvidencePolicyHash string `json:"evidence_policy_hash,omitempty"`
 }
 
 // EvidenceContextResult contains a decision and, only after ordinary context
@@ -108,17 +111,30 @@ func evidenceContextDecision(s Snapshot, head string, request EvidenceContextReq
 	if err != nil {
 		return decision, err
 	}
-	decision.ID, err = canonical.Hash("harness.evidence-context-decision.v1", struct {
+	decision.ID, err = evidenceContextDecisionIDFor(decision.Request, decision.Report, "")
+	if err != nil {
+		return decision, err
+	}
+	return decision, err
+}
+
+// evidenceContextDecisionIDFor binds the optional automatic-policy tag into
+// the decision identity. The tag field uses omitempty so empty-tag decisions
+// keep the exact historical absent-policy/manual identity.
+func evidenceContextDecisionIDFor(request EvidenceContextRequest, report evidencevalue.WireReport, policyHash string) (string, error) {
+	return canonical.Hash("harness.evidence-context-decision.v1", struct {
 		Request EvidenceContextRequest   `json:"request"`
 		Report  evidencevalue.WireReport `json:"report"`
-	}{decision.Request, decision.Report})
-	return decision, err
+		Policy  string                   `json:"evidence_policy_hash,omitempty"`
+	}{request, report, policyHash})
 }
 
 // AcquireEvidenceContext records a finite decision before optional source
 // acquisition through existing bounded explorer context admission. Stop gates
 // perform no acquisition or journal writes. Invalid/stale input is rejected;
 // acquisition failure retains its decision and never authorizes provider retry.
+// A request matching the frozen automatic policy template is tagged with its
+// deterministic hash and consumes the single automatic opportunity.
 func AcquireEvidenceContext(ctx context.Context, path string, request EvidenceContextRequest) (EvidenceContextResult, error) {
 	var result EvidenceContextResult
 	if ctx == nil {
@@ -135,6 +151,24 @@ func AcquireEvidenceContext(ctx context.Context, path string, request EvidenceCo
 	if err != nil {
 		return result, err
 	}
+	if s.Creation.Execution != nil && s.Creation.Execution.EvidencePolicy != nil {
+		template := *s.Creation.Execution.EvidencePolicy
+		if evidencePolicyStrippedEqual(template, request) {
+			expectedHash, hashErr := EvidenceAutoPolicyHash(template)
+			if hashErr != nil {
+				return result, hashErr
+			}
+			if hasEvidencePolicyDecision(s, expectedHash) {
+				return result, errors.New("evidence policy acquisition already recorded")
+			}
+			decision.EvidencePolicyHash = expectedHash
+			boundID, idErr := evidenceContextDecisionIDFor(decision.Request, decision.Report, expectedHash)
+			if idErr != nil {
+				return result, idErr
+			}
+			decision.ID = boundID
+		}
+	}
 	result.Decision = decision
 	if evidenceControllerStopReason(s) != "" {
 		return result, nil
@@ -144,6 +178,9 @@ func AcquireEvidenceContext(ctx context.Context, path string, request EvidenceCo
 	}
 	if err := Append(path, "evidence.context-decided", decision); err != nil {
 		return result, err
+	}
+	if err := ctx.Err(); err != nil {
+		return result, errors.Join(errors.New("bounded evidence acquisition failed; decision "+decision.ID+" retained; inspect run before preparing a fresh snapshot request"), err)
 	}
 	if decision.Report.Selected == "" {
 		return result, nil
@@ -164,12 +201,46 @@ func replayEvidenceContextDecision(s *Snapshot, event journal.Event) error {
 	if !taskContextEnabled(*s) || s.Candidate == nil || s.Workspace == nil || s.State == "READY" || lifecycleStatus(*s) != LifecycleActive {
 		return errors.New("evidence decision requires active bounded candidate context")
 	}
+	matchesTemplate := false
+	expectedHash := ""
+	if s.Creation.Execution != nil && s.Creation.Execution.EvidencePolicy != nil {
+		template := *s.Creation.Execution.EvidencePolicy
+		if evidencePolicyStrippedEqual(template, decision.Request) {
+			matchesTemplate = true
+			hash, hashErr := EvidenceAutoPolicyHash(template)
+			if hashErr != nil {
+				return hashErr
+			}
+			expectedHash = hash
+		}
+	}
+	if matchesTemplate {
+		if decision.EvidencePolicyHash != expectedHash {
+			return errors.New("evidence policy decision tag removal or substitution")
+		}
+		if hasEvidencePolicyDecision(*s, expectedHash) {
+			return errors.New("duplicate evidence policy decision")
+		}
+	} else if decision.EvidencePolicyHash != "" {
+		if s.Creation.Execution == nil || s.Creation.Execution.EvidencePolicy == nil {
+			return errors.New("evidence policy decision without frozen policy")
+		}
+		return errors.New("evidence policy decision substitution")
+	}
 	expected, err := evidenceContextDecision(*s, event.Previous, decision.Request)
 	if err != nil {
 		return err
 	}
 	if evidenceControllerStopReason(*s) != "" {
 		return errors.New("evidence decision requires controller progress before acquisition")
+	}
+	if matchesTemplate {
+		expected.EvidencePolicyHash = expectedHash
+		boundID, idErr := evidenceContextDecisionIDFor(expected.Request, expected.Report, expectedHash)
+		if idErr != nil {
+			return idErr
+		}
+		expected.ID = boundID
 	}
 	want, err := canonical.Bytes(expected)
 	if err != nil {

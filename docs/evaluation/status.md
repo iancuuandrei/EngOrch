@@ -2,6 +2,25 @@
 
 ## Current product checkpoint — 2026-10-06
 
+v1.1.26 adds opt-in automatic finite EVC acquisition once per new serial
+graph run before the initial writer, via immutable `evidence_policy` and CLI
+`--evidence-policy PATH`. Focused control regressions cover strict template
+rejection pre-run, legacy serialization, immutable binding with tag-removal/
+substitution/duplicate rejection and tag-bound decision identity, hard
+after-decision failure propagation with no-repeat resume to ordinary writer
+context, single `InspectWithHead` prefix, driver-led positive acquisition
+with a different query proving `file.txt`/`path_hint` in the persisted writer
+manifest and prompt within bounds, no-positive retention of mandatory writer
+context, single opportunity across genuine `CONFIRMED` candidate progress and
+graph implementation progress, real-journal pending/UNKNOWN/paused/READY
+gates with no reads or writes, prepare-only with no model dispatch, and a
+driver-led full graph reaching native verification, review and READY (fake
+explorer/writer/reviewer plus native `git --version` fixture scope). Focused
+CLI regressions cover `--file`, `--inspect-plan` and resume semantics with
+real Git and fake runtimes. No provider calls occur for the optional
+acquisition. Live quality, calibration and efficiency benefit remain
+**NOT RUN**; v2 remains planned.
+
 v1.1.25 reuses optional finite EVC source paths as advisory hints in existing
 bounded task-context selection for later roles. Focused control regressions
 cover valid handoff to a different role query, dedup/order, stale/wrong/

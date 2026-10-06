@@ -103,6 +103,65 @@ the same identities and query. This is operator-triggered acquisition only:
 automatic EVC policy and measured quality or token benefit remain pending.
 Runs without EVC decisions behave as before.
 
+## v1.1.26 automatic acquisition before the initial writer
+
+A new serial graph run can opt into one automatic finite acquisition before
+the first writer's mandatory context:
+
+```powershell
+fabric run --autonomous --evidence-policy C:\private-evidence\evc-policy.json "Implement the scoped change"
+fabric run --autonomous --evidence-policy C:\private-evidence\evc-policy.json --file goal.md
+fabric run --autonomous --inspect-plan --evidence-policy C:\private-evidence\evc-policy.json
+```
+
+The policy file is version 1 with an empty binding, a finite `WireRequest`
+model and exactly one bounded query per `source_read` action. The CLI validates
+it before creating the run; incompatible parallel or isolated writers are
+rejected rather than silently dropped. The frozen template is filled with the
+live run, source, candidate and journal head at decision time, evaluated for
+the highest eligible positive JEV, acquired through the existing explorer
+bounds, then followed by ordinary mandatory writer context. A no-positive or
+unknown-cost outcome still proceeds with writer context. The single tagged
+decision is inspectable, never repeated on resume, and never claims empirical
+utility, calibration or efficiency. Live quality and efficiency benefit remain
+**NOT RUN**; v2 remains planned, not complete. Resume never changes the frozen
+policy.
+
+Usable version 1 template with an empty binding, bounded numeric-string
+resource/action and an exact query map:
+
+```json
+{
+  "version": 1,
+  "model": {
+    "version": 1,
+    "binding": {"run_id": "", "source_id": "", "candidate_id": "", "journal_head": ""},
+    "resources": [
+      {"name": "local_compute_ms", "limit": "100", "used": "0", "price": "1", "gradient_squares": "1"}
+    ],
+    "actions": [
+      {
+        "id": "inspect-source",
+        "kind": "source_read",
+        "reliability": {"ordinal": 2, "successes": 0, "failures": 0},
+        "outcomes": [
+          {"probability": "0.5", "utilities": ["1", "0"]},
+          {"probability": "0.5", "utilities": ["0", "1"]}
+        ],
+        "costs": {"local_compute_ms": "1"}
+      }
+    ]
+  },
+  "queries": {"inspect-source": "Explain file.txt base implementation"}
+}
+```
+
+The first hard acquisition failure after the decision append exposes the
+retained decision identity and its safe diagnostic without retrying the
+uncertain source read. A subsequent resume observes the retained tagged
+decision, skips automatic acquisition and admits ordinary required writer
+context.
+
 ## Model a finite information action
 
 Allowed action kinds are `source_read`, `graph_query`, `targeted_test`, `coverage`,

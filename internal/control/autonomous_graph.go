@@ -1537,6 +1537,28 @@ func autonomousGraphImplementing(ctx context.Context, path string, s Snapshot) (
 			}
 			return s, true, nil
 		}
+		// Opt-in automatic finite acquisition runs once before the initial
+		// serial writer. It never dispatches a model and never blocks ordinary
+		// mandatory writer context on no-positive outcomes.
+		if s.Creation.Execution != nil && s.Creation.Execution.EvidencePolicy != nil {
+			beforeHash := ""
+			if h, herr := evidencePolicyExpectedHash(s); herr == nil {
+				if hasEvidencePolicyDecision(s, h) {
+					beforeHash = h
+				}
+			}
+			updated, policyErr := maybeAcquireEvidencePolicy(ctx, path, s)
+			if policyErr != nil {
+				latest, ierr := InspectOr(s, path, policyErr)
+				return latest, false, ierr
+			}
+			s = updated
+			if beforeHash == "" {
+				if h, herr := evidencePolicyExpectedHash(s); herr == nil && hasEvidencePolicyDecision(s, h) {
+					return s, true, nil
+				}
+			}
+		}
 		if err := autonomousDispatchBlocked(s); err != nil {
 			return s, false, err
 		}

@@ -114,6 +114,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	autoCompactTokenLimit := fs.Int64("auto-compact-token-limit", 0, "opt in to Codex automatic in-turn compaction at this positive token threshold")
 	prepareOnly := fs.Bool("prepare-only", false, "accept the graph and confirm its workspace, then return before explorer or writer dispatch")
 	inspectPlan := fs.Bool("inspect-plan", false, "show effective options without creating a run or calling providers")
+	evidencePolicyPath := fs.String("evidence-policy", "", "strict versioned finite EVC source acquisition template for one automatic serial-graph acquisition before the initial writer")
 	goalFile := fs.String("file", "", "read objective from file")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -150,6 +151,17 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 		}
 		isolationPolicy = &policy
 	}
+	var evidencePolicy *control.EvidenceAutoPolicy
+	if *evidencePolicyPath != "" {
+		policy, err := readEvidenceAutoPolicy(*evidencePolicyPath)
+		if err != nil {
+			return err
+		}
+		if *parallelWriters || *isolatedWriters {
+			return errors.New("evidence-policy requires serial graph writers; parallel-writers and isolated-writers are incompatible")
+		}
+		evidencePolicy = &policy
+	}
 	if err := validateAutonomousPlannerContext(*plannerContext, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256); err != nil {
 		return err
 	}
@@ -183,7 +195,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 		}
 		options := autonomousCapabilities{parallel: *parallelWriters, isolation: isolationPolicy, agentContext: *agentContext, workingContext: *workingContext, dynamicExplorers: *dynamicExplorers,
 			plannerContext: *plannerContext, parser: *plannerContextRIExecutable, parserHash: *plannerContextRIExecutableSHA256,
-			parseCache: plannerParseCacheVersion, reviewImpact: reviewImpactContextVersion, candidateCache: candidateFactsCacheVersion, autoCompact: *autoCompactTokenLimit}
+			parseCache: plannerParseCacheVersion, reviewImpact: reviewImpactContextVersion, candidateCache: candidateFactsCacheVersion, autoCompact: *autoCompactTokenLimit, evidence: evidencePolicy}
 		return inspectAutonomousPlan(ctx, root, options, *maxParallel, out)
 	}
 	if *goalFile != "" {
@@ -197,7 +209,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 		if err := validateAutonomousObjective(objective); err != nil {
 			return err
 		}
-		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, *repairIntelligence, out, *agentContext, *workingContext, *dynamicExplorers)
+		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, *repairIntelligence, out, *agentContext, *workingContext, *dynamicExplorers, evidencePolicy)
 	}
 	if fs.NArg() != 1 || fs.Arg(0) == "" {
 		return errors.New("run --autonomous requires one objective or --file PATH")
@@ -205,7 +217,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	if err := validateAutonomousObjective(fs.Arg(0)); err != nil {
 		return err
 	}
-	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, *repairIntelligence, out, *agentContext, *workingContext, *dynamicExplorers)
+	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, *repairIntelligence, out, *agentContext, *workingContext, *dynamicExplorers, evidencePolicy)
 }
 
 func validatePlannerParseCacheVersion(plannerContext string, version int) error {
@@ -317,12 +329,20 @@ func validateAutonomousObjective(objective string) error {
 	return nil
 }
 
-func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, parallelWriters bool, isolationPolicy *isolatedWriterPolicyFile, plannerContext string, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion int, plannerContextRIExecutable, plannerContextRIExecutableSHA256, promptRecipe string, autoCompactTokenLimit int64, prepareOnly, repairIntelligence bool, out io.Writer, agentContextEnabled, workingContextEnabled, dynamicExplorersEnabled bool) error {
+func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, parallelWriters bool, isolationPolicy *isolatedWriterPolicyFile, plannerContext string, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion int, plannerContextRIExecutable, plannerContextRIExecutableSHA256, promptRecipe string, autoCompactTokenLimit int64, prepareOnly, repairIntelligence bool, out io.Writer, agentContextEnabled, workingContextEnabled, dynamicExplorersEnabled bool, evidencePolicy *control.EvidenceAutoPolicy) error {
 	if err := validateAutonomousObjective(objective); err != nil {
 		return err
 	}
 	if parallelWriters && isolationPolicy != nil {
 		return errors.New("parallel-writers and isolated-writers are mutually exclusive")
+	}
+	if evidencePolicy != nil {
+		if err := control.ValidateEvidenceAutoPolicyTemplate(*evidencePolicy); err != nil {
+			return err
+		}
+		if parallelWriters || isolationPolicy != nil {
+			return errors.New("evidence-policy requires serial graph writers; parallel-writers and isolated-writers are incompatible")
+		}
 	}
 	if err := validateAutonomousPlannerContext(plannerContext, plannerContextRIExecutable, plannerContextRIExecutableSHA256); err != nil {
 		return err
@@ -352,9 +372,17 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 	}
 	capabilities := autonomousCapabilities{parallel: parallelWriters, isolation: isolationPolicy, workingContext: workingContextEnabled, dynamicExplorers: dynamicExplorersEnabled,
 		plannerContext: plannerContext, parser: plannerContextRIExecutable, parserHash: plannerContextRIExecutableSHA256,
-		parseCache: plannerParseCacheVersion, reviewImpact: reviewImpactContextVersion, candidateCache: candidateFactsCacheVersion, autoCompact: autoCompactTokenLimit}
+		parseCache: plannerParseCacheVersion, reviewImpact: reviewImpactContextVersion, candidateCache: candidateFactsCacheVersion, autoCompact: autoCompactTokenLimit, evidence: evidencePolicy}
 	if err := capabilities.resolve(cfg); err != nil {
 		return err
+	}
+	if evidencePolicy != nil {
+		if capabilities.parallel || capabilities.isolation != nil {
+			return errors.New("evidence-policy requires serial graph writers; capability fallback cannot silently drop this policy")
+		}
+		if capabilities.evidence == nil {
+			return errors.New("evidence-policy was not retained through capability resolution")
+		}
 	}
 	parallelWriters, isolationPolicy = capabilities.parallel, capabilities.isolation
 	plannerContext, plannerContextRIExecutable, plannerContextRIExecutableSHA256 = capabilities.plannerContext, capabilities.parser, capabilities.parserHash
@@ -450,7 +478,7 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 			GraphVersion:                     1, MaxParallel: maxParallel, RepairPlanningVersion: 1,
 			ParallelImplementationVersion: parallelImplementationVersion,
 			IsolatedImplementationVersion: isolatedImplementationVersion, IsolationCapacity: isolationCapacity, IsolationEstimate: isolationEstimate,
-			CodexAutoCompact: autoCompact,
+			CodexAutoCompact: autoCompact, EvidencePolicy: capabilities.evidence,
 		},
 	}
 	if workingContextEnabled {
@@ -548,6 +576,11 @@ func autonomousPreparedResult(s control.Snapshot) (autonomousPrepared, error) {
 }
 
 func autonomousResumeCommand(ctx context.Context, root string, args []string, out io.Writer) error {
+	for _, arg := range args {
+		if arg == "--evidence-policy" || strings.HasPrefix(arg, "--evidence-policy=") {
+			return errors.New("evidence-policy cannot be injected or changed on resume; it is frozen at run creation")
+		}
+	}
 	if len(args) > 1 {
 		return errors.New("resume --autonomous accepts at most one RUN")
 	}

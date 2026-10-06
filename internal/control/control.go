@@ -116,6 +116,10 @@ type ExecutionPolicy struct {
 	ScopeReplanDesignVersion int                              `json:"scope_replan_design_version,omitempty"`
 	MaxScopeReplans          int                              `json:"max_scope_replans,omitempty"`
 	CodexAutoCompact         *runtime.CodexAutoCompactOptions `json:"codex_auto_compact,omitempty"`
+	// EvidencePolicy opts a new serial graph run into one automatic finite
+	// source acquisition before the initial writer. Absent preserves exact
+	// historical wire, prompt and replay behavior.
+	EvidencePolicy *EvidenceAutoPolicy `json:"evidence_policy,omitempty"`
 }
 
 func codexAutoCompactForExecution(policy *ExecutionPolicy, profile runtime.Profile) *runtime.CodexAutoCompactOptions {
@@ -271,6 +275,17 @@ func (p ExecutionPolicy) Validate() error {
 		}
 	} else if p.MaxScopeReplans != 0 {
 		return errors.New("scope replan budget requires a scope replan version")
+	}
+	if p.EvidencePolicy != nil {
+		if err := ValidateEvidenceAutoPolicyTemplate(*p.EvidencePolicy); err != nil {
+			return err
+		}
+		if p.Context != taskContextBoundedV1 || p.GraphVersion != 1 {
+			return errors.New("evidence policy requires bounded task context and graph execution")
+		}
+		if p.ParallelImplementationVersion != 0 || p.IsolatedImplementationVersion != 0 {
+			return errors.New("evidence policy incompatible with parallel or isolated writers")
+		}
 	}
 	return nil
 }

@@ -86,6 +86,47 @@ Hint paths MUST be deduplicated and sorted deterministically with existing
 exploration hints without filesystem reads. Historical runs without EVC
 decisions MUST behave identically.
 
+### v1.1.26 automatic serial-graph acquisition policy
+
+A new autonomous run MAY freeze one bounded `evidence_policy` template at
+`run.created`. The template MUST be version 1 with an empty run/source/
+candidate/head binding, a finite `WireRequest` model and an exact `source_read`
+query map. The controller MUST validate canonical size (at most 64 KiB),
+strict unknown/duplicate fields and numeric/resource/frontier/query bounds
+before run creation or provider dispatch. Absent policy MUST preserve exact
+historical wire, prompt and replay behavior. Present policy REQUIRES
+`bounded-v1` task context and `graph-v1` execution, and MUST reject
+parallel/isolated writers explicitly without silent fallback.
+
+The run MUST evaluate the frozen estimates once, before the initial serial
+writer's mandatory bounded-context admission, through existing candidate, read,
+UTF-8, sensitive-path and context bounds. It MUST choose the highest eligible
+positive JEV `source_read` query, acquire it through `evidence.context-decided`
+and existing explorer admission, then admit ordinary mandatory writer context.
+No positive or unknown-cost outcome MUST still proceed with mandatory writer
+context and MUST NOT block implementation. No provider call is permitted for
+this optional acquisition. Estimates remain unvalidated advisory values.
+
+A request matching the frozen template aside from live binding REQUIRES the
+exact deterministic policy tag; tag removal, substitution and duplicate policy
+decisions MUST be rejected under the existing append semantic lock. The
+controller MUST recompute the full decision and bind the optional tag into the
+decision identity while `omitempty` preserves exact historical
+absent-policy/manual identities. Unmatched operator `evidence-acquire`
+behavior and historic schemas MUST remain compatible; a matching
+operator-tagged acquisition consumes the single opportunity and never grants
+an extra one. A hard acquisition failure after the decision append MUST retain
+that decision and propagate its identity with the safe diagnostic and legal
+next action; the next resume MUST observe the retained decision, skip
+automatic acquisition and admit ordinary required role context with no
+acquisition claim. Candidate advancement, new writer queries and repair MUST
+NOT reset the opportunity. Mandatory task context and role gates remain
+required. UNKNOWN, READY and inactive lifecycle MUST produce no reads or
+journal writes. `--evidence-policy PATH` is available on new objective and
+`--file` creation paths; resume MUST NOT inject or change the frozen policy.
+`inspect-plan` MUST show the effective policy or reject unsupported
+combinations before dispatch.
+
 ## Observed token feedback
 
 `evidence-feedback` MUST bind a bounded model, per-axis allocations and consumed
