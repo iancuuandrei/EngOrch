@@ -18,6 +18,7 @@ type autonomousCapabilities struct {
 	parseCache, reviewImpact, candidateCache int
 	autoCompact                              int64
 	evidence                                 *control.EvidenceAutoPolicy
+	contextSelector                          string
 	fallbacks                                []control.CapabilityFallback
 }
 

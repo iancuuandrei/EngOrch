@@ -107,7 +107,7 @@ flowchart TB
 - [Autonomous task graphs](guides/graph-autonomous-task.md)
 - [Repository intelligence and semantic queries](guides/engineering-orientation.md)
 - [Go file facts](guides/go-file-facts.md)
-- [Context and planner contracts](guides/planner-contract.md)
+- [Context and planner contracts](guides/planner-contract.md) · [Context selection](guides/context-selection.md)
 - [Parallel and isolated writers](guides/isolated-writers.md)
 - [Impact-aware review](guides/reviewer-impact-context.md)
 - [Model allocation](guides/model-allocation.md)

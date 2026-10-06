@@ -56,6 +56,9 @@ func (l Limits) validate() error {
 
 // Input contains task text plus an already admitted corpus. ChangedPaths and
 // PathHints are path-only evidence; neither causes a filesystem read.
+// Selector opts into the experimental rrf-coverage-v1 mode. Empty preserves
+// exact historical/default behavior and hashes; only "rrf-coverage-v1" is
+// admitted beyond empty.
 type Input struct {
 	Version      int            `json:"version"`
 	Scope        Scope          `json:"scope"`
@@ -64,20 +67,27 @@ type Input struct {
 	ChangedPaths []string       `json:"changed_paths,omitempty"`
 	PathHints    []string       `json:"path_hints,omitempty"`
 	Anchors      map[string]int `json:"anchors,omitempty"`
+	Selector     string         `json:"selector,omitempty"`
 	Limits       Limits         `json:"limits"`
 }
 
 // SelectedFile is an exact half-open byte excerpt. Hash binds all admitted
 // file bytes; ExcerptHash binds only Content. Both ranges and content are
 // retained so a later role can identify precisely what it was shown.
+// Ranks retains independent RRF ranker ordinals (1-based) for the
+// experimental selector; Covered lists binary concepts newly covered by this
+// visible excerpt. Both are absent for legacy selections, preserving exact
+// historical JSON and hashes.
 type SelectedFile struct {
-	Path        string `json:"path"`
-	Hash        string `json:"hash"`
-	Start       int64  `json:"start"`
-	End         int64  `json:"end"`
-	ExcerptHash string `json:"excerpt_hash"`
-	Reason      string `json:"reason"`
-	Content     string `json:"content"`
+	Path        string         `json:"path"`
+	Hash        string         `json:"hash"`
+	Start       int64          `json:"start"`
+	End         int64          `json:"end"`
+	ExcerptHash string         `json:"excerpt_hash"`
+	Reason      string         `json:"reason"`
+	Content     string         `json:"content"`
+	Ranks       map[string]int `json:"ranks,omitempty"`
+	Covered     []string       `json:"covered,omitempty"`
 }
 
 // Omission records why a supplied path was unavailable to this prompt. It is
@@ -89,6 +99,9 @@ type Omission struct {
 
 // Manifest is a deterministic, observable selection result. It does not claim
 // that omitted files are irrelevant or absent from the bound source.
+// Selector records the experimental mode that produced this selection. Empty
+// preserves exact historical JSON and hashes; "rrf-coverage-v1" binds the new
+// RRF plus bounded coverage treatment.
 type Manifest struct {
 	Version          int            `json:"version"`
 	Scope            Scope          `json:"scope"`
@@ -99,26 +112,45 @@ type Manifest struct {
 	Omissions        []Omission     `json:"omissions"`
 	OmittedCount     int            `json:"omitted_count"`
 	OmissionsTrimmed bool           `json:"omissions_trimmed"`
+	Selector         string         `json:"selector,omitempty"`
 }
 
 // ID hashes the complete observed result. It is evidence of this selection,
-// not a capability to read or mutate the source.
+// not a capability to read or mutate the source. The hash domain is unchanged;
+// empty-selector manifests hash exactly as before because new optional fields
+// are omitted when empty.
 func (m Manifest) ID() (string, error) {
 	if m.Version != version || m.InputBytes < 0 || m.SelectedBytes < 0 || m.SelectedBytes > m.InputBytes || safepath.RequireDigest(m.InputHash) != nil {
 		return "", errors.New("invalid task context manifest")
+	}
+	if err := ValidateSelector(m.Selector); err != nil {
+		return "", err
+	}
+	for _, sel := range m.Selected {
+		if err := validateProvenance(sel.Ranks, sel.Covered); err != nil {
+			return "", err
+		}
+		if m.Selector == "" && (len(sel.Ranks) != 0 || len(sel.Covered) != 0) {
+			return "", errors.New("legacy manifest carries selector provenance")
+		}
 	}
 	return canonical.Hash("harness.task-context-manifest.v1", m)
 }
 
 // Select ranks path and lexical evidence, returns UTF-8 snippets within Limits,
 // and makes every omission explicit. It is deterministic for equivalent input:
-// callers may provide files and hints in any order.
+// callers may provide files and hints in any order. Empty Selector preserves
+// exact legacy behavior; Selector "rrf-coverage-v1" fuses independent ordinal
+// rankers with unweighted RRF and bounded coverage.
 func Select(in Input) (Manifest, error) {
 	if err := validateInput(in); err != nil {
 		return Manifest{}, err
 	}
 	files := append([]File(nil), in.Files...)
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	if in.Selector == SelectorRRFCoverageV1 {
+		return selectRRFCoverage(in, files)
+	}
 	inputHash, err := inputID(in, files)
 	if err != nil {
 		return Manifest{}, err
@@ -217,6 +249,9 @@ func validateInput(in Input) error {
 	if in.Version != version || safepath.RequireDigest(in.Scope.SourceID) != nil || (in.Scope.CandidateID != "" && safepath.RequireDigest(in.Scope.CandidateID) != nil) || len(in.Objective) == 0 || len(in.Objective) > 16<<10 || !utf8.ValidString(in.Objective) || len(in.Files) == 0 || len(in.Files) > 4096 {
 		return errors.New("invalid task context input")
 	}
+	if err := ValidateSelector(in.Selector); err != nil {
+		return err
+	}
 	if err := in.Limits.validate(); err != nil {
 		return err
 	}
@@ -280,8 +315,9 @@ func inputID(in Input, files []File) (string, error) {
 		Changed   []string       `json:"changed"`
 		Hints     []string       `json:"hints"`
 		Anchors   map[string]int `json:"anchors,omitempty"`
+		Selector  string         `json:"selector,omitempty"`
 		Limits    Limits         `json:"limits"`
-	}{in.Version, in.Scope, in.Objective, bound, changed, hints, in.Anchors, in.Limits})
+	}{in.Version, in.Scope, in.Objective, bound, changed, hints, in.Anchors, in.Selector, in.Limits})
 }
 
 func sameHash(want string, content []byte) bool {

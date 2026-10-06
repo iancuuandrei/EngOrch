@@ -65,6 +65,11 @@ type ExecutionPolicy struct {
 	// invocations. Empty preserves every historical prompt byte.
 	PromptRecipe string `json:"prompt_recipe,omitempty"`
 	Context      string `json:"context,omitempty"`
+	// ContextSelector opts bounded task context into experimental
+	// rrf-coverage-v1 ranking. Empty preserves exact historical/default
+	// selection; only "rrf-coverage-v1" is admitted and it requires
+	// Context "bounded-v1". No default promotion.
+	ContextSelector string `json:"context_selector,omitempty"`
 	// PlannerContext opts planning into a bounded committed-source manifest.
 	// Empty retains historic planner input identity exactly.
 	PlannerContext string `json:"planner_context,omitempty"`
@@ -193,6 +198,12 @@ func (p ExecutionPolicy) Validate() error {
 	}
 	if p.Context != "" && p.Context != taskContextBoundedV1 {
 		return errors.New("invalid execution task context")
+	}
+	if p.ContextSelector != "" && p.ContextSelector != taskContextSelectorRRFCoverageV1 {
+		return errors.New("invalid execution context selector")
+	}
+	if p.ContextSelector != "" && p.Context != taskContextBoundedV1 {
+		return errors.New("context selector requires bounded task context")
 	}
 	if p.PlannerContext != "" && p.PlannerContext != plannerContextSourceBoundedV1 && p.PlannerContext != plannerContextGoSourceV1 && p.PlannerContext != plannerContextGoSourceV2 && p.PlannerContext != plannerContextGoContractV1 && p.PlannerContext != plannerContextGoContractV2 && p.PlannerContext != plannerContextGoContractV3 {
 		return errors.New("invalid execution planner context")

@@ -1006,3 +1006,15 @@ The old pending pilot above is preserved and has not been resent.
 - The Muse task used an earlier custom binary; later fallback/status additions
   are covered by local regressions, not that live provider run. This is one-task
   evidence, not a new fixed-six cohort, installed release or v2 qualification.
+
+## Current phase D note — context selector experiment
+
+- Phase D work adds opt-in `--context-selector rrf-coverage-v1`: independent
+  ordinal rankers with equal unweighted RRF (`k=60`) plus bounded
+  diminishing-return coverage over visible excerpts, reusing the existing
+  bounded-v1 admission, limits and replay bindings. Empty preserves legacy
+  selection; unknown modes are rejected pre-run with no default promotion.
+- Focused pure, controller and CLI regressions pass; legacy hashes and wire
+  compatibility are retained. Model-quality and downstream efficiency remain
+  NOT QUALIFIED until the predeclared matched experiment runs after freeze.
+  See the [selection contract](../specifications/task-context-selection.md).

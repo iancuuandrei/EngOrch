@@ -181,6 +181,7 @@ func inspectAutonomousPlan(ctx context.Context, root string, options autonomousC
 		plan["evidence_policy"] = map[string]any{"enabled": false, "runtime_dispatch": "NOT_RUN"}
 	}
 	plan["context"] = contextMode
+	plan["context_selector"] = options.contextSelector
 	plan["agent_context"] = map[string]any{"enabled": options.agentContext, "source": "COMMITTED_TREE", "skills": "ROLE_FILTERED_METADATA_AND_TASK_SELECTED_BODIES", "runtime_execution": "NOT_RUN"}
 	plan["working_context"] = map[string]any{"enabled": options.workingContext, "role": "DYNAMIC_EXPLORER_FOLLOW_UP", "authority": "NONE", "max_content_bytes": 16384, "runtime_execution": "NOT_RUN"}
 	plan["dynamic_explorers"] = map[string]any{"enabled": options.dynamicExplorers, "runtime_execution": "NOT_RUN"}

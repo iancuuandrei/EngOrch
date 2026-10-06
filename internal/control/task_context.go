@@ -372,9 +372,16 @@ func admitTaskContextBound(ctx context.Context, path, role, question, isolationT
 			}
 		}
 	}
+	selectorMode := taskContextSelectorMode(s)
 	prioritized := prioritizeTaskPaths(fileStates, combinedExploration, writerPaths, lexicalPaths, boundQuery)
+	if selectorMode == taskContextSelectorRRFCoverageV1 {
+		prioritized = prioritizeTaskPathsRRF(fileStates, combinedExploration, writerPaths, lexicalPaths, boundQuery)
+	}
 	if isolated != nil {
 		prioritized = prioritizeTaskPaths(fileStates, combinedExploration, isolated.Task.WritePaths, lexicalPaths, boundQuery)
+		if selectorMode == taskContextSelectorRRFCoverageV1 {
+			prioritized = prioritizeTaskPathsRRF(fileStates, combinedExploration, isolated.Task.WritePaths, lexicalPaths, boundQuery)
+		}
 	}
 	type readFile struct {
 		path    string
@@ -510,6 +517,7 @@ func admitTaskContextBound(ctx context.Context, path, role, question, isolationT
 				InputHash: strings.Repeat("0", 64),
 				Selected:  []taskcontext.SelectedFile{},
 				Omissions: []taskcontext.Omission{},
+				Selector:  selectorMode,
 			},
 			LexicalBuildID:           lexicalBuild,
 			LexicalOverlayID:         lexicalOverlay,
@@ -547,6 +555,7 @@ func admitTaskContextBound(ctx context.Context, path, role, question, isolationT
 		Files:        files,
 		ChangedPaths: changed,
 		PathHints:    hints,
+		Selector:     selectorMode,
 		Limits:       limits,
 	})
 	if selErr != nil {
@@ -959,6 +968,9 @@ func replayTaskContext(s *Snapshot, e journal.Event) error {
 		if len(rec.Manifest.Selected) != 0 || rec.ManifestID != "" {
 			return errors.New("unavailable task context must not carry selected content")
 		}
+		if err := validateTaskContextSelectorBinding(*s, rec.Manifest); err != nil {
+			return err
+		}
 		for _, existing := range s.TaskContexts {
 			if existing.IsolationTaskID == rec.IsolationTaskID && existing.Role == rec.Role && existing.QueryHash == rec.QueryHash && existing.CandidateID == rec.CandidateID {
 				return errors.New("duplicate task context")
@@ -973,6 +985,9 @@ func replayTaskContext(s *Snapshot, e journal.Event) error {
 	m := rec.Manifest
 	if m.Version != 1 {
 		return errors.New("invalid task context manifest version")
+	}
+	if err := validateTaskContextSelectorBinding(*s, m); err != nil {
+		return err
 	}
 	if m.Scope.SourceID != rec.SourceID || m.Scope.CandidateID != rec.CandidateID {
 		return errors.New("task context manifest scope mismatch")

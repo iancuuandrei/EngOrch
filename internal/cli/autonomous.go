@@ -110,6 +110,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	plannerContextParseCache := fs.Bool("planner-context-parse-cache", false, "reuse local Go parser facts for go-source-context-v2 or go-contract-context-v1/v2/v3")
 	reviewImpactContext := fs.Bool("review-impact-context", false, "attach bounded candidate Go topology to reviews (requires go-contract-context-v1/v2/v3 and pinned RI)")
 	candidateFactsCache := fs.Bool("review-impact-candidate-facts-cache", false, "reuse local candidate Go syntax facts during review-impact collection")
+	contextSelector := fs.String("context-selector", "", "task context selector: empty (legacy default) or rrf-coverage-v1 (experimental RRF plus coverage; requires bounded-v1)")
 	promptRecipe := fs.String("prompt-recipe", "", "opt in to cache-prefix-v1 prompt ordering")
 	autoCompactTokenLimit := fs.Int64("auto-compact-token-limit", 0, "opt in to Codex automatic in-turn compaction at this positive token threshold")
 	prepareOnly := fs.Bool("prepare-only", false, "accept the graph and confirm its workspace, then return before explorer or writer dispatch")
@@ -189,13 +190,16 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	if *promptRecipe != "" && *promptRecipe != "cache-prefix-v1" {
 		return errors.New("prompt-recipe must be empty or cache-prefix-v1")
 	}
+	if err := validateAutonomousContextSelector(*contextSelector); err != nil {
+		return err
+	}
 	if *inspectPlan {
 		if fs.NArg() != 0 || *goalFile != "" {
 			return errors.New("inspect-plan takes run options without an objective")
 		}
 		options := autonomousCapabilities{parallel: *parallelWriters, isolation: isolationPolicy, agentContext: *agentContext, workingContext: *workingContext, dynamicExplorers: *dynamicExplorers,
 			plannerContext: *plannerContext, parser: *plannerContextRIExecutable, parserHash: *plannerContextRIExecutableSHA256,
-			parseCache: plannerParseCacheVersion, reviewImpact: reviewImpactContextVersion, candidateCache: candidateFactsCacheVersion, autoCompact: *autoCompactTokenLimit, evidence: evidencePolicy}
+			parseCache: plannerParseCacheVersion, reviewImpact: reviewImpactContextVersion, candidateCache: candidateFactsCacheVersion, autoCompact: *autoCompactTokenLimit, evidence: evidencePolicy, contextSelector: *contextSelector}
 		return inspectAutonomousPlan(ctx, root, options, *maxParallel, out)
 	}
 	if *goalFile != "" {
@@ -209,7 +213,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 		if err := validateAutonomousObjective(objective); err != nil {
 			return err
 		}
-		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, *repairIntelligence, out, *agentContext, *workingContext, *dynamicExplorers, evidencePolicy)
+		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, *repairIntelligence, out, *agentContext, *workingContext, *dynamicExplorers, evidencePolicy, *contextSelector)
 	}
 	if fs.NArg() != 1 || fs.Arg(0) == "" {
 		return errors.New("run --autonomous requires one objective or --file PATH")
@@ -217,7 +221,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	if err := validateAutonomousObjective(fs.Arg(0)); err != nil {
 		return err
 	}
-	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, *repairIntelligence, out, *agentContext, *workingContext, *dynamicExplorers, evidencePolicy)
+	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, *repairIntelligence, out, *agentContext, *workingContext, *dynamicExplorers, evidencePolicy, *contextSelector)
 }
 
 func validatePlannerParseCacheVersion(plannerContext string, version int) error {
@@ -301,6 +305,20 @@ func validateAutonomousPlannerContext(mode, executable, executableSHA256 string)
 	return nil
 }
 
+const autonomousContextSelectorRRFCoverageV1 = "rrf-coverage-v1"
+
+// validateAutonomousContextSelector rejects unknown selector modes before any
+// durable run is created. Empty preserves exact historical/default behavior;
+// only rrf-coverage-v1 is admitted. A malformed flag creates no run.
+func validateAutonomousContextSelector(mode string) error {
+	switch mode {
+	case "", autonomousContextSelectorRRFCoverageV1:
+		return nil
+	default:
+		return errors.New("context-selector must be empty or rrf-coverage-v1")
+	}
+}
+
 func isLowerSHA256(value string) bool {
 	if len(value) != 64 {
 		return false
@@ -329,8 +347,11 @@ func validateAutonomousObjective(objective string) error {
 	return nil
 }
 
-func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, parallelWriters bool, isolationPolicy *isolatedWriterPolicyFile, plannerContext string, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion int, plannerContextRIExecutable, plannerContextRIExecutableSHA256, promptRecipe string, autoCompactTokenLimit int64, prepareOnly, repairIntelligence bool, out io.Writer, agentContextEnabled, workingContextEnabled, dynamicExplorersEnabled bool, evidencePolicy *control.EvidenceAutoPolicy) error {
+func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, parallelWriters bool, isolationPolicy *isolatedWriterPolicyFile, plannerContext string, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion int, plannerContextRIExecutable, plannerContextRIExecutableSHA256, promptRecipe string, autoCompactTokenLimit int64, prepareOnly, repairIntelligence bool, out io.Writer, agentContextEnabled, workingContextEnabled, dynamicExplorersEnabled bool, evidencePolicy *control.EvidenceAutoPolicy, contextSelector string) error {
 	if err := validateAutonomousObjective(objective); err != nil {
+		return err
+	}
+	if err := validateAutonomousContextSelector(contextSelector); err != nil {
 		return err
 	}
 	if parallelWriters && isolationPolicy != nil {
@@ -476,7 +497,8 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 			SemanticCorrectionVersion: 1,
 			CapabilityFallbacks:       capabilities.fallbacks,
 			Mode:                      "autonomous-v1", MaxRepairs: maxRepairs, PromptRecipe: promptRecipe, Context: "bounded-v1",
-			PlannerContext: plannerContext, PlannerContextRIExecutable: plannerContextRIExecutable,
+			ContextSelector: contextSelector,
+			PlannerContext:  plannerContext, PlannerContextRIExecutable: plannerContextRIExecutable,
 			PlannerContextRIExecutableSHA256: plannerContextRIExecutableSHA256,
 			PlannerParseCacheVersion:         plannerParseCacheVersion,
 			ReviewImpactContextVersion:       reviewImpactContextVersion,
