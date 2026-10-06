@@ -311,6 +311,9 @@ type MachineApproval struct {
 
 // Snapshot is reconstructed state, never independent authority to append effects.
 type Snapshot struct {
+	// EvidenceDecisions are replay-validated acquisition models and selections;
+	// they cannot change authority, budgets or acceptance.
+	EvidenceDecisions []EvidenceContextDecision `json:"evidence_decisions,omitempty"`
 	// ControllerHead and ControllerSequence are populated only after Inspect
 	// validates history and containment. They are not serialized run inputs.
 	ControllerHead            string                             `json:"-"`
@@ -481,6 +484,10 @@ func Replay(events []journal.Event) (Snapshot, error) {
 				if err := requireModelAccessResult(s, host.Intent.Invocation, r.JournalHead, r.ResultHash, r.ThreadID, r.TurnID, r.UsagePending); err != nil {
 					return s, err
 				}
+			}
+		case "evidence.context-decided":
+			if err := replayEvidenceContextDecision(&s, e); err != nil {
+				return s, err
 			}
 		case "explorer.recorded":
 			var record ExplorerRecord

@@ -13,9 +13,11 @@ The steering was reconfirmed on 2026-10-06 against current source. The bounded
 explorer implementation and historical pilot below already address the initial
 mechanism. Keep it opt-in: the incomplete A arm and higher token use in C do not
 justify promotion or more role integrations. Preserve A's UNKNOWN effect without
-resend. The new [finite evidence-value evaluator](../guides/evidence-value.md)
-is advisory only; it does not yet control runtime acquisition or context
-retention. Acquisition admission remains an explicit pending v2 integration.
+resend. The [finite evidence-value evaluator](../guides/evidence-value.md)
+started as advisory only in v1.1.21. v1.1.22 connects it to explicit bounded
+explorer source acquisition with decision-linked admission. Autonomous and
+provider-bearing acquisition policy remain pending; this does not modify
+editable working-context retention or justify its expansion.
 
 Fresh targeted regressions on this checkout passed on 2026-10-06: workingcontext
 0.687 s and control 120.261 s. The selected controller checks cover frozen

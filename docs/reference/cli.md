@@ -7,6 +7,7 @@ Output is canonical JSON except help, aggregated run-snapshot JSON, and `inspect
 
 | Command | Arguments | Behavior |
 | --- | --- | --- |
+| `evidence-acquire` | `RUN REQUEST_JSON` | Record a finite JEV decision and acquire only selected bounded explorer source context; never dispatch a model. |
 | `calibrate-models` | `CALIBRATION_JSON` | Compare bounded matched task-policy outcomes; report conservative model selection without dispatch. |
 | `version` | `` | Report the build version, commit and build date. |
 | `agent-interrupt` | `RUN SCHEDULE_ID TURN_ID ACTOR NONCE` | Request interruption of one exact scheduled turn; delivery does not prove runtime teardown or resolve UNKNOWN effects. |

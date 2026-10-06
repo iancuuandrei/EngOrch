@@ -52,8 +52,11 @@ const (
 // unavailable context with no eligible source text rather than a silent
 // whole-repo scan.
 type TaskContextRecord struct {
-	Version int    `json:"version"`
-	Role    string `json:"role"`
+	// EvidenceDecisionID links an optional source acquisition to its admitted
+	// finite decision. Empty preserves ordinary context records.
+	EvidenceDecisionID string `json:"evidence_decision_id,omitempty"`
+	Version            int    `json:"version"`
+	Role               string `json:"role"`
 	// IsolationTaskID binds writer context to one confirmed child candidate.
 	// Empty preserves the historical record shape.
 	IsolationTaskID          string                     `json:"isolation_task_id,omitempty"`
@@ -250,6 +253,10 @@ func admitTaskContext(ctx context.Context, path, role, question, isolationTaskID
 }
 
 func admitTaskContextWithSpectrum(ctx context.Context, path, role, question, isolationTaskID string, spectrum *RepairSpectrumEvidence) (TaskContextRecord, error) {
+	return admitTaskContextBound(ctx, path, role, question, isolationTaskID, spectrum, nil)
+}
+
+func admitTaskContextBound(ctx context.Context, path, role, question, isolationTaskID string, spectrum *RepairSpectrumEvidence, decision *EvidenceContextDecision) (TaskContextRecord, error) {
 	if !taskContextValidRole(role) {
 		return TaskContextRecord{}, errors.New("invalid task context role")
 	}
@@ -261,6 +268,9 @@ func admitTaskContextWithSpectrum(ctx context.Context, path, role, question, iso
 	}
 	s, err := Inspect(path)
 	if err != nil {
+		return TaskContextRecord{}, err
+	}
+	if err := requireEvidenceContextBinding(s, role, question, decision); err != nil {
 		return TaskContextRecord{}, err
 	}
 	if s.Creation.Execution == nil || s.Creation.Execution.Context != taskContextBoundedV1 {
@@ -318,6 +328,10 @@ func admitTaskContextWithSpectrum(ctx context.Context, path, role, question, iso
 	}
 	fresh, err := Inspect(path)
 	if err != nil {
+		_ = lease.Close()
+		return TaskContextRecord{}, err
+	}
+	if err := requireEvidenceContextBinding(fresh, role, question, decision); err != nil {
 		_ = lease.Close()
 		return TaskContextRecord{}, err
 	}
@@ -478,15 +492,16 @@ func admitTaskContextWithSpectrum(ctx context.Context, path, role, question, iso
 			return TaskContextRecord{}, errors.New("repair spectrum requires complete selected source bytes")
 		}
 		rec := TaskContextRecord{
-			Version:         taskContextRecordVersion(lexicalUnavailableReason),
-			Role:            role,
-			IsolationTaskID: isolationTaskID,
-			SourceID:        sourceID,
-			CandidateID:     candidateID,
-			Query:           boundQuery,
-			QueryTruncated:  truncated,
-			QueryHash:       queryHash,
-			QueryLen:        queryLen,
+			EvidenceDecisionID: evidenceContextDecisionID(decision),
+			Version:            taskContextRecordVersion(lexicalUnavailableReason),
+			Role:               role,
+			IsolationTaskID:    isolationTaskID,
+			SourceID:           sourceID,
+			CandidateID:        candidateID,
+			Query:              boundQuery,
+			QueryTruncated:     truncated,
+			QueryHash:          queryHash,
+			QueryLen:           queryLen,
 			Manifest: taskcontext.Manifest{
 				Version:   1,
 				Scope:     taskcontext.Scope{SourceID: sourceID, CandidateID: candidateID},
@@ -549,6 +564,7 @@ func admitTaskContextWithSpectrum(ctx context.Context, path, role, question, iso
 		return TaskContextRecord{}, err
 	}
 	rec := TaskContextRecord{
+		EvidenceDecisionID:       evidenceContextDecisionID(decision),
 		Version:                  taskContextRecordVersion(lexicalUnavailableReason),
 		Role:                     role,
 		IsolationTaskID:          isolationTaskID,
@@ -735,6 +751,18 @@ func replayTaskContext(s *Snapshot, e journal.Event) error {
 	var rec TaskContextRecord
 	if err := canonical.Decode(e.Payload, &rec); err != nil {
 		return err
+	}
+	if rec.EvidenceDecisionID != "" {
+		decision := findEvidenceContextDecision(*s, rec.EvidenceDecisionID)
+		if decision == nil {
+			return errors.New("task context evidence decision unavailable")
+		}
+		if err := requireEvidenceContextBinding(*s, rec.Role, rec.Query, decision); err != nil {
+			return err
+		}
+		if rec.IsolationTaskID != "" || rec.RepairSpectrum != nil {
+			return errors.New("source acquisition cannot admit writer or repair context")
+		}
 	}
 	if (rec.Version != taskContextVersion && rec.Version != taskContextRIUnavailableVersion) || !taskContextValidRole(rec.Role) {
 		return errors.New("invalid task context record")

@@ -2,6 +2,12 @@
 
 ## Current product checkpoint — 2026-10-06
 
+v1.1.22 connects the finite evaluator to optional bounded explorer source
+acquisition through `evidence-acquire`. Decisions are journaled and recomputed
+on replay; source admission reuses existing candidate/read/context gates. This
+is an explicit operator action, not automatic research policy or demonstrated
+efficiency. See the [acquisition evidence](evidence-acquisition.md).
+
 Goal initialization used v1.1.4 on clean `dev`
 `6ba6a6de90cd53683aa08df2d68a799f57f9ae4b`. Current `main` follows trusted
 development source through the rolling snapshot workflow.

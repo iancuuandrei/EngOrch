@@ -8,8 +8,9 @@ against a declared decision model and resource constraints. It emits an
 remains. It does not dispatch an action, modify policies, update budgets, append
 journal events, change a working context or accept a candidate.
 
-This is the first Evidence Value Controller increment. Automatic acquisition,
-research stopping in a live agent and empirical calibration remain pending.
+`fabric evidence-acquire` additionally applies the model to one optional bounded
+explorer source selection. Autonomous research stopping in a live agent,
+provider actions and empirical calibration remain pending.
 JEV controls acquisition proposals; working context controls retention;
 Fabric's existing controller owns authority and engineering acceptance.
 
@@ -37,6 +38,57 @@ UNKNOWN removes the recommendation and reports `effect_requires_reconciliation`.
 READY removes it because the accepted checkpoint needs no additional research.
 An inactive lifecycle also removes it. These are inspection diagnostics, not
 new admission, retry, settlement or acceptance permissions.
+
+## Acquire selected source evidence
+
+For a run with bounded task context and a resolved workspace/candidate, wrap a
+populated `evidence-value --template` model in this request shape:
+
+```json
+{
+  "model": {"version":1,"binding":{},"resources":[],"actions":[]},
+  "queries": {"read-local-source":"Explain parser.go record boundary behavior"}
+}
+```
+
+The empty binding/model above shows the shape only: use the exact generated
+binding and declare the `read-local-source` action and its costs as below.
+This command supports only `source_read` actions. Supply exactly one bounded
+query per action identity; other kinds and missing/extra targets are rejected.
+Then run:
+
+```powershell
+fabric evidence-acquire RUN C:\private-evidence\acquisition.json
+fabric inspect RUN
+```
+
+The controller records `evidence.context-decided` with the complete model,
+queries, request hash, decision identity and recomputable selection. A positive
+known JEV enters existing explorer context admission: candidate capture, read
+lease, sensitive-path filtering, existing file/read/selection bounds and
+source/candidate-bound journal evidence. New admissions include
+`evidence_decision_id`; preparation and replay recheck the admitted selected
+query, controller stop state and exact decision-bound candidate. A concurrent
+candidate or stop transition cannot admit a context under the old decision.
+It may reuse a matching admitted
+context. A subsequent explorer invocation for that exact query receives the
+selected evidence; the command itself does not dispatch that invocation.
+Existing optional RI localization may assist ordinary source selection.
+
+No positive eligible action means decision evidence only, with no source
+acquisition. UNKNOWN, READY or inactive lifecycle suppress both acquisition and
+decision writes. Replay rejects stale producing prefixes, modified targets,
+selection or decision hashes. Historical runs retain absent-field serialization;
+no new execution policy is enabled automatically.
+
+The request becomes stale after controller progress, including its own decision
+append. If acquisition subsequently fails, the retained decision does not prove
+that evidence was acquired. Inspect it, then prepare a fresh bound request for
+any further read. Optional source reads cannot authorize retrying a provider
+effect. Supplied costs remain estimates; existing read limits are enforced, but
+this command does not claim observed token/money spending or calibrated prices.
+Queries and source excerpts are private run evidence; avoid putting credentials
+in them or publishing the raw journal.
 
 ## Model a finite information action
 

@@ -33,3 +33,33 @@ gradient magnitude, preserve resource limits/used values and reject invalid
 observations. Supplied priors/counts/prices are not automatically validated
 measurements. This increment MUST NOT claim automated acquisition or measured
 quality/token/time benefit.
+
+## Optional bounded source acquisition
+
+`evidence-acquire RUN REQUEST_JSON` MUST accept a bounded canonical request
+containing `model` and a query map matching the action frontier exactly. Only
+`source_read` actions are admitted. Each query MUST be nonempty UTF-8 and at most
+16 KiB. Input parsing MUST preserve existing strict field/duplicate-key rules.
+
+The controller MUST bind the request to the exact run/source/candidate and
+producing journal prefix. A decision append MUST recompute the entire supplied
+model, targets, report and decision identity under journal semantic validation.
+No-positive-value or unavailable-cost stopping MUST acquire no source evidence.
+UNKNOWN, READY and inactive lifecycle MUST cause neither acquisition nor a
+decision append. The existing UNKNOWN journal guards remain mandatory.
+
+Only an eligible selected query MAY enter existing explorer TaskContext
+admission. Existing candidate, lease, sensitive-path, file/byte and manifest
+checks MUST remain unchanged. A new source record MUST bind its admitted
+decision ID. Preparation before capture, the refreshed snapshot after capture,
+and semantic append replay MUST reject changed run/source/candidate, selected
+query or controller stop state. A compatible already admitted context MAY be
+reused without changing its historical record. Selection alone MUST NOT count as acquisition,
+task completion, acceptance or effect authority. Failure after decision append
+MUST retain that decision and report its identity and legal next action.
+
+The command MUST NOT dispatch a model, mutate working context, change scope,
+permissions, repair budgets or acceptance. Resource costs remain declared
+estimates, not measured expenditure. Historical absent-policy behavior and
+absent-field serialization MUST remain compatible. Later autonomous JEV policy
+and provider-bearing acquisition remain outside this initial integration.

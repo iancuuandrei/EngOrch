@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"io"
 	"path/filepath"
@@ -69,15 +70,39 @@ func evidenceValueCommand(root string, args []string, out io.Writer) error {
 }
 
 func applyEvidenceControllerStop(state control.Snapshot, report *evidencevalue.Report) {
-	// Even advisory acquisition recommendations must not route around UNKNOWN.
-	if stop := control.ClassifyAutonomousFailure(state, errors.New("evidence advisory inspection")); stop.Disposition() == control.GateReconcile {
-		report.Selected = ""
-		report.StopReason = stop.PublicReason()
-	} else if state.State == "READY" {
-		report.Selected = ""
-		report.StopReason = "accepted_checkpoint_requires_no_additional_research"
-	} else if state.Lifecycle.Status != "" && state.Lifecycle.Status != control.LifecycleActive {
-		report.Selected = ""
-		report.StopReason = "lifecycle_requires_attention"
+	control.ApplyEvidenceStop(state, report)
+}
+
+func evidenceAcquireCommand(ctx context.Context, root string, args []string, out io.Writer) error {
+	if len(args) != 2 {
+		return errors.New("evidence-acquire requires RUN REQUEST_JSON")
 	}
+	path, err := runPath(root, args[0])
+	if err != nil {
+		return err
+	}
+	state, err := control.Inspect(path)
+	if err != nil {
+		return err
+	}
+	if state.RunID != args[0] || filepath.Clean(state.Creation.Repository.Root) != filepath.Clean(root) {
+		return errors.New("journal/run repository binding mismatch")
+	}
+	input := args[1]
+	if !filepath.IsAbs(input) {
+		input = filepath.Join(root, input)
+	}
+	raw, err := readRegularPolicyJSON(input, evidencevalue.MaxBytes, "evidence acquisition request", "64 KiB")
+	if err != nil {
+		return err
+	}
+	var request control.EvidenceContextRequest
+	if canonical.Decode(raw, &request) != nil {
+		return errors.New("invalid evidence acquisition request")
+	}
+	result, err := control.AcquireEvidenceContext(ctx, path, request)
+	if err != nil {
+		return err
+	}
+	return output(out, result)
 }

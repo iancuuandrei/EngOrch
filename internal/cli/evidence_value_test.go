@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -75,6 +76,37 @@ func checkEvidenceValueCLI(t *testing.T, s control.Snapshot, run func(...string)
 	}
 	if !bytes.Equal(before, run("inspect", s.RunID, "--export-jsonl")) {
 		t.Fatal("rejection changed journal")
+	}
+	// Legacy runs have no bounded context policy. The new acquisition command
+	// must fail closed before a decision write or source acquisition.
+	q.Actions[0].Kind = "source_read"
+	acquisition := control.EvidenceContextRequest{Model: evidencevalue.EncodeRequest(q), Queries: map[string]string{"read": "Explain source.txt"}}
+	raw, err := canonical.Bytes(acquisition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var denied bytes.Buffer
+	if err := Execute(context.Background(), []string{"evidence-acquire", s.RunID, file}, root, &denied); err == nil || denied.Len() != 0 {
+		t.Fatal("legacy policy admitted optional acquisition")
+	}
+	if !bytes.Equal(before, run("inspect", s.RunID, "--export-jsonl")) {
+		t.Fatal("legacy acquisition rejection changed journal")
+	}
+}
+
+func TestEvidenceAcquisitionWireIsStrict(t *testing.T) {
+	for _, raw := range []string{
+		`{"model":{},"queries":{},"permissions":"all"}`,
+		`{"model":{},"queries":{},"queries":{}}`,
+		`{"model":{"version":1,"authority":"approved"},"queries":{}}`,
+	} {
+		var request control.EvidenceContextRequest
+		if canonical.Decode([]byte(raw), &request) == nil {
+			t.Fatal("unsafe acquisition wire accepted")
+		}
 	}
 }
 
