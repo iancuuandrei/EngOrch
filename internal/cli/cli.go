@@ -30,6 +30,7 @@ type Command struct {
 }
 
 var commands = []Command{
+	{"evidence-feedback", "RUN REQUEST_JSON", "Reprice advisory evidence resources from receipt-matched typed tokens without mutating run state."},
 	{"evidence-acquire", "RUN REQUEST_JSON", "Record a finite JEV decision and acquire only selected bounded explorer source context; never dispatch a model."},
 	{"calibrate-models", "CALIBRATION_JSON", "Compare bounded matched task-policy outcomes; report conservative model selection without dispatch."},
 	{"version", "", "Report the build version, commit and build date."},
@@ -260,6 +261,8 @@ func Execute(ctx context.Context, args []string, cwd string, out io.Writer) (res
 	command := args[0]
 	args = args[1:]
 	switch command {
+	case "evidence-feedback":
+		return evidenceFeedbackCommand(*root, args, out)
 	case "evidence-acquire":
 		return evidenceAcquireCommand(ctx, *root, args, out)
 	case "agent-interrupt":

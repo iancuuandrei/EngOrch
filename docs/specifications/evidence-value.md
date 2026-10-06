@@ -63,3 +63,26 @@ permissions, repair budgets or acceptance. Resource costs remain declared
 estimates, not measured expenditure. Historical absent-policy behavior and
 absent-field serialization MUST remain compatible. Later autonomous JEV policy
 and provider-bearing acquisition remain outside this initial integration.
+
+## Observed token feedback
+
+`evidence-feedback` MUST bind a bounded model, per-axis allocations and consumed
+invocation cursors to the exact inspected controller prefix. Verified run usage
+MUST match that same run/head. Only matched completed Codex receipts with clean
+OBSERVED typed accounting and no pending calls MAY supply token costs.
+
+Costs MUST split accounting deltas into uncached/cached input and
+ordinary/reasoning output without charging the parent totals again. Invalid
+subsets MUST be rejected. Missing or non-token costs MUST remain unavailable;
+they MUST NOT advance a cursor, change a price or invent zero consumption.
+
+Each declared axis/invocation MUST update existing projected AdaGrad state at
+most once per supplied cursor. Known observations MAY increment advisory used
+quantities; limits MUST remain unchanged. The caller-supplied baseline/cursor
+MUST NOT be represented as authenticated cumulative accounting or budget
+authority. The result MUST identify its usage basis and reusable request.
+
+Request size, observations, axes, cursor lengths and numeric ranges MUST be
+bounded. Unknown/duplicate cursor identities or cursors for unavailable costs
+MUST be rejected. The operation MUST NOT write a journal, change runtime policy,
+settle UNKNOWN, dispatch any action or grant engineering acceptance.

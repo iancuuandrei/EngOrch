@@ -2,6 +2,12 @@
 
 ## Current product checkpoint — 2026-10-06
 
+v1.1.23 adds [observed token resource feedback](evidence-resource-feedback.md).
+Clean receipt-matched Codex accounting feeds advisory AdaGrad resource prices
+with separate cached/uncached input and reasoning/ordinary output cursors.
+Historical real receipts exercise the CLI without new provider calls. Automatic
+resource policy, empirical allocation and measured efficiency remain pending.
+
 v1.1.22 connects the finite evaluator to optional bounded explorer source
 acquisition through `evidence-acquire`. Decisions are journaled and recomputed
 on replay; source admission reuses existing candidate/read/context gates. This

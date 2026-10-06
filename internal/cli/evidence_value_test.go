@@ -95,6 +95,33 @@ func checkEvidenceValueCLI(t *testing.T, s control.Snapshot, run func(...string)
 	if !bytes.Equal(before, run("inspect", s.RunID, "--export-jsonl")) {
 		t.Fatal("legacy acquisition rejection changed journal")
 	}
+	feedback := evidencevalue.FeedbackRequest{Model: evidencevalue.EncodeRequest(q), Allocations: map[string]evidencevalue.Numeric{"wall_ms": "100"}, Consumed: map[string][]string{}}
+	raw, err = canonical.Bytes(feedback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var priced control.EvidenceFeedbackReport
+	if err := canonical.Decode(run("evidence-feedback", s.RunID, file), &priced); err != nil || priced.UsageHash == "" || len(priced.Observations) != 0 || len(priced.Feedback.Request.Consumed["wall_ms"]) != 0 {
+		t.Fatal("fake work acquired observed costs", err)
+	}
+	if priced.Feedback.Request.Model.Resources[0] != feedback.Model.Resources[0] {
+		t.Fatal("unknown cost changed baseline")
+	}
+	if !bytes.Equal(before, run("inspect", s.RunID, "--export-jsonl")) {
+		t.Fatal("resource feedback changed journal")
+	}
+	feedback.Model.Binding.JournalHead = ""
+	raw, _ = canonical.Bytes(feedback)
+	if err := os.WriteFile(file, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	denied.Reset()
+	if err := Execute(context.Background(), []string{"evidence-feedback", s.RunID, file}, root, &denied); err == nil || denied.Len() != 0 {
+		t.Fatal("detached resource feedback accepted")
+	}
 }
 
 func TestEvidenceAcquisitionWireIsStrict(t *testing.T) {

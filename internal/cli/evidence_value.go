@@ -106,3 +106,37 @@ func evidenceAcquireCommand(ctx context.Context, root string, args []string, out
 	}
 	return output(out, result)
 }
+
+func evidenceFeedbackCommand(root string, args []string, out io.Writer) error {
+	if len(args) != 2 {
+		return errors.New("evidence-feedback requires RUN REQUEST_JSON")
+	}
+	path, err := runPath(root, args[0])
+	if err != nil {
+		return err
+	}
+	state, err := control.Inspect(path)
+	if err != nil {
+		return err
+	}
+	if state.RunID != args[0] || filepath.Clean(state.Creation.Repository.Root) != filepath.Clean(root) {
+		return errors.New("journal/run repository binding mismatch")
+	}
+	input := args[1]
+	if !filepath.IsAbs(input) {
+		input = filepath.Join(root, input)
+	}
+	raw, err := readRegularPolicyJSON(input, evidencevalue.MaxBytes, "evidence resource feedback request", "64 KiB")
+	if err != nil {
+		return err
+	}
+	var request evidencevalue.FeedbackRequest
+	if canonical.Decode(raw, &request) != nil {
+		return errors.New("invalid evidence resource feedback request")
+	}
+	report, err := control.RepriceEvidenceResources(path, request)
+	if err != nil {
+		return err
+	}
+	return output(out, report)
+}

@@ -178,7 +178,47 @@ subtract one, accumulate squared gradients, update price by gradient divided by
 the square root of accumulated squared gradients, and project to nonnegative.
 Zero gradient leaves state unchanged. It does not alter used resources or limit.
 Prices may start at zero; hard constraints and unknown-cost exclusion still
-apply. Runtime observation ingestion and persisted automatic updates are pending.
+apply. `evidence-feedback` now connects this primitive to receipt-verified typed
+token observations. Automatic persisted resource policy remains pending.
+
+### Apply observed token feedback
+
+```powershell
+fabric evidence-feedback RUN C:\private-evidence\feedback-request.json
+```
+
+The request contains `model` (a populated snapshot-bound `evidence-value`
+template), `allocations` (a numeric-string per-observation allocation for every
+declared resource), and `consumed` (initially an empty object). For example,
+`"allocations":{"uncached_input_tokens":"10000"}` is valid only when that is
+the model's sole resource. Allocations and limits are explicit operator inputs;
+the command does not learn an optimal budget or monetary conversion.
+
+The report includes an exact usage-basis hash, token observations and
+`feedback.request`, which carries the updated model and per-resource cursor.
+Save that complete request for the next update; refresh its model binding after
+controller progress. Use its `model` for the next `evidence-value` or wrap it
+with source queries for `evidence-acquire`. This is optional feedback, not a
+default autonomous policy.
+
+Only journal-present, receipt-matched, completed Codex invocations with no
+pending tool calls and clean OBSERVED typed accounting contribute. Costs use
+the accounting delta, split into uncached/cached input and ordinary/reasoning
+output. Each axis/invocation is applied once. An unchanged repeated cursor makes
+no price or usage update; unknown axes remain unconsumed. Limits are preserved.
+The baseline `used`, prices and accumulated gradients remain caller-supplied
+advisory state. They are not validated cumulative accounting or controller
+budget authority; resetting a cursor can repeat advisory arithmetic and does
+not refund or authorize any real expenditure.
+
+Money, wall time, local compute, interventions and slots are not derived from
+token counts. A skipped resource retains its declared baseline, including a
+baseline zero; that is not an observed zero cost. Missing typed accounting or
+non-Codex routes do not establish free work. This projection is limited to 128
+invocations, nine axes and a 64 KiB request; exceeding the limit rejects this
+optional operation without changing the run. Invalid/unknown/duplicate cursors
+and nonfinite allocations are rejected. Fake invocations have no provider
+observation. The command is read-only and never dispatches or settles effects.
 
 This independently implemented mechanism draws on
 [finite value-of-information decision analysis](https://arxiv.org/abs/1703.08994)
