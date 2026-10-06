@@ -149,3 +149,31 @@ Request size, observations, axes, cursor lengths and numeric ranges MUST be
 bounded. Unknown/duplicate cursor identities or cursors for unavailable costs
 MUST be rejected. The operation MUST NOT write a journal, change runtime policy,
 settle UNKNOWN, dispatch any action or grant engineering acceptance.
+
+### v1.1.32 OpenCode typed-token feedback
+
+Matched completed OpenCode invocations with replay-validated normalized
+gateway aggregates, known zero pending calls and coherent call/receipt
+provenance MAY additionally supply token costs through the same four axes.
+Only `uncached_input_tokens`, `cached_input_tokens`,
+`ordinary_output_tokens` and `reasoning_output_tokens` are admitted. Cached
+input remains a subset of input and reasoning remains a subset of output,
+so parent totals MUST NOT be charged again and cache write MUST NOT become
+a resource axis. Unknown optional cached input MUST leave both input
+components unknown; unknown optional reasoning MUST leave both output
+components unknown. Known zero remains known zero. Nonnegative counts,
+subset bounds and exact derived differences MUST be validated, including
+inconsistent derived fields. UNKNOWN, unmatched, missing and pending
+entries MUST remain unavailable; they MUST NOT advance a cursor, change a
+price or invent zero consumption. Money, time, compute and slots MUST NOT
+become measured zero.
+
+Duplicate invocation identities across route groups, excessive observation
+bounds and invalid numeric values MUST be rejected. Mixed route
+observations MUST follow deterministic actual controller order for
+sequential advisory updates. With no OpenCode invocations the scope
+remains `receipt_matched_completed_codex_typed_tokens`; with OpenCode
+invocations the scope is
+`receipt_matched_completed_codex_and_opencode_typed_tokens`. The exact
+scheduler-bound variant MUST reuse repository/schedule/run-membership
+checks and thread the scheduler only into composite verification.

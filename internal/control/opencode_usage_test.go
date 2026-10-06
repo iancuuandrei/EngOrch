@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -339,15 +340,38 @@ func TestRunUsageScopePreservedWithOpenCode(t *testing.T) {
 	}
 }
 
-func TestEvidenceFeedbackIgnoresOpenCodeTotals(t *testing.T) {
-	usage := RunUsage{Invocations: []RuntimeUsageEntry{tokenFeedbackEntry()}}
+func TestEvidenceFeedbackAdmitsOpenCodeTotals(t *testing.T) {
+	codexID, openCodeID := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	entry := tokenFeedbackEntry()
+	entry.InvocationID = codexID
+	usage := RunUsage{Invocations: []RuntimeUsageEntry{entry}}
+	cached, reasoning := int64(16), int64(4)
+	uncached, ordinary := int64(32), int64(8)
+	calls, receipts, pending := 2, 2, 0
 	usage.OpenCodeInvocations = []OpenCodeUsageEntry{{
-		InvocationID: strings.Repeat("b", 64), Role: "writer", JournalPresent: true, ReceiptMatched: true, Status: "completed",
-		Usage: &OpenCodeTokenUsage{InputTokens: 386751, OutputTokens: 8470},
+		InvocationID: openCodeID, Role: "writer", JournalPresent: true, ReceiptMatched: true, Status: "completed",
+		Usage:           &OpenCodeTokenUsage{InputTokens: 48, CachedInputTokens: &cached, UncachedInputTokens: &uncached, OutputTokens: 12, ReasoningTokens: &reasoning, OrdinaryOutputTokens: &ordinary},
+		GatewayCalls:    &calls,
+		GatewayReceipts: &receipts,
+		GatewayPending:  &pending,
 	}}
+	usage.controllerOrder = []string{codexID, openCodeID}
 	observations, unavailable, err := evidenceTokenObservations(usage)
-	if err != nil || len(unavailable) != 0 || len(observations) != 1 {
-		t.Fatal("Codex-only feedback must ignore OpenCode totals", err, unavailable)
+	if err != nil || len(unavailable) != 0 || len(observations) != 2 {
+		t.Fatal("completed OpenCode totals must contribute alongside Codex", err, unavailable)
+	}
+	if observations[0].InvocationID != codexID || observations[1].InvocationID != openCodeID {
+		t.Fatal("mixed-route observations must follow controller order", observations[0].InvocationID, observations[1].InvocationID)
+	}
+	values := map[string]string{}
+	for name, cost := range observations[1].Costs {
+		if cost != nil {
+			values[name] = string(*cost)
+		}
+	}
+	want := map[string]string{"uncached_input_tokens": "32", "cached_input_tokens": "16", "ordinary_output_tokens": "8", "reasoning_output_tokens": "4"}
+	if !reflect.DeepEqual(values, want) {
+		t.Fatal("OpenCode token subsets mispriced", values)
 	}
 }
 

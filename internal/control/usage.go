@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"harness.local/engorch/internal/access"
 	"harness.local/engorch/internal/canonical"
@@ -36,6 +37,12 @@ type RunUsage struct {
 	Scope               string               `json:"scope"`
 	Invocations         []RuntimeUsageEntry  `json:"invocations"`
 	OpenCodeInvocations []OpenCodeUsageEntry `json:"open_code_invocations,omitempty"`
+	// controllerOrder is the derived actual controller order of feedback
+	// observation identities across Codex host intents and OpenCode
+	// admissions in shared journal-event space. It is read-only advisory
+	// ordering metadata: unexported, never serialized, hashed or granted
+	// authority, and never part of the durable wire.
+	controllerOrder []string
 }
 
 // AdmissionUsage reports controller-authorized resource reservations separately
@@ -53,6 +60,100 @@ type usageTarget struct {
 	invocation     runtime.Invocation
 	path, head     string
 	resultHash     string
+	// order is the controller journal-event index of the host intent.
+	order int
+}
+
+// openCodeFeedbackPositions derives advisory controller positions for
+// OpenCode invocations in shared journal-event space, mirroring collect
+// admission order (dispatch admission index, else receipt index) without
+// revalidating evidence. Only opencode-http admissions and receipts are
+// considered, so Codex host intents never collide. It performs no writes,
+// never synthesizes totals and grants no authority; positions are consumed
+// only for sequential advisory feedback ordering.
+func openCodeFeedbackPositions(events []journal.Event) map[string]int {
+	admissionOrder := map[string]int{}
+	for index, event := range events {
+		if event.Kind != "agent.dispatch-admitted" {
+			continue
+		}
+		var admission AgentDispatchAdmission
+		if err := canonical.Decode(event.Payload, &admission); err != nil {
+			continue
+		}
+		if admission.Invocation.Profile.Runtime != "opencode-http" {
+			continue
+		}
+		if _, duplicate := admissionOrder[admission.Invocation.ID]; !duplicate {
+			admissionOrder[admission.Invocation.ID] = index
+		}
+	}
+	positions := map[string]int{}
+	for index, event := range events {
+		var receipt providerDispatchReceipt
+		switch event.Kind {
+		case "planning.provider-observed", "role.provider-observed":
+			if err := canonical.Decode(event.Payload, &receipt); err != nil {
+				continue
+			}
+		default:
+			continue
+		}
+		if receipt.Result.Requested.Runtime != "opencode-http" {
+			continue
+		}
+		if order, ok := admissionOrder[receipt.InvocationID]; ok {
+			positions[receipt.InvocationID] = order
+		} else if _, ok := positions[receipt.InvocationID]; !ok {
+			positions[receipt.InvocationID] = index
+		}
+	}
+	for id, order := range admissionOrder {
+		if _, ok := positions[id]; !ok {
+			positions[id] = order
+		}
+	}
+	return positions
+}
+
+// mergeFeedbackControllerOrder derives actual controller observation order
+// across Codex host intents and OpenCode admissions in shared journal-event
+// space. Positions never collide across groups; a lexical tiebreak keeps the
+// merge deterministic. The result carries no authority and is consumed only
+// for sequential advisory feedback ordering, never as budget evidence.
+func mergeFeedbackControllerOrder(targets []usageTarget, openCodeOrder map[string]int) []string {
+	positioned := make([]struct {
+		id    string
+		order int
+	}, 0, len(targets)+len(openCodeOrder))
+	for _, target := range targets {
+		positioned = append(positioned, struct {
+			id    string
+			order int
+		}{target.invocation.ID, target.order})
+	}
+	for id, order := range openCodeOrder {
+		positioned = append(positioned, struct {
+			id    string
+			order int
+		}{id, order})
+	}
+	sort.SliceStable(positioned, func(i, j int) bool {
+		if positioned[i].order != positioned[j].order {
+			return positioned[i].order < positioned[j].order
+		}
+		return positioned[i].id < positioned[j].id
+	})
+	ids := make([]string, 0, len(positioned))
+	seen := map[string]bool{}
+	for _, item := range positioned {
+		if seen[item.id] {
+			continue
+		}
+		seen[item.id] = true
+		ids = append(ids, item.id)
+	}
+	return ids
 }
 
 func admittedRuntimeTerminal(s Snapshot, invocation runtime.Invocation) (string, string) {
@@ -250,20 +351,20 @@ func MeasureRunUsageWithScheduler(path, schedulerPath string) (RunUsage, error) 
 	}
 	targets := []usageTarget{}
 	indices := map[string]int{}
-	add := func(i runtime.Invocation, path string) {
+	add := func(order int, i runtime.Invocation, path string) {
 		indices[i.ID] = len(targets)
 		head, resultHash := admittedRuntimeTerminal(s, i)
-		target := usageTarget{invocation: i, path: path, head: head, resultHash: resultHash}
+		target := usageTarget{invocation: i, path: path, head: head, resultHash: resultHash, order: order}
 		targets = append(targets, target)
 	}
-	for _, e := range events {
+	for eventIndex, e := range events {
 		switch e.Kind {
 		case "explorer.host-intent":
 			var intent ExplorerHostIntent
 			if err := canonical.Decode(e.Payload, &intent); err != nil {
 				return RunUsage{}, err
 			}
-			add(intent.Invocation, filepath.Join(intent.Launch.Root, "explorer.jsonl"))
+			add(eventIndex, intent.Invocation, filepath.Join(intent.Launch.Root, "explorer.jsonl"))
 		case "planning.host-intent":
 			var l codexhost.Launch
 			if err := canonical.Decode(e.Payload, &l); err != nil {
@@ -273,13 +374,13 @@ func MeasureRunUsageWithScheduler(path, schedulerPath string) (RunUsage, error) 
 			if err != nil {
 				return RunUsage{}, err
 			}
-			add(i, filepath.Join(l.Root, "planner.jsonl"))
+			add(eventIndex, i, filepath.Join(l.Root, "planner.jsonl"))
 		case "writer.host-intent":
 			var intent WriterHostIntent
 			if err := canonical.Decode(e.Payload, &intent); err != nil {
 				return RunUsage{}, err
 			}
-			add(intent.Invocation, filepath.Join(intent.Launch.Root, "writer.jsonl"))
+			add(eventIndex, intent.Invocation, filepath.Join(intent.Launch.Root, "writer.jsonl"))
 		case "graph.writer.host-intent":
 			var event GraphWriterHostEvent
 			if err := canonical.Decode(e.Payload, &event); err != nil {
@@ -288,13 +389,13 @@ func MeasureRunUsageWithScheduler(path, schedulerPath string) (RunUsage, error) 
 			if event.Intent == nil || event.TaskID == "" {
 				return RunUsage{}, errors.New("graph writer usage intent lacks task binding")
 			}
-			add(event.Intent.Invocation, filepath.Join(event.Intent.Launch.Root, "writer.jsonl"))
+			add(eventIndex, event.Intent.Invocation, filepath.Join(event.Intent.Launch.Root, "writer.jsonl"))
 		case "review.host-intent":
 			var intent ReviewHostIntent
 			if err := canonical.Decode(e.Payload, &intent); err != nil {
 				return RunUsage{}, err
 			}
-			add(intent.Invocation, filepath.Join(intent.Launch.Root, "review.jsonl"))
+			add(eventIndex, intent.Invocation, filepath.Join(intent.Launch.Root, "review.jsonl"))
 		case "planning.runtime-observed", "writer.runtime-observed", "review.runtime-observed", "explorer.runtime-observed", "graph.writer.runtime-observed":
 			// These receipt schemas deliberately have the same correlation fields.
 			var receipt PlannerReceipt
@@ -398,5 +499,6 @@ func MeasureRunUsageWithScheduler(path, schedulerPath string) (RunUsage, error) 
 		return RunUsage{}, err
 	}
 	report.OpenCodeInvocations = openCode
+	report.controllerOrder = mergeFeedbackControllerOrder(targets, openCodeFeedbackPositions(events))
 	return report, nil
 }

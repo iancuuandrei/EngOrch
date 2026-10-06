@@ -108,10 +108,20 @@ func evidenceAcquireCommand(ctx context.Context, root string, args []string, out
 }
 
 func evidenceFeedbackCommand(root string, args []string, out io.Writer) error {
-	if len(args) != 2 {
-		return errors.New("evidence-feedback requires RUN REQUEST_JSON")
+	var scheduleID string
+	var runID, input string
+	switch len(args) {
+	case 2:
+		runID, input = args[0], args[1]
+	case 4:
+		if args[2] != "--schedule" || args[3] == "" {
+			return errors.New("evidence-feedback requires RUN REQUEST_JSON [--schedule SCHEDULE_ID]")
+		}
+		runID, input, scheduleID = args[0], args[1], args[3]
+	default:
+		return errors.New("evidence-feedback requires RUN REQUEST_JSON [--schedule SCHEDULE_ID]")
 	}
-	path, err := runPath(root, args[0])
+	path, err := runPath(root, runID)
 	if err != nil {
 		return err
 	}
@@ -119,10 +129,23 @@ func evidenceFeedbackCommand(root string, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if state.RunID != args[0] || filepath.Clean(state.Creation.Repository.Root) != filepath.Clean(root) {
+	if state.RunID != runID || filepath.Clean(state.Creation.Repository.Root) != filepath.Clean(root) {
 		return errors.New("journal/run repository binding mismatch")
 	}
-	input := args[1]
+	var schedulerPath string
+	if scheduleID != "" {
+		schedPath, err := schedulePath(root, scheduleID)
+		if err != nil {
+			return err
+		}
+		if err := validateAgentSchedule(root, runID, scheduleID, path, schedPath); err != nil {
+			return err
+		}
+		if err := requireScheduleReferencesRun(schedPath, runID, path); err != nil {
+			return err
+		}
+		schedulerPath = schedPath
+	}
 	if !filepath.IsAbs(input) {
 		input = filepath.Join(root, input)
 	}
@@ -134,7 +157,12 @@ func evidenceFeedbackCommand(root string, args []string, out io.Writer) error {
 	if canonical.Decode(raw, &request) != nil {
 		return errors.New("invalid evidence resource feedback request")
 	}
-	report, err := control.RepriceEvidenceResources(path, request)
+	var report control.EvidenceFeedbackReport
+	if schedulerPath != "" {
+		report, err = control.RepriceEvidenceResourcesWithScheduler(path, request, schedulerPath)
+	} else {
+		report, err = control.RepriceEvidenceResources(path, request)
+	}
 	if err != nil {
 		return err
 	}

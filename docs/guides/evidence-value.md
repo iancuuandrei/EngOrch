@@ -257,6 +257,7 @@ token observations. Automatic persisted resource policy remains pending.
 
 ```powershell
 fabric evidence-feedback RUN C:\private-evidence\feedback-request.json
+fabric evidence-feedback RUN C:\private-evidence\feedback-request.json --schedule SCHEDULE_ID
 ```
 
 The request contains `model` (a populated snapshot-bound `evidence-value`
@@ -274,9 +275,16 @@ with source queries for `evidence-acquire`. This is optional feedback, not a
 default autonomous policy.
 
 Only journal-present, receipt-matched, completed Codex invocations with no
-pending tool calls and clean OBSERVED typed accounting contribute. Costs use
-the accounting delta, split into uncached/cached input and ordinary/reasoning
-output. Each axis/invocation is applied once. An unchanged repeated cursor makes
+pending tool calls and clean OBSERVED typed accounting contribute, plus
+matched completed OpenCode invocations with replay-validated normalized
+gateway aggregates, known zero pending calls and coherent call/receipt
+provenance. OpenCode costs use the same four axes only: unknown optional
+cached input leaves both input components unknown and unknown optional
+reasoning leaves both output components unknown, while known zero stays
+known zero. Cache write never becomes a resource axis. Costs use
+the accounting delta for Codex, split into uncached/cached input and ordinary/reasoning
+output. Each axis/invocation is applied once in deterministic actual
+controller order across both route groups. An unchanged repeated cursor makes
 no price or usage update; unknown axes remain unconsumed. Limits are preserved.
 The baseline `used`, prices and accumulated gradients remain caller-supplied
 advisory state. They are not validated cumulative accounting or controller
@@ -285,12 +293,21 @@ not refund or authorize any real expenditure.
 
 Money, wall time, local compute, interventions and slots are not derived from
 token counts. A skipped resource retains its declared baseline, including a
-baseline zero; that is not an observed zero cost. Missing typed accounting or
-non-Codex routes do not establish free work. This projection is limited to 128
+baseline zero; that is not an observed zero cost. Missing typed accounting,
+non-Codex routes, UNKNOWN, unmatched, missing and pending entries do not
+establish free work and never advance a cursor. With no OpenCode invocations
+the scope stays `receipt_matched_completed_codex_typed_tokens`; with
+OpenCode invocations it is
+`receipt_matched_completed_codex_and_opencode_typed_tokens`. Duplicate
+invocation identities across route groups, excessive observation bounds and
+invalid numeric values are rejected. This projection is limited to 128
 invocations, nine axes and a 64 KiB request; exceeding the limit rejects this
 optional operation without changing the run. Invalid/unknown/duplicate cursors
 and nonfinite allocations are rejected. Fake invocations have no provider
 observation. The command is read-only and never dispatches or settles effects.
+The optional `--schedule SCHEDULE_ID` form reuses the exact
+repository/schedule/run-membership checks and threads the scheduler only
+into composite verification; v1/v2 turns never read it.
 
 This independently implemented mechanism draws on
 [finite value-of-information decision analysis](https://arxiv.org/abs/1703.08994)

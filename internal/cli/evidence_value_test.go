@@ -107,6 +107,9 @@ func checkEvidenceValueCLI(t *testing.T, s control.Snapshot, run func(...string)
 	if err := canonical.Decode(run("evidence-feedback", s.RunID, file), &priced); err != nil || priced.UsageHash == "" || len(priced.Observations) != 0 || len(priced.Feedback.Request.Consumed["wall_ms"]) != 0 {
 		t.Fatal("fake work acquired observed costs", err)
 	}
+	if priced.Scope != "receipt_matched_completed_codex_typed_tokens" {
+		t.Fatal("Codex-only feedback must keep the legacy scope", priced.Scope)
+	}
 	if priced.Feedback.Request.Model.Resources[0] != feedback.Model.Resources[0] {
 		t.Fatal("unknown cost changed baseline")
 	}

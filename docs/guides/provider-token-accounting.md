@@ -39,7 +39,13 @@ unlimited access reservation.
 `open_code_invocations` in actual controller admission order. Legacy receipts
 without `AgentDispatch` order by their receipt event position, preserving
 deterministic controller order. `RunUsage.Scope` is unchanged; the additive
-field is omitted when absent and `evidence-feedback` remains Codex-only.
+field is omitted when absent. Since v1.1.32, `evidence-feedback` additionally
+admits matched completed OpenCode entries into read-only advisory token
+costs through the same four axes; with no OpenCode invocations its scope
+stays `receipt_matched_completed_codex_typed_tokens`, otherwise it is
+`receipt_matched_completed_codex_and_opencode_typed_tokens`. See the
+[observed-feedback guide](evidence-value.md#apply-observed-token-feedback)
+and the [normative contract](../specifications/evidence-value.md).
 
 Each completed entry is bound by existing controller, gateway and runtime
 journal APIs only:
