@@ -64,6 +64,28 @@ estimates, not measured expenditure. Historical absent-policy behavior and
 absent-field serialization MUST remain compatible. Later autonomous JEV policy
 and provider-bearing acquisition remain outside this initial integration.
 
+### v1.1.25 advisory reuse in bounded task-context selection
+
+Selected source paths from successful decision-associated explorer admissions
+MAY inform existing bounded task-context selection for subsequent roles as
+advisory path hints. The controller MUST reuse the existing exploration-hint
+seam: hints MUST bias only read prioritization and selector `PathHints` within
+unchanged file/count/byte limits, and MUST NOT inject manifests or summaries,
+grant scope, remove required context, dispatch providers, repeat effects, or
+change acceptance. Existing source/candidate checks and selector limits MUST
+remain.
+
+A hint MUST be admitted only from a positive selected decision with a matching
+admitted explorer context for the exact current source, candidate and selected
+query. Stale candidate/source, wrong role/query, no selected action, missing
+context, malformed linkage and unavailable contexts MUST NOT contribute.
+Same-query reuse MAY match one validated explicit decision to a historical
+matching context without `EvidenceDecisionID` only when its identities, role
+and exact query match; a successful read MUST NOT be treated as semantic truth.
+Hint paths MUST be deduplicated and sorted deterministically with existing
+exploration hints without filesystem reads. Historical runs without EVC
+decisions MUST behave identically.
+
 ## Observed token feedback
 
 `evidence-feedback` MUST bind a bounded model, per-axis allocations and consumed

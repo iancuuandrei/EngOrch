@@ -90,6 +90,19 @@ this command does not claim observed token/money spending or calibrated prices.
 Queries and source excerpts are private run evidence; avoid putting credentials
 in them or publishing the raw journal.
 
+## v1.1.25 advisory reuse for later roles
+
+An optional finite acquisition now also informs later bounded task-context
+selection. Selected source paths from a successful decision-linked explorer
+admission act as advisory hints for subsequent writer, fixer and reviewer
+selection, within the existing read, file and byte bounds. Only the exact
+current source, candidate and selected query contribute; stale, wrong-role,
+missing, malformed and unavailable entries are ignored. A reused historical
+context without a decision link can match one validated explicit decision for
+the same identities and query. This is operator-triggered acquisition only:
+automatic EVC policy and measured quality or token benefit remain pending.
+Runs without EVC decisions behave as before.
+
 ## Model a finite information action
 
 Allowed action kinds are `source_read`, `graph_query`, `targeted_test`, `coverage`,

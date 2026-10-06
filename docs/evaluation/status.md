@@ -2,6 +2,14 @@
 
 ## Current product checkpoint — 2026-10-06
 
+v1.1.25 reuses optional finite EVC source paths as advisory hints in existing
+bounded task-context selection for later roles. Focused control regressions
+cover valid handoff to a different role query, dedup/order, stale/wrong/
+missing/no-positive exclusion, same-query reuse and unchanged absent-feature
+behavior, with a real Git fixture and replay/prompt binding checks. This is
+operator-triggered acquisition only; automatic EVC policy and measured
+quality/token benefit remain pending.
+
 v1.1.23 adds [observed token resource feedback](evidence-resource-feedback.md).
 Clean receipt-matched Codex accounting feeds advisory AdaGrad resource prices
 with separate cached/uncached input and reasoning/ordinary output cursors.

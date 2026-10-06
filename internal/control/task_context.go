@@ -350,6 +350,8 @@ func admitTaskContextBound(ctx context.Context, path, role, question, isolationT
 	// Use the freshest journal metadata for hints without extra dispatch.
 	s = fresh
 	explorationPaths := taskContextExplorationPaths(s)
+	evidencePaths := taskContextEvidencePathsForCandidate(s, sourceID, candidateID)
+	combinedExploration := mergeTaskContextHintPaths(explorationPaths, evidencePaths)
 	writerPaths := taskContextWriterPaths(s)
 	var lexicalSearches []TaskContextLexicalSearch
 	var lexicalPaths []string
@@ -370,9 +372,9 @@ func admitTaskContextBound(ctx context.Context, path, role, question, isolationT
 			}
 		}
 	}
-	prioritized := prioritizeTaskPaths(fileStates, explorationPaths, writerPaths, lexicalPaths, boundQuery)
+	prioritized := prioritizeTaskPaths(fileStates, combinedExploration, writerPaths, lexicalPaths, boundQuery)
 	if isolated != nil {
-		prioritized = prioritizeTaskPaths(fileStates, explorationPaths, isolated.Task.WritePaths, lexicalPaths, boundQuery)
+		prioritized = prioritizeTaskPaths(fileStates, combinedExploration, isolated.Task.WritePaths, lexicalPaths, boundQuery)
 	}
 	type readFile struct {
 		path    string
@@ -535,7 +537,7 @@ func admitTaskContextBound(ctx context.Context, path, role, question, isolationT
 	for _, r := range reads {
 		files = append(files, taskcontext.File{Path: r.path, Hash: r.hash, Content: r.content})
 	}
-	changed, hints := taskContextSelectorHints(writerPaths, append(explorationPaths, lexicalPaths...))
+	changed, hints := taskContextSelectorHints(writerPaths, append(combinedExploration, lexicalPaths...))
 	limits := taskcontext.DefaultLimits()
 	limits.MaxInputBytes = taskContextMaxInput
 	manifest, selErr := taskcontext.Select(taskcontext.Input{
@@ -629,6 +631,112 @@ func taskContextExplorationPaths(s Snapshot) []string {
 				seen[p] = true
 				out = append(out, p)
 			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// taskContextEvidencePathsForCandidate collects advisory selected source paths
+// from successful decision-associated explorer admissions. It performs no
+// filesystem reads and grants no scope: selected paths only bias existing
+// bounded prioritization and selector hints for subsequent roles.
+//
+// A path contributes only when all of the following hold for the exact current
+// source and candidate: the decision is present in the replay-validated
+// snapshot with a positive selected action, its selected query is bounded and
+// matches an admitted explorer context for the same source, candidate and
+// query, and that context carries complete selected source bytes (no
+// unavailable marker). Stale candidate/source, wrong role or query, missing
+// context, malformed linkage and unavailable contexts contribute nothing.
+// Decisions never dispatch providers, inject manifests or change acceptance.
+//
+// Same-query reuse is honored without inferring semantic truth: a historical
+// explorer context admitted before its decision (empty EvidenceDecisionID) may
+// match one validated explicit decision only when its source, candidate, role
+// and exact query equal that decision's selected query. Successful reads alone
+// never create hints.
+func taskContextEvidencePathsForCandidate(s Snapshot, sourceID, candidateID string) []string {
+	if strings.TrimSpace(sourceID) == "" || strings.TrimSpace(candidateID) == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for i := range s.EvidenceDecisions {
+		decision := &s.EvidenceDecisions[i]
+		if decision.Report.Selected == "" {
+			continue
+		}
+		selectedQuery, ok := decision.Request.Queries[decision.Report.Selected]
+		if !ok || strings.TrimSpace(selectedQuery) == "" || len(selectedQuery) > taskContextQueryCap || !utf8.ValidString(selectedQuery) {
+			continue
+		}
+		if decision.Request.Model.Binding.SourceID != sourceID || decision.Request.Model.Binding.CandidateID != candidateID {
+			continue
+		}
+		var matched *TaskContextRecord
+		for j := range s.TaskContexts {
+			ctx := &s.TaskContexts[j]
+			if ctx.Role != "explorer" || ctx.IsolationTaskID != "" {
+				continue
+			}
+			if ctx.SourceID != sourceID || ctx.CandidateID != candidateID {
+				continue
+			}
+			if ctx.Unavailable != "" || len(ctx.Manifest.Selected) == 0 {
+				continue
+			}
+			if ctx.EvidenceDecisionID != "" {
+				if ctx.EvidenceDecisionID != decision.ID {
+					continue
+				}
+				if ctx.Query != selectedQuery {
+					continue
+				}
+				matched = ctx
+				break
+			}
+			if ctx.Query != selectedQuery {
+				continue
+			}
+			matched = ctx
+			break
+		}
+		if matched == nil {
+			continue
+		}
+		for _, sel := range matched.Manifest.Selected {
+			if strings.TrimSpace(sel.Path) == "" {
+				continue
+			}
+			if err := safepath.Relative(sel.Path); err != nil {
+				continue
+			}
+			if !seen[sel.Path] {
+				seen[sel.Path] = true
+				out = append(out, sel.Path)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// mergeTaskContextHintPaths deduplicates and sorts advisory hint paths
+// deterministically. It performs no filesystem reads.
+func mergeTaskContextHintPaths(a, b []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, p := range a {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	for _, p := range b {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
 		}
 	}
 	sort.Strings(out)
