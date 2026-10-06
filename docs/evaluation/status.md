@@ -1,6 +1,6 @@
 # Implementation and evidence status
 
-## Current product checkpoint — 2026-10-05
+## Current product checkpoint — 2026-10-06
 
 Goal initialization used v1.1.4 on clean `dev`
 `6ba6a6de90cd53683aa08df2d68a799f57f9ae4b`. Current `main` follows trusted
@@ -82,6 +82,12 @@ demonstrates live structured-repair integration on one historical task, while
 general quality/efficiency benefit remains unqualified. Treatment used more
 observed tokens and wall time; retain it opt-in. Next product work is the finite
 Evidence Value Controller rather than another equivalent repair pilot.
+
+The v1.1.21 [finite evidence-value evaluator](evidence-value.md) exposes a
+snapshot-bound advisory CLI, finite decision models, unknown-cost/budget
+exclusion and adaptive price/reliability primitives. It changes no default
+dispatch policy. Automatic acquisition/research stopping and live benefit
+remain **NOT RUN**; Phase C is still in progress.
 
 The active [v2 goal](../roadmap/v2-product-plan.md) starts with baseline/context
 qualification, then structured repair. Final v2 tests, frozen cohort, language

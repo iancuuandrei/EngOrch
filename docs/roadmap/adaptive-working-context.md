@@ -9,6 +9,20 @@ replace repair, scheduling, model allocation or final release requirements.
 
 **JEV controls acquisition. Agents control retention. Fabric controls authority.**
 
+The steering was reconfirmed on 2026-10-06 against current source. The bounded
+explorer implementation and historical pilot below already address the initial
+mechanism. Keep it opt-in: the incomplete A arm and higher token use in C do not
+justify promotion or more role integrations. Preserve A's UNKNOWN effect without
+resend. The new [finite evidence-value evaluator](../guides/evidence-value.md)
+is advisory only; it does not yet control runtime acquisition or context
+retention. Acquisition admission remains an explicit pending v2 integration.
+
+Fresh targeted regressions on this checkout passed on 2026-10-06: workingcontext
+0.687 s and control 120.261 s. The selected controller checks cover frozen
+replay, accepted follow-up inputs, stale/bounded updates, default-off behavior,
+UNKNOWN/no-resend and cached settled-result recovery. These are deterministic
+fixtures, not another provider cohort or a new efficiency claim.
+
 Repository intelligence supplies grounded evidence. Evidence Value Controller/JEV
 selects worthwhile acquisition or computation. The model organizes already
 acquired reasoning state in a disposable per-agent projection. The topology
