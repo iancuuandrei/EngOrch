@@ -44,7 +44,7 @@ Output is canonical JSON except help, aggregated run-snapshot JSON, and `inspect
 | `recover-push-lease` | `RUN PREVIEW_JSON INTENT_ID ACTOR [TOKEN_ENV]` | Adopt a quiescent push lease, reconcile remote state and release it. |
 | `push` | `RUN PREVIEW_JSON INTENT_ID ACTOR [TOKEN_ENV]` | Perform one exactly authorized push and record remote readback. |
 | `commit` | `RUN PREVIEW_JSON INTENT_ID ACTOR` | Execute one exactly authorized local commit and record observed object/ref/index outcome. |
-| `usage` | `RUN` | Inspect controller admissions and journaled Codex context usage, checking admitted receipt heads. |
+| `usage` | `RUN [--schedule SCHEDULE_ID]` | Inspect controller admissions with journaled Codex and OpenCode invocation usage from replay-validated receipts; pending OpenCode work stays UNKNOWN and money stays unknown. Pass --schedule SCHEDULE_ID to bind composite explorer turns to one exact schedule. |
 | `runtime-usage` | `JOURNAL` | Report journal-bound context bytes, tool calls and observed provider usage without exposing content. |
 | `prepare-review` | `RUN` | Inspect the explicit reviewer invocation for the verified candidate. |
 | `prepare-explorer` | `RUN QUESTION` | Inspect a read-only exploration invocation for the current candidate. |

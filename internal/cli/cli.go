@@ -20,6 +20,7 @@ import (
 	"harness.local/engorch/internal/control"
 	"harness.local/engorch/internal/controllerstate"
 	"harness.local/engorch/internal/repository"
+	"harness.local/engorch/internal/taskscheduler"
 )
 
 // Command describes an implemented CLI command; Reference uses this same table.
@@ -67,7 +68,7 @@ var commands = []Command{
 	{"recover-push-lease", "RUN PREVIEW_JSON INTENT_ID ACTOR [TOKEN_ENV]", "Adopt a quiescent push lease, reconcile remote state and release it."},
 	{"push", "RUN PREVIEW_JSON INTENT_ID ACTOR [TOKEN_ENV]", "Perform one exactly authorized push and record remote readback."},
 	{"commit", "RUN PREVIEW_JSON INTENT_ID ACTOR", "Execute one exactly authorized local commit and record observed object/ref/index outcome."},
-	{"usage", "RUN", "Inspect controller admissions and journaled Codex context usage, checking admitted receipt heads."},
+	{"usage", "RUN [--schedule SCHEDULE_ID]", "Inspect controller admissions with journaled Codex and OpenCode invocation usage from replay-validated receipts; pending OpenCode work stays UNKNOWN and money stays unknown. Pass --schedule SCHEDULE_ID to bind composite explorer turns to one exact schedule."},
 	{"runtime-usage", "JOURNAL", "Report journal-bound context bytes, tool calls and observed provider usage without exposing content."},
 	{"prepare-review", "RUN", "Inspect the explicit reviewer invocation for the verified candidate."},
 	{"prepare-explorer", "RUN QUESTION", "Inspect a read-only exploration invocation for the current candidate."},
@@ -218,6 +219,50 @@ func initializeRunPath(root, id string, cfg config.Config, identity repository.I
 		return "", err
 	}
 	return paths.Run(id)
+}
+
+// usageScheduleArgument parses RUN [--schedule SCHEDULE_ID] for the usage
+// command. The schedule binding is exact; no scheduler is inferred.
+func usageScheduleArgument(args []string) (runID, scheduleID string, err error) {
+	switch len(args) {
+	case 1:
+		return args[0], "", nil
+	case 3:
+		if args[1] != "--schedule" {
+			return "", "", errors.New("usage requires RUN [--schedule SCHEDULE_ID]")
+		}
+		if args[2] == "" {
+			return "", "", errors.New("usage requires RUN [--schedule SCHEDULE_ID]")
+		}
+		return args[0], args[2], nil
+	default:
+		return "", "", errors.New("usage requires RUN [--schedule SCHEDULE_ID]")
+	}
+}
+
+// requireScheduleReferencesRun requires the selected schedule to bind the
+// selected run by exact run ID and controller path, after the existing
+// repository/schedule validation. A same-repository schedule for another run
+// must not silently scope usage.
+func requireScheduleReferencesRun(schedPath, runID, controllerPath string) error {
+	snapshot, err := taskscheduler.Inspect(schedPath)
+	if err != nil {
+		return err
+	}
+	want := filepath.Clean(controllerPath)
+	if snapshot.Definition != nil {
+		for _, task := range snapshot.Definition.Tasks {
+			if task.RunID == runID && filepath.Clean(task.ControllerPath) == want {
+				return nil
+			}
+		}
+	}
+	for _, dynamic := range snapshot.Dynamic {
+		if dynamic.Task.RunID == runID && filepath.Clean(dynamic.Task.ControllerPath) == want {
+			return nil
+		}
+	}
+	return errors.New("selected schedule does not bind the selected run")
 }
 
 // Execute runs one CLI command using cwd as the default root. It does not exit
@@ -420,6 +465,15 @@ func Execute(ctx context.Context, args []string, cwd string, out io.Writer) (res
 			}
 			args = []string{id}
 		}
+		var usageScheduler string
+		if command == "usage" {
+			runID, scheduleID, err := usageScheduleArgument(args)
+			if err != nil {
+				return err
+			}
+			args = []string{runID}
+			usageScheduler = scheduleID
+		}
 		want := 1
 		if command == "prepare-explorer" || command == "explore" {
 			want = 2
@@ -466,6 +520,23 @@ func Execute(ctx context.Context, args []string, cwd string, out io.Writer) (res
 			return output(out, record)
 		}
 		if command == "usage" {
+			if usageScheduler != "" {
+				schedPath, err := schedulePath(*root, usageScheduler)
+				if err != nil {
+					return err
+				}
+				if err := validateAgentSchedule(*root, args[0], usageScheduler, p, schedPath); err != nil {
+					return err
+				}
+				if err := requireScheduleReferencesRun(schedPath, args[0], p); err != nil {
+					return err
+				}
+				report, err := control.MeasureRunUsageWithScheduler(p, schedPath)
+				if err != nil {
+					return err
+				}
+				return output(out, report)
+			}
 			report, err := control.MeasureRunUsage(p)
 			if err != nil {
 				return err

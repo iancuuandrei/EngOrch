@@ -25,13 +25,17 @@ type RuntimeUsageEntry struct {
 
 // RunUsage reports every journaled Codex host in controller order, not only the
 // latest writer/reviewer. Fake runtime work has no provider accounting entry.
+// OpenCode invocations are reported separately through replay-validated
+// normalized gateway aggregates; the field is omitted for Codex-only runs to
+// preserve legacy serialization.
 type RunUsage struct {
-	WorkingContext *WorkingContextUsage `json:"working_context,omitempty"`
-	Admissions     []AdmissionUsage     `json:"admissions,omitempty"`
-	RunID          string               `json:"run_id"`
-	ControllerHead string               `json:"controller_head"`
-	Scope          string               `json:"scope"`
-	Invocations    []RuntimeUsageEntry  `json:"invocations"`
+	WorkingContext      *WorkingContextUsage `json:"working_context,omitempty"`
+	Admissions          []AdmissionUsage     `json:"admissions,omitempty"`
+	RunID               string               `json:"run_id"`
+	ControllerHead      string               `json:"controller_head"`
+	Scope               string               `json:"scope"`
+	Invocations         []RuntimeUsageEntry  `json:"invocations"`
+	OpenCodeInvocations []OpenCodeUsageEntry `json:"open_code_invocations,omitempty"`
 }
 
 // AdmissionUsage reports controller-authorized resource reservations separately
@@ -207,7 +211,17 @@ func measureAdmissions(path string, s Snapshot) ([]AdmissionUsage, error) {
 
 // MeasureRunUsage replays controller evidence and verifies each runtime receipt
 // head before returning accounting. Missing or changed admitted journals fail.
+// Composite turns fail safely without an exact scheduler binding; use
+// MeasureRunUsageWithScheduler to supply one.
 func MeasureRunUsage(path string) (RunUsage, error) {
+	return MeasureRunUsageWithScheduler(path, "")
+}
+
+// MeasureRunUsageWithScheduler is MeasureRunUsage with an exact scheduler
+// journal binding for composite turns. The scheduler is consulted only
+// through the existing journal-only composite verifier for v3 turns; all
+// other turns never read it.
+func MeasureRunUsageWithScheduler(path, schedulerPath string) (RunUsage, error) {
 	events, err := journal.Read(path)
 	if err != nil {
 		return RunUsage{}, err
@@ -379,5 +393,10 @@ func MeasureRunUsage(path string) (RunUsage, error) {
 		entry.Usage = &usage
 		report.Invocations = append(report.Invocations, entry)
 	}
+	openCode, err := collectOpenCodeUsageWithScheduler(path, schedulerPath, s, events)
+	if err != nil {
+		return RunUsage{}, err
+	}
+	report.OpenCodeInvocations = openCode
 	return report, nil
 }
