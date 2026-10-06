@@ -12,6 +12,25 @@ ping. For this route, set `trailing_cost_ping_v1` to `false` in
 `function_call_done_name_v1` enabled for the observed response dialect. This
 changes the selected route declaration, not the decoder's global defaults.
 
+## Pinned OpenCode Responses SDK High recipe (not yet live-qualified)
+
+For the pinned High recipe, declare the OpenCode request controls
+explicitly: `reasoning_effort` high, `reasoning_summary` auto, `include`
+`[reasoning.encrypted_content]`, and SystemRole `developer`. The matching
+provider declaration uses variant/profile effort `high` with variant
+`system_role` `developer` and `reasoning_summary` `auto`. The 2026-10-04
+record below used the default-effort recipe; the corrected High recipe has
+not yet completed a live run. A frozen 2026-10-06 canary was rejected in
+local preflight on the system/developer wire mismatch: no admitted
+upstream call or accepted receipt in the gateway journal; runtime
+ownership remains UNKNOWN. See the
+[canary record](../evaluation/evidence-acquisition-canary-20261006.md).
+Run `fabric doctor` first: it checks static configuration, not actual wire
+serialization. Do not loosen the global decoder or acceptance gates to
+tolerate the mismatch. The corrected recipe applies only to newly admitted
+distinct runs and grants no resend or replacement authorization for an
+existing UNKNOWN attempt; the local diagnostic settles nothing.
+
 With `native_writer_output = true`, writer and fixer require tools and
 `structured_output = "UNSUPPORTED"` at the provider layer, with
 `required_capabilities.reasoning = false`. The model may still advertise

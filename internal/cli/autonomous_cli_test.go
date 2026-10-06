@@ -124,6 +124,47 @@ func TestRunAutonomousCreatesBoundPolicyAndReportsResumableBlocker(t *testing.T)
 	}
 }
 
+func TestAutonomousLatestSelectionIgnoresCanonicalProviderSidecars(t *testing.T) {
+	root := autonomousCLIFixture(t)
+	var out bytes.Buffer
+	if err := Execute(context.Background(), []string{"run", "--autonomous", "Make a bounded fixture change"}, root, &out); err == nil {
+		t.Fatal("fixture planner emits a non-graph response; autonomous run should retain its semantic blocker")
+	}
+	var blocked autonomousFailure
+	if err := json.Unmarshal(out.Bytes(), &blocked); err != nil {
+		t.Fatalf("failure omitted sanitized run summary: %s (%v)", out.String(), err)
+	}
+	runs := filepath.Join(root, ".harness", "runs")
+	turnID := strings.Repeat("b", 64)
+	invocationID := strings.Repeat("c", 64)
+	for _, sidecar := range []string{
+		blocked.RunID + ".jsonl.model-access.jsonl",
+		blocked.RunID + ".jsonl.planner.opencode-runtime.jsonl",
+		blocked.RunID + ".jsonl.planner.provider-gateway.jsonl",
+		blocked.RunID + ".jsonl.planner.opencode-runtime.jsonl.state-root.jsonl",
+		blocked.RunID + ".jsonl.explorer.turn-" + turnID + ".opencode-runtime.jsonl",
+		blocked.RunID + ".jsonl.explorer.turn-" + turnID + ".provider-gateway.jsonl",
+		blocked.RunID + ".jsonl.planner.invocation-" + invocationID + ".opencode-runtime.jsonl",
+	} {
+		if err := os.WriteFile(filepath.Join(runs, sidecar), []byte("separate provider runtime event contract"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if latest, err := latestAutonomousRunID(root); err != nil || latest != blocked.RunID {
+		t.Fatalf("autonomous latest selection missed the blocked run: %s %v", latest, err)
+	}
+	// Omitted-RUN resume still resolves the same blocked run without
+	// dispatching new work; the exhausted blocker is retained.
+	var resumeOut bytes.Buffer
+	if err := Execute(context.Background(), []string{"resume", "--autonomous"}, root, &resumeOut); err == nil {
+		t.Fatal("resume should retain the exhausted semantic-correction blocker")
+	}
+	var resumed autonomousFailure
+	if err := json.Unmarshal(resumeOut.Bytes(), &resumed); err != nil || resumed.RunID != blocked.RunID {
+		t.Fatalf("omitted-RUN resume did not resolve the blocked run: %#v err=%v", resumed, err)
+	}
+}
+
 func TestAutonomousPlannerContextOptInIsIndependentOfSchedulerAndRoleContext(t *testing.T) {
 	root := autonomousCLIFixture(t)
 	var out bytes.Buffer

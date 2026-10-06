@@ -184,6 +184,12 @@ fabric diff [RUN]
 An omitted RUN on `resume --autonomous` selects the latest validated
 autonomous run by modification timestamp. That is a documented convenience,
 not a framework: on timestamp ties, or in scripts, pass RUN explicitly.
+`status` and omitted-RUN `inspect`/`diff`/`resume` skip only well-formed
+canonical sidecars (`model-access`, scheduler, and exact role/runtime/provider
+journals: bare role names for every runtime, explorer-only turn-scoped names,
+and invocation-scoped names for opencode-runtime and provider-gateway only).
+Corrupt run journals and unknown sidecar names still fail closed; they are
+reported, not hidden.
 `diff` shows the tracked HEAD diff plus non-ignored untracked files with
 coverage metadata. Results land in the isolated workspace at
 `.harness/worktrees/<RUN>/` (default layout).

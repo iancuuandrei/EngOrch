@@ -11,6 +11,7 @@ import (
 	"harness.local/engorch/internal/control"
 	"harness.local/engorch/internal/controllerstate"
 	"harness.local/engorch/internal/repository"
+	"harness.local/engorch/internal/safepath"
 )
 
 // runEligibility reports whether a fully validated journal snapshot may be
@@ -89,12 +90,13 @@ func selectLatestValidatedRun(root string, eligible runEligibility, noneErr, tie
 	return candidates[0].id, nil
 }
 
-// Scheduler and model-access journals share the runs directory but have a separate event
-// contract. Ignore only their canonical names; other entries still fail replay
-// or repository binding validation rather than silently hiding corrupt runs.
+// Scheduler, model-access and provider runtime journals share the runs
+// directory but have a separate event contract. Ignore only their canonical
+// names; other entries still fail replay or repository binding validation
+// rather than silently hiding corrupt runs.
 func runJournalSidecar(path string) bool {
 	runID, sidecar, found := strings.Cut(filepath.Base(path), ".jsonl.")
-	if !found || len(runID) != 64 || strings.Trim(runID, "0123456789abcdef") != "" {
+	if !found || safepath.RequireDigest(runID) != nil {
 		return false
 	}
 	if sidecar == "model-access.jsonl" {
@@ -102,14 +104,80 @@ func runJournalSidecar(path string) bool {
 	}
 	scheduler, graph := strings.CutPrefix(sidecar, "graph-")
 	kind, cohort, separated := strings.Cut(scheduler, "-")
-	if !graph || !separated || (kind != "schedule" && kind != "writers") {
+	if graph && separated && (kind == "schedule" || kind == "writers") {
+		if !strings.HasSuffix(cohort, ".jsonl") {
+			return false
+		}
+		cohortID := strings.TrimSuffix(cohort, ".jsonl")
+		return len(cohortID) == 16 && strings.Trim(cohortID, "0123456789abcdef") == ""
+	}
+	return isCanonicalProviderSidecar(sidecar)
+}
+
+// isCanonicalProviderSidecar reports whether sidecar (the filename portion
+// after "<run>.jsonl.") is a well-formed provider/runtime journal produced by
+// the current controller dispatch paths. Only exact role/runtime/provider
+// grammars with valid lower-case identities are ignored; malformed or unknown
+// names return false so listing stays fail-closed.
+func isCanonicalProviderSidecar(sidecar string) bool {
+	const stateSuffix = ".opencode-runtime.jsonl.state-root.jsonl"
+	if strings.HasSuffix(sidecar, stateSuffix) {
+		stem := strings.TrimSuffix(sidecar, stateSuffix)
+		if stem == "" || strings.Contains(stem, ".jsonl") {
+			return false
+		}
+		return isCanonicalProviderStem(stem, ".opencode-runtime.jsonl")
+	}
+	for _, suffix := range []string{".opencode-runtime.jsonl", ".provider-gateway.jsonl", ".provider-runtime.jsonl"} {
+		if !strings.HasSuffix(sidecar, suffix) {
+			continue
+		}
+		stem := strings.TrimSuffix(sidecar, suffix)
+		if stem == "" || strings.Contains(stem, ".jsonl") {
+			return false
+		}
+		return isCanonicalProviderStem(stem, suffix)
+	}
+	return false
+}
+
+// isCanonicalProviderStem validates a journal stem for one runtime suffix.
+// Bare "<role>" is accepted for every role and suffix. Turn-scoped
+// "<role>.turn-<id>" is accepted only for explorer: non-nil turns only reach
+// journal stems through scheduled dynamic explorer claims (OperationExplorer
+// with a bound AgentTurn; planner never takes a turn and follow-up turns are
+// explorer-gated), so other roles' turn names stay fail-closed. Repeated
+// invocation "<role>.invocation-<id>" is accepted only for opencode-runtime
+// and provider-gateway: only providerInvocationJournalStem generates it, and
+// its callers bind both the runtime and gateway paths to that stem, while
+// direct-provider producers (providerRoleJournalStem callers) emit bare or
+// turn-scoped stems only. Each trailing identity must be a valid lower-case
+// digest. A combined turn plus invocation suffix is not produced and is
+// rejected to preserve fail-closed listing.
+func isCanonicalProviderStem(stem, suffix string) bool {
+	if validProviderSidecarRole(stem) {
+		return true
+	}
+	role, rest, ok := strings.Cut(stem, ".")
+	if !ok || !validProviderSidecarRole(role) || strings.Contains(rest, ".jsonl") {
 		return false
 	}
-	if !strings.HasSuffix(cohort, ".jsonl") {
+	if after, ok := strings.CutPrefix(rest, "turn-"); ok {
+		return role == "explorer" && !strings.Contains(after, ".") && safepath.RequireDigest(after) == nil
+	}
+	if after, ok := strings.CutPrefix(rest, "invocation-"); ok {
+		return suffix != ".provider-runtime.jsonl" && !strings.Contains(after, ".") && safepath.RequireDigest(after) == nil
+	}
+	return false
+}
+
+func validProviderSidecarRole(role string) bool {
+	switch role {
+	case "planner", "explorer", "writer", "fixer", "reviewer":
+		return true
+	default:
 		return false
 	}
-	cohortID := strings.TrimSuffix(cohort, ".jsonl")
-	return len(cohortID) == 16 && strings.Trim(cohortID, "0123456789abcdef") == ""
 }
 
 // latestRunID selects only a journal which fully replays and is bound to this
