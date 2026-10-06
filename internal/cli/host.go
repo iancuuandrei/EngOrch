@@ -63,6 +63,9 @@ func writeDoctorWithObserver(ctx context.Context, out io.Writer, identity reposi
 }
 
 func doctorExecutionPlan(identity repository.Identity, cfg config.Config) (map[string]any, error) {
+	if err := requireOpenCodeStateRoot(cfg); err != nil {
+		return nil, err
+	}
 	id, err := identity.ID()
 	if err != nil {
 		return nil, err
@@ -116,6 +119,11 @@ func inspectAutonomousPlan(ctx context.Context, root string, options autonomousC
 		return err
 	}
 	if err := options.resolve(cfg); err != nil {
+		return err
+	}
+	// Shared preflight also runs inside doctorExecutionPlan below; this early
+	// check keeps inspect-plan read-only without repository side effects.
+	if err := requireOpenCodeStateRoot(cfg); err != nil {
 		return err
 	}
 	if options.parser != "" {

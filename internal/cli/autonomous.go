@@ -390,6 +390,12 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 	if capabilities.autoCompact == 0 {
 		autoCompact = nil
 	}
+	// Fail fast for selected OpenCode routes when the private state root is
+	// missing or unsafe, before creating a durable run or admitting provider
+	// work. Resume of existing runs keeps controller-owned recovery semantics.
+	if err := requireOpenCodeStateRoot(cfg); err != nil {
+		return err
+	}
 	identity, err := repository.Discover(ctx, root, cfg.Repository)
 	if err != nil {
 		return err

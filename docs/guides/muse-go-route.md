@@ -59,7 +59,14 @@ See [capability fallback and acceptance](graceful-capabilities.md) for optional
 capability degradation and the distinction between attention and unsafe effects.
 
 Create the selected private OpenCode state directory before dispatch. Run
-`fabric doctor` first. A corrected declaration applies to a new run; do not edit
+`fabric doctor` first. For selected OpenCode routes, `doctor`,
+`run --autonomous --inspect-plan` and new `run --autonomous` creation share
+one preflight: the configured state root must already exist as a safe
+absolute clean directory. A missing, non-directory or unsafe root fails fast
+at stage `opencode-state-root` with the action to create or configure a safe
+private directory, before any durable run journal or provider admission. The
+preflight creates nothing, never settles an existing UNKNOWN run, and an
+unselected optional OpenCode section never blocks other routes. A corrected declaration applies to a new run; do not edit
 the bound configuration or resend a rejected response in an existing run.
 One local run on 2026-10-04 completed the pinned go-humanize underscore task:
 READY, native PASS, Muse review APPROVE with zero findings, and candidate-bound
