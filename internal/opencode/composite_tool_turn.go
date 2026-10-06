@@ -258,6 +258,7 @@ func decodeCompositeToolGenerationWithRuntimeMetadata(raw []byte, assistant turn
 }, error) {
 	generation := CompositeToolGenerationObservation{Assistant: assistant.Assistant, Finish: assistant.Finish, Calls: []CompositeToolCallObservation{}}
 	var completedText bytes.Buffer
+	var reasoningFragments []reasoningFragment
 	var parts []json.RawMessage
 	if len(raw) > (1<<20)-10 || json.Unmarshal(raw, &parts) != nil || parts == nil || len(parts) < 2 || len(parts) > 4096 {
 		return generation, nil, nil, errors.New("invalid composite tool assistant parts")
@@ -326,12 +327,12 @@ func decodeCompositeToolGenerationWithRuntimeMetadata(raw []byte, assistant turn
 				generation.TextProviderItems = append(generation.TextProviderItems, ToolTextObservation{ProviderItemID: itemID, Phase: phase})
 			}
 		case "reasoning":
-			reasoning, reasoningErr := decodeCompletedReasoningPart(part, assistant.Assistant)
-			if reasoningErr != nil {
-				return generation, nil, nil, reasoningErr
+			fragment, fragmentErr := decodeReasoningFragment(part, assistant.Assistant)
+			if fragmentErr != nil {
+				return generation, nil, nil, fragmentErr
 			}
-			if reasoning != nil {
-				generation.Reasoning = append(generation.Reasoning, *reasoning)
+			if fragment != nil {
+				reasoningFragments = append(reasoningFragments, *fragment)
 			}
 		case "patch":
 			if expected == nil {
@@ -342,6 +343,11 @@ func decodeCompositeToolGenerationWithRuntimeMetadata(raw []byte, assistant turn
 			return generation, nil, nil, errors.New("unsupported composite tool assistant part")
 		}
 	}
+	paired, aggregateErr := aggregateReasoningFragments(reasoningFragments)
+	if aggregateErr != nil {
+		return generation, nil, nil, aggregateErr
+	}
+	generation.Reasoning = paired
 	if stepStart != 0 || stepFinish < 0 || len(patchIndexes) == 0 && stepFinish != len(parts)-1 {
 		return generation, nil, nil, errors.New("composite tool assistant step framing mismatch")
 	}

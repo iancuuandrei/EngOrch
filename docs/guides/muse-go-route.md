@@ -31,6 +31,16 @@ tolerate the mismatch. The corrected recipe applies only to newly admitted
 distinct runs and grants no resend or replacement authorization for an
 existing UNKNOWN attempt; the local diagnostic settles nothing.
 
+The ordinary and composite tool-turn decoders pair same-generation item-only
+reasoning summary parts
+with their fully validated encrypted carrier instead of rejecting the
+transcript at decode. This source repair addresses the demonstrated SDK
+summary shape (several summary paragraphs, encrypted content attached to the
+final one) at the readback layer only. It does not claim task or EVC
+acceptance, does not rewrite the frozen canary's UNKNOWN record, and the
+corrected High recipe remains not yet live-accepted. See the
+[High canary record](../evaluation/evidence-acquisition-high-canary-20261006.md).
+
 With `native_writer_output = true`, writer and fixer require tools and
 `structured_output = "UNSUPPORTED"` at the provider layer, with
 `required_capabilities.reasoning = false`. The model may still advertise

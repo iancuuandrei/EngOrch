@@ -22,7 +22,16 @@ invalid Unicode, excessive nesting and nonfinite numeric ranges. Projected token
 counts must be nonnegative safe integers. Fractional upstream cost is not converted
 into execution cost. Visible text preserves part order, with unique IDs and exact
 session/message binding. Output is limited to 256 KiB and 4096 parts. Reasoning is
-not visible output. Unsupported tool/file/compaction parts and explicitly excluded
+not visible output. A reasoning part carrying only an OpenAI item locator is
+never admitted alone: it must pair with exactly one fully validated encrypted
+carrier for the same item in the same assistant generation. Unpaired
+summaries, cross-generation pairs and duplicate or contradictory carriers are
+rejected, and unknown metadata keys or domains fail closed. A paired item
+projects to one reasoning observation retaining the carrier part identity and
+exact opaque encrypted state, with the visible-summary digest bound over the
+concatenated summaries in wire order; a lone carrier keeps the previously
+supported single-part shape. Both the ordinary and composite tool-turn
+decoders share this grammar. A summary never authorizes an effect. Unsupported tool/file/compaction parts and explicitly excluded
 or unfinished text cause rejection.
 
 Executed local HTTP fixtures cover successful metadata/text projection, a fully
