@@ -1193,3 +1193,363 @@ func TestCompositeVerifierBindsCallerWithoutEffects(t *testing.T) {
 		t.Fatal("substituted composite caller must reject")
 	}
 }
+
+// sealPlannerTurnForCorrection seals one OpenCode planner turn for an explicit
+// invocation using the existing sealed fixture scaffolding. It performs no
+// controller writes; the caller appends the returned receipt through the
+// replay-validated controller journal. No new provider harness is introduced.
+func sealPlannerTurnForCorrection(t *testing.T, controllerPath string, cfg config.Config, repo repository.Identity, invocation runtime.Invocation, inputTokens, cachedTokens, outputTokens, reasoningTokens int64) (runtime.Result, providerDispatchReceipt) {
+	t.Helper()
+	s, err := Inspect(controllerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputHash, err := access.InputID(invocation.Input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routing, err := ResolveProviderRouting(cfg, s.RunID, "planner", inputHash, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stem, err := providerInvocationJournalStem(controllerPath, invocation, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimePath, gatewayPath := controllerPath+"."+stem+".opencode-runtime.jsonl", controllerPath+"."+stem+".provider-gateway.jsonl"
+	root := t.TempDir()
+	contextBinding, err := contextbroker.NewBinding(invocation.ID, repo, nil, contextbroker.Limits{MaxCalls: 1, MaxRequestBytes: 4096, MaxResponseBytes: 64 << 10, MaxTotalResponseBytes: 64 << 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionBinding := opencode.ToolSessionBinding{Session: opencode.SessionBinding{IntentID: invocation.ID, ProjectID: "global", Directory: root, Agent: "plan", Provider: invocation.Profile.Provider, Model: invocation.Profile.Model, Variant: invocation.Profile.Effort}, ToolNames: []string{"source_list"}, CatalogSHA256: strings.Repeat("a", 64)}
+	intent := opencoderuntime.Intent{Version: 1, Invocation: invocation, Directory: root, Project: opencode.ProjectExpectation{Directory: root, Mode: opencode.ProjectModeGlobal}, Context: contextBinding, Session: sessionBinding}
+	bindingID, err := routing.Gateway.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent.ProviderGatewayBindingID = bindingID
+	intent.IntentID, err = intent.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := opencoderuntime.RecordIntent(runtimePath, intent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.Append(gatewayPath, "provider.bound", routing.Gateway, func([]journal.Event) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	sessionPath := runtimePath + ".session"
+	if _, err := journal.Append(sessionPath, "opencode.tool-session-intent", sessionBinding, func([]journal.Event) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.Append(sessionPath, "opencode.tool-session-observed", struct {
+		Binding opencode.ToolSessionBinding `json:"binding"`
+		ID      string                      `json:"id"`
+	}{sessionBinding, "ses_fixture"}, func([]journal.Event) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	brokerPath := runtimePath + ".broker"
+	broker, err := contextbroker.Open(brokerPath, contextBinding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contextID, _ := contextBinding.ID()
+	dispatch, err := opencode.DispatchForInvocation(invocation, "ses_fixture", "msg_user", "plan", root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncIntent := opencode.SynchronousToolDispatchIntent{Invocation: invocation, Dispatch: dispatch, BrokerBindingID: contextID, BrokerCatalogID: contextBinding.CatalogID}
+	tools := opencode.ToolsConfigurationReceipt{SHA256: strings.Repeat("b", 64), MCPServer: opencode.ToolsMCPServerName, Endpoint: "http://127.0.0.1:43123/mcp", ToolIDs: []string{"engorch_source_list"}, TimeoutMillis: 5000}
+	sealExpected := opencode.SynchronousToolTurnSealExpected{Dispatch: syncIntent, Session: sessionBinding, Tools: tools, ExecutableSHA256: strings.Repeat("c", 64), HostRoot: root, MaxOutputTokens: 128, RuntimeOutputTokens: 8}
+	sealExpected.Provider = plannerProviderSealForBinding(t, invocation, routing.Gateway, tools)
+	paths := opencoderuntime.Paths{Version: 1, Session: sessionPath, Dispatch: runtimePath + ".dispatch", Broker: brokerPath, Seal: runtimePath + ".seal", Gateway: gatewayPath}
+	project := opencode.ProjectReceipt{SHA256: strings.Repeat("e", 64), ID: "global", Directory: root, Mode: opencode.ProjectModeGlobal, Worktree: "/"}
+	if _, err := opencoderuntime.RecordBound(runtimePath, intent, project, paths, sealExpected); err != nil {
+		t.Fatal(err)
+	}
+	observation := writeSealedPlannerTurn(t, broker, paths, sealExpected, intent)
+	halfInput, halfCached := inputTokens/2, cachedTokens/2
+	halfOutput, halfReasoning := outputTokens/2, reasoningTokens/2
+	appendGatewayCallForGeneration(t, gatewayPath, routing.Gateway, 1, observation.Generations[0], halfInput, halfOutput, halfCached, halfReasoning)
+	appendGatewayCallForGeneration(t, gatewayPath, routing.Gateway, 2, observation.Generations[1], inputTokens-halfInput, outputTokens-halfOutput, cachedTokens-halfCached, reasoningTokens-halfReasoning)
+	record, err := opencoderuntime.Complete(runtimePath, intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatewayState, err := providergateway.Inspect(gatewayPath)
+	if err != nil || !gatewayState.Finished {
+		t.Fatal("gateway did not finish", gatewayState, err)
+	}
+	runtimeEvents, err := journal.Read(runtimePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatewayEvents, err := journal.Read(gatewayPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultHash, err := canonical.Hash("harness.planner-result.v1", record.Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := gatewayState.Calls[len(gatewayState.Calls)-1].Receipt
+	receipt := providerDispatchReceipt{Version: 1, Role: "planner", InvocationID: invocation.ID, AccessInvocationID: routing.Intent.Reservation.InvocationID, RoutingDecision: routing.Intent.RoutingDecision, RuntimeJournalHead: runtimeEvents[len(runtimeEvents)-1].Hash, GatewayJournalHead: gatewayEvents[len(gatewayEvents)-1].Hash, ResultHash: resultHash, ObservedModel: last.ObservedModel, ObservedProvider: routing.ProviderRole.Model.Provider, Result: record.Result}
+	return record.Result, receipt
+}
+
+// correctionControllerFixture builds a replay-validated controller through a
+// first sealed planner receipt and recorded plan, with semantic correction
+// enabled so the sealed output (not a valid plan graph) admits a real
+// planning.semantic-correction event. Every controller mutation below goes
+// through Append replay; no Snapshot is hand-edited.
+func correctionControllerFixture(t *testing.T, nonce string) (string, config.Config, repository.Identity, runtime.Invocation, runtime.Result, providerDispatchReceipt) {
+	t.Helper()
+	controllerPath := filepath.Join(t.TempDir(), "run.jsonl")
+	cfg := providerRoutingConfig("opencode-http", "engorch-openai")
+	cfg.Repository = "fixture"
+	role := cfg.Provider.Roles["planner"]
+	role.RequiredCapabilities = &config.ProviderRequiredCapabilities{Tools: true, StructuredOutput: providergateway.StructuredOutputUnsupported}
+	cfg.Provider.Roles["planner"] = role
+	cfg.OpenCode = &config.OpenCodeHost{Version: 1, Executable: `D:\tools\opencode.exe`, ExecutableHash: strings.Repeat("e", 64), StateRoot: t.TempDir()}
+	repositoryRoot := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repositoryRoot}, args...)...)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatal(err, string(output))
+		}
+	}
+	git("init", "-q")
+	if err := os.WriteFile(filepath.Join(repositoryRoot, "source.txt"), []byte("fixture source\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "source.txt")
+	git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "fixture")
+	discovered, err := repository.Discover(context.Background(), repositoryRoot, cfg.Repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := Creation{Version: 1, Nonce: nonce, Repository: discovered, Objective: "Produce an implementation plan.", Config: cfg,
+		Execution: &ExecutionPolicy{Mode: "autonomous-v1", MaxRepairs: 2, GraphVersion: 1, MaxParallel: 1, SemanticCorrectionVersion: 1}}
+	if err := Append(controllerPath, "run.created", created); err != nil {
+		t.Fatal(err)
+	}
+	if err := Append(controllerPath, "planning.started", struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Inspect(controllerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation, err := plannerInvocationForSnapshot(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, receipt := sealPlannerTurnForCorrection(t, controllerPath, cfg, discovered, invocation, 48, 16, 12, 4)
+	if err := Append(controllerPath, "planning.provider-observed", receipt); err != nil {
+		t.Fatal(err)
+	}
+	if err := Append(controllerPath, "plan.recorded", result); err != nil {
+		t.Fatal(err)
+	}
+	return controllerPath, cfg, discovered, invocation, result, receipt
+}
+
+func TestCollectRetainsHistoricalPlannerAfterSemanticCorrection(t *testing.T) {
+	controllerPath, _, _, invocation, _, receipt := correctionControllerFixture(t, "opencode-correction-predecessor")
+	before, err := MeasureRunUsage(controllerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before.OpenCodeInvocations) != 1 {
+		t.Fatalf("pre-correction must report one OpenCode entry: %+v", before.OpenCodeInvocations)
+	}
+	s, err := Inspect(controllerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := startPlannerSemanticCorrection(controllerPath, s); err != nil {
+		t.Fatal("sealed plan must admit a real semantic correction", err)
+	}
+	after, err := Inspect(controllerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.State != "PLANNING" || after.PlannerProvider != nil || after.Plan != nil || len(after.PlannerCorrections) != 1 {
+		t.Fatalf("correction must clear the latest planner projection and retain rejection: %+v", after)
+	}
+	if after.PlannerCorrections[0].Invocation.ID == invocation.ID {
+		t.Fatal("correction must issue a new invocation identity, never resend the predecessor")
+	}
+	report, err := MeasureRunUsage(controllerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.OpenCodeInvocations) != 1 {
+		t.Fatalf("predecessor completion must survive semantic correction, got %+v", report.OpenCodeInvocations)
+	}
+	entry := report.OpenCodeInvocations[0]
+	if entry.InvocationID != invocation.ID || entry.InvocationID != receipt.InvocationID || entry.Role != "planner" || !entry.ReceiptMatched || entry.Status != "completed" || entry.Usage == nil {
+		t.Fatal("predecessor entry must stay receipt-matched completed with totals", entry)
+	}
+	if entry.Usage.InputTokens != 48 || entry.Usage.CachedInputTokens == nil || *entry.Usage.CachedInputTokens != 16 || entry.Usage.UncachedInputTokens == nil || *entry.Usage.UncachedInputTokens != 32 || entry.Usage.OutputTokens != 12 || entry.Usage.ReasoningTokens == nil || *entry.Usage.ReasoningTokens != 4 || entry.Usage.OrdinaryOutputTokens == nil || *entry.Usage.OrdinaryOutputTokens != 8 {
+		t.Fatal("predecessor totals changed across correction", entry.Usage)
+	}
+	if !sameCanonical(before.OpenCodeInvocations[0], entry) {
+		t.Fatal("predecessor entry must be byte-identical before and after correction")
+	}
+}
+
+func TestCollectRetainsMultiplePlannerReceiptsAcrossCorrection(t *testing.T) {
+	controllerPath, cfg, discovered, first, _, _ := correctionControllerFixture(t, "opencode-correction-pair")
+	s, err := Inspect(controllerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := startPlannerSemanticCorrection(controllerPath, s); err != nil {
+		t.Fatal(err)
+	}
+	corrected, err := Inspect(controllerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondInvocation, err := plannerInvocationForSnapshot(corrected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondInvocation.ID == first.ID {
+		t.Fatal("correction must advance the planner invocation identity")
+	}
+	secondResult, secondReceipt := sealPlannerTurnForCorrection(t, controllerPath, cfg, discovered, secondInvocation, 64, 20, 16, 6)
+	if err := Append(controllerPath, "planning.provider-observed", secondReceipt); err != nil {
+		t.Fatal(err)
+	}
+	if err := Append(controllerPath, "plan.recorded", secondResult); err != nil {
+		t.Fatal(err)
+	}
+	report, err := MeasureRunUsage(controllerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.OpenCodeInvocations) != 2 {
+		t.Fatalf("both planner completions must be retained, got %+v", report.OpenCodeInvocations)
+	}
+	// Actual receipt order: predecessor first, successor second.
+	if report.OpenCodeInvocations[0].InvocationID != first.ID || report.OpenCodeInvocations[1].InvocationID != secondInvocation.ID {
+		t.Fatal("planner entries must preserve actual receipt order", report.OpenCodeInvocations)
+	}
+	for _, entry := range report.OpenCodeInvocations {
+		if entry.Role != "planner" || !entry.ReceiptMatched || entry.Status != "completed" || entry.Usage == nil {
+			t.Fatal("each planner receipt must be receipt-matched completed with totals", entry)
+		}
+	}
+	predecessor, successor := report.OpenCodeInvocations[0], report.OpenCodeInvocations[1]
+	if predecessor.Usage.InputTokens != 48 || *predecessor.Usage.CachedInputTokens != 16 || successor.Usage.InputTokens != 64 || *successor.Usage.CachedInputTokens != 20 || successor.Usage.OutputTokens != 16 || *successor.Usage.ReasoningTokens != 6 {
+		t.Fatal("per-receipt totals must stay bound to their own gateway aggregate", predecessor.Usage, successor.Usage)
+	}
+}
+
+func TestCollectRejectsDuplicatePlannerReceipt(t *testing.T) {
+	profile := runtime.Profile{Runtime: "opencode-http", Provider: "fixture", Model: "model", Effort: "high", Role: "planner"}
+	receipt := providerDispatchReceipt{Version: 1, Role: "planner", InvocationID: strings.Repeat("c", 64), Result: runtime.Result{Requested: profile}}
+	snapshot := Snapshot{PlannerProvider: &receipt}
+	payload, err := canonical.Bytes(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []journal.Event{
+		{Kind: "planning.provider-observed", Payload: payload},
+		{Kind: "planning.provider-observed", Payload: payload},
+	}
+	if _, err := collectOpenCodeUsage(filepath.Join(t.TempDir(), "run.jsonl"), snapshot, events); err == nil || !strings.Contains(err.Error(), "opencode receipt changed") {
+		t.Fatalf("duplicate planner receipt must reject, got %v", err)
+	}
+}
+
+func TestCollectRequiresLatestPlannerReceiptWhenPresent(t *testing.T) {
+	profile := runtime.Profile{Runtime: "opencode-http", Provider: "fixture", Model: "model", Effort: "high", Role: "planner"}
+	stored := providerDispatchReceipt{Version: 1, Role: "planner", InvocationID: strings.Repeat("c", 64), Result: runtime.Result{Requested: profile}}
+	snapshot := Snapshot{PlannerProvider: &stored}
+	other := providerDispatchReceipt{Version: 1, Role: "planner", InvocationID: strings.Repeat("d", 64), Result: runtime.Result{Requested: profile}}
+	payload, err := canonical.Bytes(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []journal.Event{{Kind: "planning.provider-observed", Payload: payload}}
+	if _, err := collectOpenCodeUsage(filepath.Join(t.TempDir(), "run.jsonl"), snapshot, events); err == nil || !strings.Contains(err.Error(), "opencode receipt changed") {
+		t.Fatalf("missing latest planner receipt must reject, got %v", err)
+	}
+}
+
+func TestCollectHistoricalPredecessorMissingJournalRejects(t *testing.T) {
+	controllerPath, _, _, _, _, _ := correctionControllerFixture(t, "opencode-correction-missing")
+	s, err := Inspect(controllerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := startPlannerSemanticCorrection(controllerPath, s); err != nil {
+		t.Fatal(err)
+	}
+	runtimePath := controllerPath + ".planner.opencode-runtime.jsonl"
+	if err := os.Remove(runtimePath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MeasureRunUsage(controllerPath); err == nil || !strings.Contains(err.Error(), "opencode runtime journal missing") {
+		t.Fatalf("missing predecessor journal must reject with totals unavailable, got %v", err)
+	}
+}
+
+func TestCollectHistoricalPredecessorGatewayTamperRejects(t *testing.T) {
+	controllerPath, _, _, _, _, _ := correctionControllerFixture(t, "opencode-correction-tamper")
+	s, err := Inspect(controllerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := startPlannerSemanticCorrection(controllerPath, s); err != nil {
+		t.Fatal(err)
+	}
+	gatewayPath := controllerPath + ".planner.provider-gateway.jsonl"
+	if _, err := journal.Append(gatewayPath, "opencode-runtime.forged", struct{}{}, func([]journal.Event) error { return nil }); err != nil {
+		t.Log("gateway append rejected at journal layer", err)
+	}
+	if _, err := MeasureRunUsage(controllerPath); err == nil {
+		t.Fatal("tampered predecessor gateway must reject")
+	} else if !(strings.Contains(err.Error(), "opencode gateway head changed") || strings.Contains(err.Error(), "opencode gateway changed")) {
+		t.Fatalf("gateway mismatch must reject with safe diagnostic, got %v", err)
+	}
+}
+
+func TestHistoricalPredecessorLeavesUnmatchedPendingUnknown(t *testing.T) {
+	controllerPath, _, _, _, _, _ := correctionControllerFixture(t, "opencode-correction-pending")
+	s, err := Inspect(controllerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := startPlannerSemanticCorrection(controllerPath, s); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := Inspect(controllerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation, err := runtime.NewInvocation(runtime.Profile{Runtime: "opencode-http", Provider: "fixture", Model: "model", Effort: "high", Role: "writer"}, "Implement the bounded change.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission := AgentDispatchAdmission{Version: 1, RunID: snapshot.RunID, TreeID: snapshot.RunID, Invocation: invocation}
+	entry, ok := pendingOpenCodeEntry(controllerPath, snapshot, admission)
+	if !ok {
+		t.Fatal("unmatched writer admission must be reported")
+	}
+	if entry.Status != "UNKNOWN" || entry.ReceiptMatched || entry.Usage != nil {
+		t.Fatal("unmatched work must remain explicitly UNKNOWN with no totals", entry)
+	}
+	report, err := MeasureRunUsage(controllerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.OpenCodeInvocations) != 1 || report.OpenCodeInvocations[0].Role != "planner" || report.OpenCodeInvocations[0].Status != "completed" {
+		t.Fatalf("historical predecessor must report exactly one completed planner entry: %+v", report.OpenCodeInvocations)
+	}
+}

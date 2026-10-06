@@ -138,6 +138,15 @@ cohort is 7/8, and a fresh authorized `logr` successor supplies the eighth
 identity. That coverage used source `8c5a750` and the same task pin; it is not a
 single unchanged 8/8 cohort or a full reevaluation of current v1.1.3 source.
 
+A frozen [context-selector pilot](../evaluation/context-selector-pilot-20261007.md)
+records scoped difflib/numeric control/treatment observations at source
+`49afbc8` with the legacy default retained and RRF opt-in; it claims no
+general, causal, speedup, calibration, default-promotion, release or
+eight-task qualification. Its numeric-treatment costs were unavailable in
+the original report (one UNKNOWN pending row, no verified totals) and
+were later verified by a parent pinned read-only observer as one
+completed provider/runtime invocation without redispatch.
+
 The [product ledger](../roadmap/v2-product-plan.md) records exact identities,
 qualification and the paused development checkpoint. Complete-cohort
 acceptance, remaining efficiency evidence, final review and release gates

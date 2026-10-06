@@ -574,27 +574,38 @@ func collectOpenCodeUsageWithScheduler(controllerPath, schedulerPath string, s S
 		admissionOrder[admission.Invocation.ID] = index
 	}
 	ordered := []openCodeOrderedReceipt{}
+	// Retain every replay-admitted historical planner OpenCode completion.
+	// A planning semantic correction clears the latest PlannerProvider
+	// projection, so gating on the final snapshot would drop predecessor
+	// receipts. Each planning receipt is verified at its exact historical
+	// prefix through authoritativeInvocationForReceipt; ledger completion is
+	// provider/runtime completion, never semantic plan acceptance.
+	for index, event := range events {
+		if event.Kind != "planning.provider-observed" {
+			continue
+		}
+		var receipt providerDispatchReceipt
+		if err := canonical.Decode(event.Payload, &receipt); err != nil {
+			return nil, errors.New("opencode receipt changed")
+		}
+		if receipt.Result.Requested.Runtime != "opencode-http" {
+			continue
+		}
+		order, ok := admissionOrder[receipt.InvocationID]
+		if !ok {
+			order = index
+		}
+		ordered = append(ordered, openCodeOrderedReceipt{receipt: receipt, index: index, order: order})
+	}
 	if s.PlannerProvider != nil && s.PlannerProvider.Result.Requested.Runtime == "opencode-http" {
-		found := -1
-		for index, event := range events {
-			if event.Kind != "planning.provider-observed" {
-				continue
-			}
-			var receipt providerDispatchReceipt
-			if err := canonical.Decode(event.Payload, &receipt); err != nil {
-				return nil, errors.New("opencode receipt changed")
-			}
-			if receipt.InvocationID == s.PlannerProvider.InvocationID && sameCanonical(receipt, *s.PlannerProvider) {
-				found = index
-				order, ok := admissionOrder[receipt.InvocationID]
-				if !ok {
-					order = index
-				}
-				ordered = append(ordered, openCodeOrderedReceipt{receipt: receipt, index: index, order: order})
+		found := false
+		for _, item := range ordered {
+			if item.receipt.InvocationID == s.PlannerProvider.InvocationID && sameCanonical(item.receipt, *s.PlannerProvider) {
+				found = true
 				break
 			}
 		}
-		if found < 0 {
+		if !found {
 			return nil, errors.New("opencode receipt changed")
 		}
 	}

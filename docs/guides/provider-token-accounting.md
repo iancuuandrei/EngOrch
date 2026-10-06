@@ -77,6 +77,15 @@ omitted. A known receipt with a missing, corrupt, changed or detached source
 rejects with a safe bounded diagnostic that carries no paths, prompts or
 ciphertext.
 
+A planning semantic correction clears only the latest planner projection;
+every replay-admitted historical planner OpenCode completion remains
+reported with its verified gateway totals in controller admission order
+where present, with receipt order as fallback (v1.1.34).
+Each retained entry is verified at its exact historical prefix through the
+existing runtime, gateway and composite verifiers. Superseded completions
+are provider and runtime completions, never current plan acceptance, and
+never evidence-value authority beyond their measured token costs.
+
 Scope of evidence is the current normalized gateway receipts. Raw
 native-usage receipt migration and provider gateway rewrites are explicitly
 out of scope. Direct-provider adapters remain outside current scope and are

@@ -177,3 +177,7 @@ invocations the scope is
 `receipt_matched_completed_codex_and_opencode_typed_tokens`. The exact
 scheduler-bound variant MUST reuse repository/schedule/run-membership
 checks and thread the scheduler only into composite verification.
+Historical planner completions retained after a planning semantic
+correction (v1.1.34) remain admissible token costs as verified
+provider and runtime completions; they MUST NOT be treated as current
+accepted plan content or as recommendation authority.
