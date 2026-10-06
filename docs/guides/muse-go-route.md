@@ -12,15 +12,18 @@ ping. For this route, set `trailing_cost_ping_v1` to `false` in
 `function_call_done_name_v1` enabled for the observed response dialect. This
 changes the selected route declaration, not the decoder's global defaults.
 
-## Pinned OpenCode Responses SDK High recipe (not yet live-qualified)
+## Pinned OpenCode Responses SDK High recipe (one-task live acceptance 2026-10-06)
 
 For the pinned High recipe, declare the OpenCode request controls
 explicitly: `reasoning_effort` high, `reasoning_summary` auto, `include`
 `[reasoning.encrypted_content]`, and SystemRole `developer`. The matching
 provider declaration uses variant/profile effort `high` with variant
 `system_role` `developer` and `reasoning_summary` `auto`. The 2026-10-04
-record below used the default-effort recipe; the corrected High recipe has
-not yet completed a live run. A frozen 2026-10-06 canary was rejected in
+record below used the default-effort recipe; the corrected High recipe
+completed one live task run on 2026-10-06 (go-logr/logr at its exact source
+and observed roles only; see the
+[acceptance record](../evaluation/muse-high-evc-logr-20261006.md)). A frozen
+2026-10-06 canary was rejected in
 local preflight on the system/developer wire mismatch: no admitted
 upstream call or accepted receipt in the gateway journal; runtime
 ownership remains UNKNOWN. See the
@@ -37,8 +40,9 @@ with their fully validated encrypted carrier instead of rejecting the
 transcript at decode. This source repair addresses the demonstrated SDK
 summary shape (several summary paragraphs, encrypted content attached to the
 final one) at the readback layer only. It does not claim task or EVC
-acceptance, does not rewrite the frozen canary's UNKNOWN record, and the
-corrected High recipe remains not yet live-accepted. See the
+acceptance and does not rewrite the frozen canary's UNKNOWN record; High
+live acceptance is exactly the one 2026-10-06 logr task linked above, not
+general qualification. See the
 [High canary record](../evaluation/evidence-acquisition-high-canary-20261006.md).
 
 With `native_writer_output = true`, writer and fixer require tools and
@@ -76,3 +80,17 @@ executed; explorer and fixer were configured to Muse but not needed in that run.
 See the [acceptance receipt](../../evals/v1/results/muse-go-humanize-20261004.json).
 The custom binary was built from the v1.0.28 source plus local fixes; this is one
 task's evidence, not general model, six-task suite or release qualification.
+
+On 2026-10-06 one further local run completed the pinned go-logr/logr task
+with the corrected High recipe at exact source
+`b58a649d81c468e92656966d54b02c951d7a5eae`: READY, native PASS, Muse review
+APPROVE with zero findings, exact reviewed-candidate copy guard PASS, and
+unchanged-oracle plus full copied-package PASS. Planner, writer and reviewer
+executed (3/6/5 calls with exact receipts); fixer was configured but not
+needed and zero repairs ran. The single finite EVC `source_read` acquisition
+reached the initial writer context; its caller-estimated compute is
+unvalidated and claims no benefit. See the
+[acceptance record](../evaluation/muse-high-evc-logr-20261006.md) and
+[receipt](../../evals/v1/results/muse-high-evc-logr-20261006.json). This is
+one task's evidence at that exact source and those observed roles, not
+general model, cohort, efficiency, v2, or release qualification.
