@@ -9,17 +9,17 @@ import (
 )
 
 type autonomousCapabilities struct {
-	dynamicExplorers                         bool
-	agentContext                             bool
-	workingContext                           bool
-	parallel                                 bool
-	isolation                                *isolatedWriterPolicyFile
-	plannerContext, parser, parserHash       string
-	parseCache, reviewImpact, candidateCache int
-	autoCompact                              int64
-	evidence                                 *control.EvidenceAutoPolicy
-	contextSelector                          string
-	fallbacks                                []control.CapabilityFallback
+	dynamicExplorers                                     bool
+	agentContext                                         bool
+	workingContext                                       bool
+	parallel                                             bool
+	isolation                                            *isolatedWriterPolicyFile
+	plannerContext, parser, parserHash                   string
+	parseCache, plannerPPR, reviewImpact, candidateCache int
+	autoCompact                                          int64
+	evidence                                             *control.EvidenceAutoPolicy
+	contextSelector                                      string
+	fallbacks                                            []control.CapabilityFallback
 }
 
 // Resolve preferences only before run creation. Invalid policies, mismatched
@@ -35,7 +35,7 @@ func (o *autonomousCapabilities) resolve(cfg config.Config) error {
 		if _, err := os.Stat(o.parser); errors.Is(err, os.ErrNotExist) {
 			add("planner_context", "parser_unavailable", autonomousPlannerContextSourceBoundedV1)
 			o.plannerContext, o.parser, o.parserHash = autonomousPlannerContextSourceBoundedV1, "", ""
-			o.parseCache, o.reviewImpact, o.candidateCache = 0, 0, 0
+			o.parseCache, o.plannerPPR, o.reviewImpact, o.candidateCache = 0, 0, 0, 0
 		} else if err != nil {
 			return err
 		}

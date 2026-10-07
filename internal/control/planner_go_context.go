@@ -60,10 +60,16 @@ type PlannerGoContextRecord struct {
 	Sources                []repository.SourceDigest `json:"sources,omitempty"`
 	Graph                  *ri.GoEngineeringGraph    `json:"graph,omitempty"`
 	Context                *ri.GoContextManifest     `json:"context,omitempty"`
-	Unavailable            string                    `json:"unavailable,omitempty"`
-	RecordID               string                    `json:"record_id"`
-	GenerationMetadata     *ri.GoGenerationMetadata  `json:"generation_metadata,omitempty"`
-	GenerationContext      *ri.GoGenerationContext   `json:"generation_context,omitempty"`
+	// PPR binds the opt-in Personalized PageRank treatment over the already
+	// admitted graph for go-source-context-v2 planning. It carries fixed
+	// parameters, exact seeds and the independent advisory file ranks with
+	// their projection/hash provenance. Nil preserves every earlier record
+	// representation byte-for-byte.
+	PPR                *ri.GoPPRProvenance      `json:"ppr,omitempty"`
+	Unavailable        string                   `json:"unavailable,omitempty"`
+	RecordID           string                   `json:"record_id"`
+	GenerationMetadata *ri.GoGenerationMetadata `json:"generation_metadata,omitempty"`
+	GenerationContext  *ri.GoGenerationContext  `json:"generation_context,omitempty"`
 	// ContractContext is the compact, source-bound v1 contract evidence view.
 	// It replaces the v2 broad context and generation prompt text for this mode.
 	ContractContext *ri.GoContractContext `json:"contract_context,omitempty"`
@@ -499,11 +505,25 @@ func AdmitPlannerGoContext(ctx context.Context, path string) (PlannerGoContextRe
 			if policy.PlannerContext == plannerContextGoSourceV2 {
 				limits.MaxBytes = 24 << 10
 			}
-			manifest, compileErr := ri.CompileGoContext(ri.GoContextInput{ContextVersion: 2, SourceID: sourceID, Graph: graph, Objective: query, Files: corpus.ContextFiles, Limits: limits})
+			var pprRequest *ri.GoPPRRequest
+			if policy.PlannerPPRVersion == 1 {
+				if policy.PlannerContext != plannerContextGoSourceV2 {
+					return PlannerGoContextRecord{}, errors.New("Go planner PPR requires go-source-context-v2")
+				}
+				pprRequest = &ri.GoPPRRequest{}
+			}
+			manifest, compileErr := ri.CompileGoContext(ri.GoContextInput{ContextVersion: 2, SourceID: sourceID, Graph: graph, Objective: query, Files: corpus.ContextFiles, Limits: limits, PPR: pprRequest})
 			if compileErr != nil {
 				return PlannerGoContextRecord{}, compileErr
 			}
 			record.Graph, record.Context = &graph, &manifest
+			if pprRequest != nil {
+				if manifest.PPR == nil {
+					return PlannerGoContextRecord{}, errors.New("Go planner PPR treatment missing from compiled context")
+				}
+				ppr := *manifest.PPR
+				record.PPR = &ppr
+			}
 		}
 	}
 	if policy.PlannerContext == plannerContextGoContractV1 || policy.PlannerContext == plannerContextGoContractV2 || policy.PlannerContext == plannerContextGoContractV3 {
@@ -642,6 +662,25 @@ func validatePlannerGoContextRecord(s Snapshot, rec PlannerGoContextRecord) erro
 	if s.State != "OBJECTIVE" || !plannerGoContextEnabled(s) || s.PlannerGoContext != nil || s.PlannerContext != nil || rec.Version != wantVersion || safepath.RequireDigest(rec.RIExecutableSHA256) != nil || s.Creation.Execution == nil || rec.RIExecutableSHA256 != s.Creation.Execution.PlannerContextRIExecutableSHA256 {
 		return errors.New("Go planner context transition rejected")
 	}
+	wantPPR := s.Creation.Execution.PlannerPPRVersion == 1
+	if wantPPR && s.Creation.Execution.PlannerContext != plannerContextGoSourceV2 {
+		return errors.New("Go planner PPR requires go-source-context-v2")
+	}
+	if !wantPPR && rec.PPR != nil {
+		return errors.New("legacy Go planner context carries PPR treatment")
+	}
+	if !wantPPR && rec.Context != nil && rec.Context.PPR != nil {
+		return errors.New("legacy Go planner context carries nested PPR treatment")
+	}
+	if wantPPR && rec.Unavailable == "" && rec.PPR == nil {
+		return errors.New("Go planner PPR treatment is missing")
+	}
+	if wantPPR && rec.Unavailable == "" && (rec.Context == nil || rec.Context.PPR == nil) {
+		return errors.New("Go planner PPR nested treatment is missing")
+	}
+	if rec.PPR != nil && rec.Version != 3 {
+		return errors.New("Go planner PPR treatment requires record version 3")
+	}
 	sourceID, err := s.Creation.Repository.ID()
 	if err != nil {
 		return err
@@ -674,7 +713,7 @@ func validatePlannerGoContextRecord(s Snapshot, rec PlannerGoContextRecord) erro
 	}
 	if rec.Unavailable != "" {
 		validUnavailable := rec.Unavailable == "no_eligible_complete_go_source" || (rec.Version == 4 || rec.Version == 5 || rec.Version == 6) && rec.Unavailable == "contract_record_budget"
-		if !validUnavailable || rec.ReadFiles != 0 || len(rec.Sources) != 0 || rec.Graph != nil || rec.Context != nil || rec.ContractContext != nil || len(rec.ContractSources) != 0 || len(rec.ContractGenerationSources) != 0 {
+		if !validUnavailable || rec.ReadFiles != 0 || len(rec.Sources) != 0 || rec.Graph != nil || rec.Context != nil || rec.PPR != nil || rec.ContractContext != nil || len(rec.ContractSources) != 0 || len(rec.ContractGenerationSources) != 0 {
 			return errors.New("invalid unavailable Go planner context")
 		}
 	} else {
@@ -717,7 +756,7 @@ func validatePlannerGoContextRecord(s Snapshot, rec PlannerGoContextRecord) erro
 			}
 		}
 	}
-	if rec.Version == 2 && (rec.GenerationMetadata != nil || rec.GenerationContext != nil || rec.ContractContext != nil || len(rec.ContractSources) != 0 || len(rec.ContractGenerationSources) != 0) {
+	if rec.Version == 2 && (rec.GenerationMetadata != nil || rec.GenerationContext != nil || rec.ContractContext != nil || rec.PPR != nil || len(rec.ContractSources) != 0 || len(rec.ContractGenerationSources) != 0) {
 		return errors.New("legacy Go planner context carries generation data")
 	}
 	if rec.Version == 3 {
@@ -756,6 +795,17 @@ func validatePlannerGoContextRecord(s Snapshot, rec PlannerGoContextRecord) erro
 				return errors.New("invalid Go generation context")
 			}
 		}
+		if rec.PPR != nil {
+			if rec.Context == nil || rec.Context.PPR == nil || !reflect.DeepEqual(*rec.Context.PPR, *rec.PPR) {
+				return errors.New("Go planner PPR treatment mismatch")
+			}
+			if err := ri.ValidateGoPPRProvenance(*rec.Graph, rec.Query, *rec.PPR); err != nil {
+				return errors.New("Go planner PPR provenance substitution")
+			}
+			if err := validatePlannerGoPPRSeeds(*rec.Graph, rec.Query, *rec.PPR); err != nil {
+				return err
+			}
+		}
 	}
 	if rec.Version == 4 || rec.Version == 5 || rec.Version == 6 {
 		if rec.Context != nil || rec.GenerationContext != nil {
@@ -778,6 +828,38 @@ func validatePlannerGoContextRecord(s Snapshot, rec PlannerGoContextRecord) erro
 		return errors.New("Go planner context record substitution")
 	}
 	return boundedCanonical(rec, plannerGoContextMaxRecord)
+}
+
+// validatePlannerGoPPRSeeds binds stored PPR seeds to the observed planner
+// inputs. Planner admission compiles with no changed paths, so the stored
+// seeds and truncation must exactly equal the query-derived seeds for the
+// bound graph and query. Seeds are observed inputs, not free knobs: a
+// self-consistent recomputation from a different valid seed set (rehashed to
+// match itself) is still a substitution here and is rejected. Primitive
+// callers that compile with explicit changed paths bind those paths at their
+// own layer; ValidateGoPPRProvenance alone only proves self-consistency.
+func validatePlannerGoPPRSeeds(graph ri.GoEngineeringGraph, query string, provenance ri.GoPPRProvenance) error {
+	observed, err := ri.DeriveGoPPRSeeds(graph, query, nil)
+	if err != nil {
+		return errors.New("Go planner PPR seed derivation failed")
+	}
+	if !equalPPRSeedFiles(observed.Files, provenance.Seeds) || observed.Truncated != provenance.SeedsTruncated {
+		return errors.New("Go planner PPR seed substitution")
+	}
+	return nil
+}
+
+// equalPPRSeedFiles compares seed file sets semantically: nil and empty
+// non-nil slices are both the observed empty-seed set. DeriveGoPPRSeeds and
+// ComputeGoPPR both encode empty seeds as [] (not null), so the semantic
+// comparison keeps a valid empty_seeds fallback replaying exactly across
+// admission and JSON roundtrip. Nonempty sets still require exact sorted
+// equality; no encoding or identity is changed.
+func equalPPRSeedFiles(observed, stored []string) bool {
+	if len(observed) == 0 && len(stored) == 0 {
+		return true
+	}
+	return reflect.DeepEqual(observed, stored)
 }
 
 func validatePlannerGoSources(rec PlannerGoContextRecord, sourceID string) error {
@@ -886,6 +968,14 @@ func validatePlannerGoManifest(manifest ri.GoContextManifest, graph ri.GoEnginee
 	for _, relation := range manifest.Relations {
 		if !plannerGoVisibleEdge(relation, allExcerpts) || !plannerGoGraphHasEdge(graph, relation) {
 			return errors.New("Go planner context relation is not visible graph evidence")
+		}
+	}
+	if manifest.PPR != nil {
+		if err := ri.ValidateGoPPRProvenance(graph, query, *manifest.PPR); err != nil {
+			return errors.New("Go planner context PPR substitution")
+		}
+		if err := validatePlannerGoPPRSeeds(graph, query, *manifest.PPR); err != nil {
+			return err
 		}
 	}
 	copy := manifest

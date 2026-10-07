@@ -26,6 +26,9 @@ type goContextAnchor struct {
 
 // GoContextInput compiles a bounded prompt view from one graph and its exact
 // source observations. It performs no filesystem reads or authorization.
+// PPR, when non-nil, opts the v2 compiler into bounded Personalized PageRank
+// path hints over the already admitted graph (see engineering_ppr.go). Nil
+// preserves exact historical v1/v2 selection wire and manifest hashes.
 type GoContextInput struct {
 	ContextVersion int
 	SourceID       string
@@ -34,7 +37,15 @@ type GoContextInput struct {
 	Files          []taskcontext.File
 	ChangedPaths   []string
 	Limits         taskcontext.Limits
+	PPR            *GoPPRRequest
 }
+
+// GoPPRRequest is the explicit opt-in to the single fixed PPR treatment. It
+// carries no tunable fields: parameters are the documented constants, seeds
+// derive from the bound objective and changed paths, and ranks are advisory
+// only. Non-nil versus nil is the entire treatment identity at this layer;
+// immutable policy binding lives in the controller record.
+type GoPPRRequest struct{}
 
 // GoContextManifest retains source excerpts and the partial graph observations
 // behind their selection. Missing evidence never implies absence or safety.
@@ -50,7 +61,12 @@ type GoContextManifest struct {
 	Relations        []GoGraphEdge              `json:"relations"`
 	FactsTruncated   bool                       `json:"facts_truncated"`
 	HintsTruncated   bool                       `json:"hints_truncated"`
-	Digest           string                     `json:"digest"`
+	// PPR retains the independent PPR rank provenance when the opt-in
+	// treatment compiled this manifest. Nil preserves exact historical
+	// manifest bytes and digest. Ranks are advisory file ordering only;
+	// excerpt bytes, symbol/span visibility and all bounds are unchanged.
+	PPR    *GoPPRProvenance `json:"ppr,omitempty"`
+	Digest string           `json:"digest"`
 }
 
 const (
@@ -145,6 +161,41 @@ func CompileGoContext(input GoContextInput) (GoContextManifest, error) {
 		orderedHints = orderedHints[:512]
 		hintsTruncated = true
 	}
+	// Opt-in PPR treatment (planner go-source-context-v2 seam only): derive
+	// exact observed seeds and diffuse the fixed lazy undirected walk over
+	// the already admitted graph. Only positive-score ranks become an
+	// explicit advisory ordering for the SAME bounded excerpt selector, file
+	// and byte limits and symbol/span narrowing; the ordering breaks score
+	// ties and never promotes zero-signal files to evidence. Scores are not
+	// weights and add no hint mass: legacy scores decide admission, the
+	// independent rank order decides ties, and full rank provenance below
+	// stays the audit trail. No-signal or work-exhausted outcomes keep the
+	// current selector with explicit provenance instead of aborting.
+	var pprProvenance *GoPPRProvenance
+	var pprOrder []string
+	if input.PPR != nil {
+		if input.ContextVersion != goContextV2 {
+			return empty, errors.New("Go PPR treatment requires context version 2")
+		}
+		pprSeeds, err := DeriveGoPPRSeeds(input.Graph, input.Objective, input.ChangedPaths)
+		if err != nil {
+			return empty, err
+		}
+		provenance, err := ComputeGoPPR(input.Graph, pprSeeds, input.Objective, DefaultGoPPRConfig())
+		if err != nil {
+			return empty, err
+		}
+		pprProvenance = &provenance
+		hintsTruncated = hintsTruncated || pprSeeds.Truncated
+		if !provenance.NoSignal {
+			for _, rank := range provenance.Ranks {
+				if rank.Score <= 0 {
+					continue
+				}
+				pprOrder = append(pprOrder, rank.Path)
+			}
+		}
+	}
 	anchorPaths := make([]string, 0, len(anchors))
 	for path := range anchors {
 		anchorPaths = append(anchorPaths, path)
@@ -179,14 +230,14 @@ func CompileGoContext(input GoContextInput) (GoContextManifest, error) {
 		selectionLimits.MaxFiles = min(selectionLimits.MaxFiles, goContextV2MaxBaseFiles)
 		selectionLimits.MaxBytesPerFile = min(selectionLimits.MaxBytesPerFile, base)
 	}
-	selection, err := taskcontext.Select(taskcontext.Input{Version: 1, Scope: taskcontext.Scope{SourceID: input.SourceID, CandidateID: input.Graph.CandidateID}, Objective: input.Objective, Files: input.Files, ChangedPaths: input.ChangedPaths, PathHints: orderedHints, Anchors: anchors, Limits: selectionLimits})
+	selection, err := taskcontext.Select(taskcontext.Input{Version: 1, Scope: taskcontext.Scope{SourceID: input.SourceID, CandidateID: input.Graph.CandidateID}, Objective: input.Objective, Files: input.Files, ChangedPaths: input.ChangedPaths, PathHints: orderedHints, Anchors: anchors, PPR: pprOrder, Limits: selectionLimits})
 	if err != nil {
 		return empty, err
 	}
 	queryHash := sha256.Sum256([]byte(input.Objective))
 	manifestSchema := "engorch.ri.go-context.v1"
 	manifestDomain := "harness.ri.go-context.v1"
-	manifest := GoContextManifest{Schema: manifestSchema, GraphDigest: input.Graph.Digest, ProducerSHA256: input.Graph.ProducerSHA256, Coverage: "PARTIAL", QuerySHA256: hex.EncodeToString(queryHash[:]), Selection: selection, ContractExcerpts: []taskcontext.SelectedFile{}, Symbols: []GoGraphNode{}, Relations: []GoGraphEdge{}, HintsTruncated: hintsTruncated}
+	manifest := GoContextManifest{Schema: manifestSchema, GraphDigest: input.Graph.Digest, ProducerSHA256: input.Graph.ProducerSHA256, Coverage: "PARTIAL", QuerySHA256: hex.EncodeToString(queryHash[:]), Selection: selection, ContractExcerpts: []taskcontext.SelectedFile{}, Symbols: []GoGraphNode{}, Relations: []GoGraphEdge{}, HintsTruncated: hintsTruncated, PPR: pprProvenance}
 	if contextVersion == goContextV2 {
 		manifest.Schema = "engorch.ri.go-context.v2"
 		manifestDomain = "harness.ri.go-context.v2"

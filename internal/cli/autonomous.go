@@ -108,6 +108,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	plannerContextRIExecutable := fs.String("planner-context-ri-executable", "", "absolute path to the pinned Go RI parser (required for Go source/contract contexts)")
 	plannerContextRIExecutableSHA256 := fs.String("planner-context-ri-executable-sha256", "", "lowercase SHA-256 of the pinned Go-source RI parser")
 	plannerContextParseCache := fs.Bool("planner-context-parse-cache", false, "reuse local Go parser facts for go-source-context-v2 or go-contract-context-v1/v2/v3")
+	plannerPPR := fs.Bool("planner-ppr", false, "opt go-source-context-v2 planning into bounded Personalized PageRank hints over the admitted graph")
 	reviewImpactContext := fs.Bool("review-impact-context", false, "attach bounded candidate Go topology to reviews (requires go-contract-context-v1/v2/v3 and pinned RI)")
 	candidateFactsCache := fs.Bool("review-impact-candidate-facts-cache", false, "reuse local candidate Go syntax facts during review-impact collection")
 	contextSelector := fs.String("context-selector", "", "task context selector: empty (legacy default) or rrf-coverage-v1 (experimental RRF plus coverage; requires bounded-v1)")
@@ -187,6 +188,13 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 		}
 		plannerParseCacheVersion = 1
 	}
+	plannerPPRVersion := 0
+	if *plannerPPR {
+		if err := validatePlannerPPRVersion(*plannerContext, 1); err != nil {
+			return err
+		}
+		plannerPPRVersion = 1
+	}
 	if *promptRecipe != "" && *promptRecipe != "cache-prefix-v1" {
 		return errors.New("prompt-recipe must be empty or cache-prefix-v1")
 	}
@@ -199,7 +207,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 		}
 		options := autonomousCapabilities{parallel: *parallelWriters, isolation: isolationPolicy, agentContext: *agentContext, workingContext: *workingContext, dynamicExplorers: *dynamicExplorers,
 			plannerContext: *plannerContext, parser: *plannerContextRIExecutable, parserHash: *plannerContextRIExecutableSHA256,
-			parseCache: plannerParseCacheVersion, reviewImpact: reviewImpactContextVersion, candidateCache: candidateFactsCacheVersion, autoCompact: *autoCompactTokenLimit, evidence: evidencePolicy, contextSelector: *contextSelector}
+			parseCache: plannerParseCacheVersion, plannerPPR: plannerPPRVersion, reviewImpact: reviewImpactContextVersion, candidateCache: candidateFactsCacheVersion, autoCompact: *autoCompactTokenLimit, evidence: evidencePolicy, contextSelector: *contextSelector}
 		return inspectAutonomousPlan(ctx, root, options, *maxParallel, out)
 	}
 	if *goalFile != "" {
@@ -213,7 +221,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 		if err := validateAutonomousObjective(objective); err != nil {
 			return err
 		}
-		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, *repairIntelligence, out, *agentContext, *workingContext, *dynamicExplorers, evidencePolicy, *contextSelector)
+		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, plannerPPRVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, *repairIntelligence, out, *agentContext, *workingContext, *dynamicExplorers, evidencePolicy, *contextSelector)
 	}
 	if fs.NArg() != 1 || fs.Arg(0) == "" {
 		return errors.New("run --autonomous requires one objective or --file PATH")
@@ -221,7 +229,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	if err := validateAutonomousObjective(fs.Arg(0)); err != nil {
 		return err
 	}
-	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, *repairIntelligence, out, *agentContext, *workingContext, *dynamicExplorers, evidencePolicy, *contextSelector)
+	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *plannerContext, plannerParseCacheVersion, plannerPPRVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, *repairIntelligence, out, *agentContext, *workingContext, *dynamicExplorers, evidencePolicy, *contextSelector)
 }
 
 func validatePlannerParseCacheVersion(plannerContext string, version int) error {
@@ -230,6 +238,19 @@ func validatePlannerParseCacheVersion(plannerContext string, version int) error 
 	}
 	if version != 1 || plannerContext != autonomousPlannerContextGoSourceV2 && plannerContext != autonomousPlannerContextGoContractV1 && plannerContext != autonomousPlannerContextGoContractV2 && plannerContext != autonomousPlannerContextGoContractV3 {
 		return errors.New("planner-context-parse-cache requires go-source-context-v2 or go-contract-context-v1/v2/v3")
+	}
+	return nil
+}
+
+// validatePlannerPPRVersion admits only the narrow PPR seam: version 1
+// requires go-source-context-v2 (with its pinned RI binding validated
+// separately). Zero preserves every historical planner input.
+func validatePlannerPPRVersion(plannerContext string, version int) error {
+	if version == 0 {
+		return nil
+	}
+	if version != 1 || plannerContext != autonomousPlannerContextGoSourceV2 {
+		return errors.New("planner-ppr requires --planner-context go-source-context-v2 and its pinned RI binding")
 	}
 	return nil
 }
@@ -347,7 +368,7 @@ func validateAutonomousObjective(objective string) error {
 	return nil
 }
 
-func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, parallelWriters bool, isolationPolicy *isolatedWriterPolicyFile, plannerContext string, plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion int, plannerContextRIExecutable, plannerContextRIExecutableSHA256, promptRecipe string, autoCompactTokenLimit int64, prepareOnly, repairIntelligence bool, out io.Writer, agentContextEnabled, workingContextEnabled, dynamicExplorersEnabled bool, evidencePolicy *control.EvidenceAutoPolicy, contextSelector string) error {
+func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, parallelWriters bool, isolationPolicy *isolatedWriterPolicyFile, plannerContext string, plannerParseCacheVersion, plannerPPRVersion, reviewImpactContextVersion, candidateFactsCacheVersion int, plannerContextRIExecutable, plannerContextRIExecutableSHA256, promptRecipe string, autoCompactTokenLimit int64, prepareOnly, repairIntelligence bool, out io.Writer, agentContextEnabled, workingContextEnabled, dynamicExplorersEnabled bool, evidencePolicy *control.EvidenceAutoPolicy, contextSelector string) error {
 	if err := validateAutonomousObjective(objective); err != nil {
 		return err
 	}
@@ -369,6 +390,9 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 		return err
 	}
 	if err := validatePlannerParseCacheVersion(plannerContext, plannerParseCacheVersion); err != nil {
+		return err
+	}
+	if err := validatePlannerPPRVersion(plannerContext, plannerPPRVersion); err != nil {
 		return err
 	}
 	if reviewImpactContextVersion != 0 && (reviewImpactContextVersion != 1 || plannerContext != autonomousPlannerContextGoContractV1 && plannerContext != autonomousPlannerContextGoContractV2 && plannerContext != autonomousPlannerContextGoContractV3 || plannerContextRIExecutable == "" || plannerContextRIExecutableSHA256 == "") {
@@ -393,7 +417,7 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 	}
 	capabilities := autonomousCapabilities{parallel: parallelWriters, isolation: isolationPolicy, workingContext: workingContextEnabled, dynamicExplorers: dynamicExplorersEnabled,
 		plannerContext: plannerContext, parser: plannerContextRIExecutable, parserHash: plannerContextRIExecutableSHA256,
-		parseCache: plannerParseCacheVersion, reviewImpact: reviewImpactContextVersion, candidateCache: candidateFactsCacheVersion, autoCompact: autoCompactTokenLimit, evidence: evidencePolicy}
+		parseCache: plannerParseCacheVersion, plannerPPR: plannerPPRVersion, reviewImpact: reviewImpactContextVersion, candidateCache: candidateFactsCacheVersion, autoCompact: autoCompactTokenLimit, evidence: evidencePolicy}
 	if err := capabilities.resolve(cfg); err != nil {
 		return err
 	}
@@ -407,7 +431,10 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 	}
 	parallelWriters, isolationPolicy = capabilities.parallel, capabilities.isolation
 	plannerContext, plannerContextRIExecutable, plannerContextRIExecutableSHA256 = capabilities.plannerContext, capabilities.parser, capabilities.parserHash
-	plannerParseCacheVersion, reviewImpactContextVersion, candidateFactsCacheVersion = capabilities.parseCache, capabilities.reviewImpact, capabilities.candidateCache
+	plannerParseCacheVersion, plannerPPRVersion, reviewImpactContextVersion, candidateFactsCacheVersion = capabilities.parseCache, capabilities.plannerPPR, capabilities.reviewImpact, capabilities.candidateCache
+	if err := validatePlannerPPRVersion(plannerContext, plannerPPRVersion); err != nil {
+		return err
+	}
 	if capabilities.autoCompact == 0 {
 		autoCompact = nil
 	}
@@ -501,6 +528,7 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 			PlannerContext:  plannerContext, PlannerContextRIExecutable: plannerContextRIExecutable,
 			PlannerContextRIExecutableSHA256: plannerContextRIExecutableSHA256,
 			PlannerParseCacheVersion:         plannerParseCacheVersion,
+			PlannerPPRVersion:                plannerPPRVersion,
 			ReviewImpactContextVersion:       reviewImpactContextVersion,
 			CandidateFactsCacheVersion:       candidateFactsCacheVersion,
 			GraphVersion:                     1, MaxParallel: maxParallel, RepairPlanningVersion: 1,

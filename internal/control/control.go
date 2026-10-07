@@ -89,8 +89,14 @@ type ExecutionPolicy struct {
 	// are immutable run inputs and do not authorize a model or repository effect.
 	PlannerContextRIExecutable       string `json:"planner_context_ri_executable,omitempty"`
 	PlannerContextRIExecutableSHA256 string `json:"planner_context_ri_executable_sha256,omitempty"`
-	GraphVersion                     int    `json:"graph_version,omitempty"`
-	MaxParallel                      int    `json:"max_parallel,omitempty"`
+	// PlannerPPRVersion opts go-source-context-v2 planning into the bounded
+	// Personalized PageRank treatment over the already admitted engineering
+	// graph. Zero preserves exact historical planner input identity; 1 binds
+	// the fixed PPR rank provenance into the admitted record. No other value
+	// is admitted and no default promotion occurs.
+	PlannerPPRVersion int `json:"planner_ppr_version,omitempty"`
+	GraphVersion      int `json:"graph_version,omitempty"`
+	MaxParallel       int `json:"max_parallel,omitempty"`
 	// RepairPlanningVersion opts new graph runs into candidate-bound design
 	// tasks that refine never-started repair write paths within original scope.
 	RepairPlanningVersion int `json:"repair_planning_version,omitempty"`
@@ -220,6 +226,12 @@ func (p ExecutionPolicy) Validate() error {
 	}
 	if p.PlannerParseCacheVersion == 1 && p.PlannerContext != plannerContextGoSourceV2 && p.PlannerContext != plannerContextGoContractV1 && p.PlannerContext != plannerContextGoContractV2 && p.PlannerContext != plannerContextGoContractV3 {
 		return errors.New("planner parse cache requires go-source-context-v2 or go-contract-context-v1/v2/v3")
+	}
+	if p.PlannerPPRVersion != 0 && p.PlannerPPRVersion != 1 {
+		return errors.New("invalid planner PPR version")
+	}
+	if p.PlannerPPRVersion == 1 && p.PlannerContext != plannerContextGoSourceV2 {
+		return errors.New("planner PPR requires go-source-context-v2")
 	}
 	if p.ReviewImpactContextVersion != 0 && p.ReviewImpactContextVersion != 1 {
 		return errors.New("invalid review impact context version")

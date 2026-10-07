@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -182,7 +183,10 @@ func sameContractExcerpts(left, right []taskcontext.SelectedFile) bool {
 		return false
 	}
 	for i := range left {
-		if left[i] != right[i] {
+		// SelectedFile carries maps/slices (Ranks/Covered provenance), so
+		// exact comparison needs deep equality including every provenance
+		// field; no weaker subset check is admitted here.
+		if !reflect.DeepEqual(left[i], right[i]) {
 			return false
 		}
 	}

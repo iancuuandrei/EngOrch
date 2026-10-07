@@ -58,7 +58,10 @@ func (l Limits) validate() error {
 // PathHints are path-only evidence; neither causes a filesystem read.
 // Selector opts into the experimental rrf-coverage-v1 mode. Empty preserves
 // exact historical/default behavior and hashes; only "rrf-coverage-v1" is
-// admitted beyond empty.
+// admitted beyond empty. PPR carries an explicit advisory file ordering (best
+// first) from one bounded rank treatment over the already admitted corpus; it
+// is a deterministic tie-break only, never a score, and is hashed into the
+// input identity when present. Nil/empty preserves exact historical behavior.
 type Input struct {
 	Version      int            `json:"version"`
 	Scope        Scope          `json:"scope"`
@@ -68,6 +71,7 @@ type Input struct {
 	PathHints    []string       `json:"path_hints,omitempty"`
 	Anchors      map[string]int `json:"anchors,omitempty"`
 	Selector     string         `json:"selector,omitempty"`
+	PPR          []string       `json:"ppr,omitempty"`
 	Limits       Limits         `json:"limits"`
 }
 
@@ -141,7 +145,10 @@ func (m Manifest) ID() (string, error) {
 // and makes every omission explicit. It is deterministic for equivalent input:
 // callers may provide files and hints in any order. Empty Selector preserves
 // exact legacy behavior; Selector "rrf-coverage-v1" fuses independent ordinal
-// rankers with unweighted RRF and bounded coverage.
+// rankers with unweighted RRF and bounded coverage. An explicit PPR ordering
+// (legacy selection only) breaks score ties by advisory rank before the
+// historical path tie-break; it never promotes zero-signal files and an empty
+// ordering preserves exact legacy order and hashes.
 func Select(in Input) (Manifest, error) {
 	if err := validateInput(in); err != nil {
 		return Manifest{}, err
@@ -183,9 +190,28 @@ func Select(in Input) (Manifest, error) {
 		}
 		candidates = append(candidates, scoredFile{file: file, score: score, first: first, reason: reason})
 	}
+	// An explicit advisory PPR ordering breaks score ties deterministically
+	// before the historical path tie-break. Files absent from the ordering
+	// sort after every ordered file; equal scores with no ordering resolve
+	// exactly as before. Zero-signal (score 0) files stay omitted below: the
+	// ordering never promotes them to positive evidence.
+	pprRank := make(map[string]int, len(in.PPR))
+	for i, p := range in.PPR {
+		pprRank[p] = i + 1
+	}
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].score != candidates[j].score {
 			return candidates[i].score > candidates[j].score
+		}
+		ri, rj := pprRank[candidates[i].file.Path], pprRank[candidates[j].file.Path]
+		if ri == 0 {
+			ri = len(in.PPR) + 1
+		}
+		if rj == 0 {
+			rj = len(in.PPR) + 1
+		}
+		if ri != rj {
+			return ri < rj
 		}
 		return candidates[i].file.Path < candidates[j].file.Path
 	})
@@ -295,6 +321,29 @@ func validateInput(in Input) error {
 	if len(in.ChangedPaths) > 0 && in.Scope.CandidateID == "" {
 		return errors.New("task context candidate missing for changed paths")
 	}
+	// An explicit advisory ordering binds only already admitted corpus paths:
+	// every entry must name one admitted file exactly once, with no scope
+	// escape and no mixing with the experimental RRF selector. Ordering
+	// length is capped to the bounded rank-treatment size.
+	if len(in.PPR) > 64 {
+		return errors.New("too many task context PPR paths")
+	}
+	if len(in.PPR) > 0 {
+		if in.Selector != "" {
+			return errors.New("task context PPR requires legacy selection")
+		}
+		admitted := make(map[string]bool, len(in.Files))
+		for _, f := range in.Files {
+			admitted[f.Path] = true
+		}
+		seenPPR := make(map[string]bool, len(in.PPR))
+		for _, p := range in.PPR {
+			if safepath.Relative(p) != nil || !admitted[p] || seenPPR[p] {
+				return errors.New("invalid task context PPR path")
+			}
+			seenPPR[p] = true
+		}
+	}
 	return nil
 }
 
@@ -307,6 +356,10 @@ func inputID(in Input, files []File) (string, error) {
 	changed, hints := append([]string(nil), in.ChangedPaths...), append([]string(nil), in.PathHints...)
 	sort.Strings(changed)
 	sort.Strings(hints)
+	// The advisory ordering is rank order, not a set: it hashes as given so
+	// a reordered treatment is a different input. Empty stays omitted, which
+	// preserves the exact historical input hash.
+	ppr := append([]string(nil), in.PPR...)
 	return canonical.Hash("harness.task-context-input.v1", struct {
 		Version   int            `json:"version"`
 		Scope     Scope          `json:"scope"`
@@ -316,8 +369,9 @@ func inputID(in Input, files []File) (string, error) {
 		Hints     []string       `json:"hints"`
 		Anchors   map[string]int `json:"anchors,omitempty"`
 		Selector  string         `json:"selector,omitempty"`
+		PPR       []string       `json:"ppr,omitempty"`
 		Limits    Limits         `json:"limits"`
-	}{in.Version, in.Scope, in.Objective, bound, changed, hints, in.Anchors, in.Selector, in.Limits})
+	}{in.Version, in.Scope, in.Objective, bound, changed, hints, in.Anchors, in.Selector, ppr, in.Limits})
 }
 
 func sameHash(want string, content []byte) bool {

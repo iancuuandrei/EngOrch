@@ -12,11 +12,11 @@ import (
 func TestAutonomousCapabilitiesFallBackBeforeDispatch(t *testing.T) {
 	cfg := config.Config{Planner: runtime.Profile{Runtime: "opencode-http"}, Writer: &runtime.Profile{Runtime: "opencode-http"}}
 	o := autonomousCapabilities{parallel: true, plannerContext: autonomousPlannerContextGoContractV3,
-		parser: filepath.Join(t.TempDir(), "absent.exe"), parserHash: "retained-pin", parseCache: 1, reviewImpact: 1, candidateCache: 1, autoCompact: 10000}
+		parser: filepath.Join(t.TempDir(), "absent.exe"), parserHash: "retained-pin", parseCache: 1, plannerPPR: 1, reviewImpact: 1, candidateCache: 1, autoCompact: 10000}
 	if err := o.resolve(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if o.parallel || o.plannerContext != autonomousPlannerContextSourceBoundedV1 || o.parser != "" || o.parserHash != "" || o.parseCache != 0 || o.reviewImpact != 0 || o.candidateCache != 0 || o.autoCompact != 0 || len(o.fallbacks) != 3 {
+	if o.parallel || o.plannerContext != autonomousPlannerContextSourceBoundedV1 || o.parser != "" || o.parserHash != "" || o.parseCache != 0 || o.plannerPPR != 0 || o.reviewImpact != 0 || o.candidateCache != 0 || o.autoCompact != 0 || len(o.fallbacks) != 3 {
 		t.Fatalf("capabilities did not degrade: %#v", o)
 	}
 	for _, f := range o.fallbacks {
