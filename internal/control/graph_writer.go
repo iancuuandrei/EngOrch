@@ -252,6 +252,7 @@ type GraphWriterBatchRecord struct {
 	Prepared               PreparedFiles       `json:"prepared"`
 	IsolationPreparationID string              `json:"isolation_preparation_id,omitempty"`
 	ScopeReplanRequestID   string              `json:"scope_replan_request_id,omitempty"`
+	CohortIndex            int                 `json:"cohort_index,omitempty"`
 }
 
 type graphWriterAggregateIdentity struct {
@@ -261,6 +262,7 @@ type graphWriterAggregateIdentity struct {
 	CandidateID            string              `json:"candidate_id"`
 	Members                []GraphWriterMember `json:"members"`
 	IsolationPreparationID string              `json:"isolation_preparation_id,omitempty"`
+	CohortIndex            int                 `json:"cohort_index,omitempty"`
 }
 
 func expectedWriterHostForTask(s Snapshot, taskID string) (WriterHostIntent, error) {
@@ -531,10 +533,16 @@ func replayGraphWriterBatch(s *Snapshot, e journal.Event) error {
 		return err
 	}
 	if batch.Version == 2 {
+		if stagedIsolationEnabled(*s) {
+			return errors.New("isolated writer aggregate requires non-staged policy")
+		}
 		return replayIsolatedGraphWriterBatch(s, batch)
 	}
 	if batch.Version == 3 {
 		return replayScopeReplannedGraphWriterBatch(s, batch)
+	}
+	if batch.Version == 4 {
+		return replayStagedBatch(s, batch)
 	}
 	if batch.Version != 1 || s.Graph == nil || s.Candidate == nil || s.GraphWriterBatch != nil || batch.GraphDigest != s.Graph.Digest || batch.Revision != s.Graph.Revision {
 		return errors.New("graph writer batch identity or transition rejected")
@@ -579,7 +587,7 @@ func replayGraphWriterBatch(s *Snapshot, e journal.Event) error {
 }
 
 func replayIsolatedGraphWriterBatch(s *Snapshot, batch GraphWriterBatchRecord) error {
-	if batch.Version != 2 || !isolatedImplementationEnabled(*s) || s.Graph == nil || s.Candidate == nil || s.GraphWriterBatch != nil || s.GraphIsolationPreparation == nil || batch.GraphDigest != s.Graph.Digest || batch.Revision != s.Graph.Revision || batch.IsolationPreparationID != s.GraphIsolationPreparation.PreparationID {
+	if batch.Version != 2 || !isolatedImplementationEnabled(*s) || stagedIsolationEnabled(*s) || s.Graph == nil || s.Candidate == nil || s.GraphWriterBatch != nil || s.GraphIsolationPreparation == nil || (s.GraphIsolationPreparation.Version != 1 && s.GraphIsolationPreparation.Version != 2) || batch.GraphDigest != s.Graph.Digest || batch.Revision != s.Graph.Revision || batch.IsolationPreparationID != s.GraphIsolationPreparation.PreparationID {
 		return errors.New("isolated writer aggregate identity or transition rejected")
 	}
 	candidateID, err := s.Candidate.ID()
@@ -1193,7 +1201,17 @@ func isStaticGraphWriterCohort(s Snapshot, claim taskscheduler.Claim) bool {
 	if err != nil {
 		return false
 	}
-	if isolatedImplementationEnabled(s) {
+	if stagedIsolationEnabled(s) {
+		var implementations []engineeringplan.Task
+		for _, task := range ready {
+			if task.Kind == engineeringplan.Implementation {
+				implementations = append(implementations, task)
+			}
+		}
+		if err := validateStagedCohort(s, implementations); err != nil {
+			return false
+		}
+	} else if isolatedImplementationEnabled(s) {
 		var implementations []engineeringplan.Task
 		for _, task := range ready {
 			if task.Kind == engineeringplan.Implementation {
@@ -1263,7 +1281,18 @@ func verifyGraphWriterCohortDelta(controllerPath string, claim taskscheduler.Cla
 		invocations[invocation.ID] = task.ID
 	}
 	maxCohort := 2
-	if isolatedImplementationEnabled(bound) && bound.State == "IMPLEMENTING" {
+	if stagedIsolationEnabled(bound) && bound.State == "IMPLEMENTING" {
+		var implementations []engineeringplan.Task
+		for _, task := range ready {
+			if task.Kind == engineeringplan.Implementation {
+				implementations = append(implementations, task)
+			}
+		}
+		if err := validateStagedCohort(bound, implementations); err != nil {
+			return err
+		}
+		maxCohort = 8
+	} else if isolatedImplementationEnabled(bound) && bound.State == "IMPLEMENTING" {
 		var implementations []engineeringplan.Task
 		for _, task := range ready {
 			if task.Kind == engineeringplan.Implementation {

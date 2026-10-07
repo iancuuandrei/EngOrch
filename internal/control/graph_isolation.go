@@ -55,7 +55,13 @@ type GraphIsolationState struct {
 // per-wave peak and WaveBlocked retains each wave's bounded typed block
 // provenance. Waves, WaveEstimated, and WaveBlocked are omitted for version 1
 // to preserve absent-field legacy serialization; version 2 requires Waves and
-// WaveEstimated with WaveBlocked length matching Waves.
+// WaveEstimated with WaveBlocked length matching Waves. Version 3 is the
+// staged dependent mode: it freezes the exact CURRENT ready implementation
+// subset (hub then leaves) with CohortIndex keying the stage order,
+// BaseCandidateID binding the exact parent candidate for that stage, and
+// Waves partitioning the current subset via the same resource-bounded
+// derivation. CohortIndex is omitted for versions 1 and 2 to preserve
+// absent-field legacy serialization.
 type GraphIsolationPreparation struct {
 	Version         int                                     `json:"version"`
 	PlanID          string                                  `json:"plan_id"`
@@ -69,6 +75,7 @@ type GraphIsolationPreparation struct {
 	Waves           [][]string                              `json:"waves,omitempty"`
 	WaveEstimated   []engineeringplan.ResourceTotals        `json:"wave_estimated,omitempty"`
 	WaveBlocked     [][]engineeringplan.ResourceBlockReason `json:"wave_blocked,omitempty"`
+	CohortIndex     int                                     `json:"cohort_index,omitempty"`
 	PreparationID   string                                  `json:"preparation_id"`
 }
 
@@ -91,11 +98,15 @@ func (t IsolationEstimateTemplate) Validate() error {
 }
 
 func isolatedImplementationEnabled(s Snapshot) bool {
-	return s.Creation.Execution != nil && (s.Creation.Execution.IsolatedImplementationVersion == 1 || s.Creation.Execution.IsolatedImplementationVersion == 2)
+	return s.Creation.Execution != nil && (s.Creation.Execution.IsolatedImplementationVersion == 1 || s.Creation.Execution.IsolatedImplementationVersion == 2 || s.Creation.Execution.IsolatedImplementationVersion == 3)
 }
 
 func isolatedWavesEnabled(s Snapshot) bool {
 	return s.Creation.Execution != nil && s.Creation.Execution.IsolatedImplementationVersion == 2
+}
+
+func stagedIsolationEnabled(s Snapshot) bool {
+	return s.Creation.Execution != nil && s.Creation.Execution.IsolatedImplementationVersion == 3
 }
 
 // InspectTaskIsolation returns the durable state only; it does not observe,

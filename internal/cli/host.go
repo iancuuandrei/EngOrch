@@ -153,6 +153,9 @@ func inspectAutonomousPlan(ctx context.Context, root string, options autonomousC
 		if options.isolationWaves {
 			topology = "isolated_writer_waves"
 		}
+		if options.isolationStaged {
+			topology = "isolated_writer_staged"
+		}
 		plan["isolation_capacity"] = options.isolation.Capacity
 		plan["writer_estimate"] = options.isolation.Estimate
 		resources := plan["resources"].(map[string]any)
@@ -169,7 +172,7 @@ func inspectAutonomousPlan(ctx context.Context, root string, options autonomousC
 		if err := control.ValidateEvidenceAutoPolicyTemplate(*options.evidence); err != nil {
 			return err
 		}
-		if options.parallel || options.isolation != nil || options.isolationWaves {
+		if options.parallel || options.isolation != nil || options.isolationWaves || options.isolationStaged {
 			return errors.New("evidence-policy requires serial graph writers; parallel-writers and isolated-writers are incompatible")
 		}
 		if len(options.fallbacks) != 0 {

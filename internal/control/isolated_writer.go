@@ -177,7 +177,12 @@ func prepareIsolatedGraphWriterProposal(ctx context.Context, path, taskID string
 	if err != nil {
 		return IsolatedGraphWriterProposal{}, err
 	}
-	binding, err := isolatedWriterBindingForTask(s, taskID)
+	var binding isolatedWriterBinding
+	if stagedIsolationEnabled(s) {
+		binding, err = stagedForkBindingForTask(s, taskID)
+	} else {
+		binding, err = isolatedWriterBindingForTask(s, taskID)
+	}
 	if err != nil {
 		return IsolatedGraphWriterProposal{}, err
 	}
@@ -273,7 +278,13 @@ func validateIsolatedGraphWriterProposal(s Snapshot, proposal IsolatedGraphWrite
 	if proposal.Version != 1 || proposal.TaskID == "" {
 		return errors.New("invalid isolated writer proposal version or task")
 	}
-	binding, err := isolatedWriterBindingForTask(s, proposal.TaskID)
+	var binding isolatedWriterBinding
+	var err error
+	if stagedIsolationEnabled(s) {
+		binding, err = stagedForkBindingForTask(s, proposal.TaskID)
+	} else {
+		binding, err = isolatedWriterBindingForTask(s, proposal.TaskID)
+	}
 	if err != nil {
 		return err
 	}

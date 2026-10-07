@@ -288,12 +288,21 @@ func admitTaskContextBound(ctx context.Context, path, role, question, isolationT
 		if role != "writer" {
 			return TaskContextRecord{}, errors.New("isolated context is restricted to graph writers")
 		}
-		binding, err := isolatedWriterBindingForTask(s, isolationTaskID)
-		if err != nil {
-			return TaskContextRecord{}, err
+		if stagedIsolationEnabled(s) {
+			binding, err := stagedForkBindingForTask(s, isolationTaskID)
+			if err != nil {
+				return TaskContextRecord{}, err
+			}
+			isolated = &binding
+			workspace, candidate = binding.Workspace, binding.Candidate
+		} else {
+			binding, err := isolatedWriterBindingForTask(s, isolationTaskID)
+			if err != nil {
+				return TaskContextRecord{}, err
+			}
+			isolated = &binding
+			workspace, candidate = binding.Workspace, binding.Candidate
 		}
-		isolated = &binding
-		workspace, candidate = binding.Workspace, binding.Candidate
 	} else if isolatedImplementationEnabled(s) && s.State == "IMPLEMENTING" && role == "writer" {
 		return TaskContextRecord{}, errors.New("isolated graph writer requires child-bound task context")
 	}
@@ -339,6 +348,12 @@ func admitTaskContextBound(ctx context.Context, path, role, question, isolationT
 		if fresh.Workspace == nil || fresh.Candidate == nil || *fresh.Candidate != candidate {
 			_ = lease.Close()
 			return TaskContextRecord{}, errors.New("task context candidate changed before admission")
+		}
+	} else if stagedIsolationEnabled(fresh) {
+		current, currentErr := stagedForkBindingForTask(fresh, isolationTaskID)
+		if currentErr != nil || current.Workspace != workspace || current.Candidate != candidate {
+			_ = lease.Close()
+			return TaskContextRecord{}, errors.Join(errors.New("isolated task context candidate changed before admission"), currentErr)
 		}
 	} else {
 		current, currentErr := isolatedWriterBindingForTask(fresh, isolationTaskID)
@@ -931,15 +946,27 @@ func replayTaskContext(s *Snapshot, e journal.Event) error {
 		if rec.Role != "writer" || !isolatedImplementationEnabled(*s) {
 			return errors.New("isolated task context is not admitted for this role")
 		}
-		state, ok := s.GraphIsolations[rec.IsolationTaskID]
-		if !ok || state.Outcome != "CONFIRMED" || state.Candidate == nil || state.Binding == nil {
-			return errors.New("isolated task context requires a confirmed child")
+		if stagedIsolationEnabled(*s) {
+			fork, ok := s.GraphStagedForks[rec.IsolationTaskID]
+			if !ok || fork.Outcome != "CONFIRMED" || fork.Candidate == nil || fork.Binding == nil {
+				return errors.New("isolated task context requires a confirmed child")
+			}
+			binding, err := stagedForkBindingForTask(*s, rec.IsolationTaskID)
+			if err != nil || binding.Candidate != *fork.Candidate {
+				return errors.Join(errors.New("isolated task context binding mismatch"), err)
+			}
+			candidate = *fork.Candidate
+		} else {
+			state, ok := s.GraphIsolations[rec.IsolationTaskID]
+			if !ok || state.Outcome != "CONFIRMED" || state.Candidate == nil || state.Binding == nil {
+				return errors.New("isolated task context requires a confirmed child")
+			}
+			binding, err := isolatedWriterBindingForTask(*s, rec.IsolationTaskID)
+			if err != nil || binding.Candidate != *state.Candidate {
+				return errors.Join(errors.New("isolated task context binding mismatch"), err)
+			}
+			candidate = *state.Candidate
 		}
-		binding, err := isolatedWriterBindingForTask(*s, rec.IsolationTaskID)
-		if err != nil || binding.Candidate != *state.Candidate {
-			return errors.Join(errors.New("isolated task context binding mismatch"), err)
-		}
-		candidate = *state.Candidate
 	}
 	candidateID, err := candidate.ID()
 	if err != nil || candidateID != rec.CandidateID {

@@ -19,6 +19,7 @@ const plannerContractGraphV4 = "plan-graph-v4"
 const plannerContractGraphV5 = "plan-graph-v5"
 const plannerContractGraphV6 = "plan-graph-v6"
 const plannerContractGraphV7 = "plan-graph-v7"
+const plannerContractGraphV8 = "plan-graph-v8"
 
 const plannerAssignmentV1 = "As planner, produce an implementation plan using read-only source tools. Editing and testing belong to later roles. Read-only access is expected and is not a blocker. Return the plan without requesting additional capability."
 
@@ -127,6 +128,14 @@ func plannerInvocationWithContextsAndRecipe(c config.Config, objective string, p
 			if recipe.IsolatedImplementationVersion == 2 {
 				isolatedConstraints.IsolatedImplementationVersion = 2
 			}
+		case plannerContractGraphV8:
+			if recipe == nil || recipe.IsolatedImplementationVersion != 3 || recipe.Validate() != nil {
+				return runtime.Invocation{}, errors.New("staged planner contract requires a valid staged isolated execution policy")
+			}
+			readBudget := max(c.MaxExplorationRecords()-8, 0)
+			assignment = fmt.Sprintf("As planner, return only strict engineeringplan v1 JSON with version, mode direct|graph, summary and tasks. Use kinds research, design, implementation, verification and review; expected_evidence contains objects with nonempty kind and description. Plan at most 8 implementation tasks in total across dependent hub-to-leaf stages (each stage cohort at most %d concurrent tasks), at most %d research/design tasks and at most 32 tasks total. Use one hub implementation for shared work; leaves may depend on completed hub implementations with concrete disjoint write_paths. Every stage cohort must be ready together after its dependencies complete; staged implementations cannot form cycles. Assign shared hubs, generator tools/templates and their outputs to one owner; C3 and lower coupling is advisory only and never grants ownership. Inspect actual ownership before partitioning, and do not invent files or split solely to occupy capacity. scope_paths bound future repairs; write_paths describe only actual edits and must be concrete relative paths, never dot or parents. Each task consumes the declared per-writer resource estimate; each staged cohort wave must fit every supplied capacity before execution. Both verification and review must depend transitively on every implementation, with review depending on verification. Direct mode contains exactly one implementation and no gate tasks; the runner adds native gates. Never emit completed or attempts. Preserve public API representations and behavior outside the requested change; expose any ambiguous assumption for verification rather than silently changing it.", recipe.EffectiveMaxParallel(), readBudget)
+			schema = engineeringplan.PlannerJSONSchema()
+			isolatedConstraints = &plannerIsolationConstraints{MaxParallel: recipe.EffectiveMaxParallel(), Capacity: recipe.IsolationCapacity, Estimate: recipe.IsolationEstimate, IsolatedImplementationVersion: 3}
 		default:
 			return runtime.Invocation{}, errors.New("unsupported planner contract")
 		}

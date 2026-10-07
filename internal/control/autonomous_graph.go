@@ -114,11 +114,13 @@ func parseAcceptedGraph(s Snapshot) (engineeringplan.Graph, error) {
 	maxInitialImplementations := 1
 	if s.Creation.Execution != nil && s.Creation.Execution.ParallelImplementationVersion == 1 {
 		maxInitialImplementations = 2
-	} else if s.Creation.Execution != nil && (s.Creation.Execution.IsolatedImplementationVersion == 1 || s.Creation.Execution.IsolatedImplementationVersion == 2) {
+	} else if s.Creation.Execution != nil && (s.Creation.Execution.IsolatedImplementationVersion == 1 || s.Creation.Execution.IsolatedImplementationVersion == 2 || s.Creation.Execution.IsolatedImplementationVersion == 3) {
 		maxInitialImplementations = 8
 	}
 	var validationErr error
-	if s.Creation.Execution != nil && (s.Creation.Execution.IsolatedImplementationVersion == 1 || s.Creation.Execution.IsolatedImplementationVersion == 2) {
+	if s.Creation.Execution != nil && s.Creation.Execution.IsolatedImplementationVersion == 3 {
+		validationErr = engineeringplan.ValidateAutonomousGraphWithStagedImplementations(g, maxInitialImplementations)
+	} else if s.Creation.Execution != nil && (s.Creation.Execution.IsolatedImplementationVersion == 1 || s.Creation.Execution.IsolatedImplementationVersion == 2) {
 		validationErr = engineeringplan.ValidateAutonomousGraphWithIsolatedImplementations(g, maxInitialImplementations)
 	} else {
 		validationErr = engineeringplan.ValidateAutonomousGraphWithImplementations(g, maxInitialImplementations)
@@ -171,7 +173,9 @@ func parseAcceptedGraph(s Snapshot) (engineeringplan.Graph, error) {
 			engineeringplan.Task{ID: verifyID, Kind: engineeringplan.Verification, Title: "Verify the candidate", Dependencies: []string{impl.ID}, ScopePaths: impl.ScopePaths, ExpectedEvidence: []engineeringplan.Evidence{{Kind: "test", Description: "native candidate verification"}}, EstimatedSeconds: 300},
 			engineeringplan.Task{ID: reviewID, Kind: engineeringplan.Review, Title: "Review the verified candidate", Dependencies: []string{verifyID}, ScopePaths: impl.ScopePaths, ExpectedEvidence: []engineeringplan.Evidence{{Kind: "review", Description: "native independent review"}}, EstimatedSeconds: 300})
 		var directValidationErr error
-		if s.Creation.Execution != nil && (s.Creation.Execution.IsolatedImplementationVersion == 1 || s.Creation.Execution.IsolatedImplementationVersion == 2) {
+		if s.Creation.Execution != nil && s.Creation.Execution.IsolatedImplementationVersion == 3 {
+			directValidationErr = engineeringplan.ValidateAutonomousGraphWithStagedImplementations(g, maxInitialImplementations)
+		} else if s.Creation.Execution != nil && (s.Creation.Execution.IsolatedImplementationVersion == 1 || s.Creation.Execution.IsolatedImplementationVersion == 2) {
 			directValidationErr = engineeringplan.ValidateAutonomousGraphWithIsolatedImplementations(g, maxInitialImplementations)
 		} else {
 			directValidationErr = engineeringplan.ValidateAutonomousGraphWithImplementations(g, maxInitialImplementations)
@@ -1377,6 +1381,19 @@ func autonomousGraphImplementing(ctx context.Context, path string, s Snapshot) (
 			latest, ierr := InspectOr(s, path, err)
 			return latest, false, ierr
 		}
+		if stagedIsolationEnabled(s) {
+			latest, err := Inspect(path)
+			if err != nil {
+				return s, false, err
+			}
+			if !stagedAllImplementationsCompleted(latest) {
+				if err := AdvanceStagedCohort(path); err != nil {
+					latest, ierr := InspectOr(s, path, err)
+					return latest, false, ierr
+				}
+				return s, true, nil
+			}
+		}
 		if _, err := Verify(ctx, path); err != nil {
 			latest, ierr := InspectOr(s, path, err)
 			return latest, false, ierr
@@ -1438,6 +1455,51 @@ func autonomousGraphImplementing(ctx context.Context, path string, s Snapshot) (
 			if (t.Kind == engineeringplan.Research || t.Kind == engineeringplan.Design) && !t.Completed {
 				return s, false, fmt.Errorf("research task %q must complete before writer", t.ID)
 			}
+		}
+		if stagedIsolationEnabled(s) {
+			if _, err := stagedGraphWriterIDs(s, implReadyTasks); err != nil {
+				return s, false, err
+			}
+			if err := autonomousDispatchBlocked(s); err != nil {
+				return s, false, err
+			}
+			if s.GraphWriterBatch == nil {
+				allRecorded := true
+				for _, task := range implReadyTasks {
+					record, ok := s.GraphWriterResults[task.ID]
+					if !ok || record.Isolated == nil {
+						allRecorded = false
+						break
+					}
+				}
+				if !allRecorded {
+					if err := runStagedWaves(ctx, path, s, implReadyTasks); err != nil {
+						latest, ierr := InspectOr(s, path, err)
+						return latest, false, ierr
+					}
+					s, err = Inspect(path)
+					if err != nil {
+						return s, false, err
+					}
+				}
+				if s.GraphWriterBatch != nil {
+					return s, true, nil
+				}
+				batch, err := buildStagedBatch(ctx, path, taskIDs(implReadyTasks))
+				if err != nil {
+					return s, false, err
+				}
+				if err := recordGraphWriterBatch(path, batch); err != nil {
+					latest, ierr := InspectOr(s, path, err)
+					return latest, false, ierr
+				}
+				return s, true, nil
+			}
+			if _, err := applyStagedBatch(ctx, path, s); err != nil {
+				latest, ierr := InspectOr(s, path, err)
+				return latest, false, ierr
+			}
+			return s, true, nil
 		}
 		if isolatedImplementationEnabled(s) {
 			if s.GraphWriterBatch == nil || s.GraphWriterBatch.Version != 3 {
@@ -1727,6 +1789,9 @@ func recordGraphImplementationProgress(path string) error {
 	s, err := Inspect(path)
 	if err != nil {
 		return err
+	}
+	if s.GraphWriterBatch != nil && s.GraphWriterBatch.Version == 4 {
+		return recordStagedImplementationProgress(path, s)
 	}
 	if graphWriterBatchEffectApplied(s) {
 		return recordParallelGraphImplementationProgress(path, s)

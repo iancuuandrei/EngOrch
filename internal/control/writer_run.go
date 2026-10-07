@@ -173,7 +173,13 @@ func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected
 		return result, err
 	}
 	if useIsolated {
-		binding, bindingErr := isolatedWriterBindingForTask(s, taskID)
+		var binding isolatedWriterBinding
+		var bindingErr error
+		if stagedIsolationEnabled(s) {
+			binding, bindingErr = stagedForkBindingForTask(s, taskID)
+		} else {
+			binding, bindingErr = isolatedWriterBindingForTask(s, taskID)
+		}
 		if bindingErr != nil {
 			return result, bindingErr
 		}
@@ -206,7 +212,13 @@ func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected
 		return result, errors.Join(errors.New("writer isolation mode changed before dispatch"), modeErr)
 	}
 	if isolated != nil {
-		currentBinding, bindingErr := isolatedWriterBindingForTask(s, taskID)
+		var currentBinding isolatedWriterBinding
+		var bindingErr error
+		if stagedIsolationEnabled(s) {
+			currentBinding, bindingErr = stagedForkBindingForTask(s, taskID)
+		} else {
+			currentBinding, bindingErr = isolatedWriterBindingForTask(s, taskID)
+		}
 		if bindingErr != nil || !sameCanonical(currentBinding, *isolated) {
 			return result, errors.Join(errors.New("isolated writer binding changed before dispatch"), bindingErr)
 		}
@@ -465,7 +477,13 @@ func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected
 		if err != nil || after != before {
 			return result, errors.Join(errors.New("isolated writer child changed during execution"), err)
 		} else {
-			latestBinding, bindingErr := isolatedWriterBindingForTask(latest, taskID)
+			var latestBinding isolatedWriterBinding
+			var bindingErr error
+			if stagedIsolationEnabled(latest) {
+				latestBinding, bindingErr = stagedForkBindingForTask(latest, taskID)
+			} else {
+				latestBinding, bindingErr = isolatedWriterBindingForTask(latest, taskID)
+			}
 			if bindingErr != nil || !sameCanonical(latestBinding, *isolated) {
 				return result, errors.Join(errors.New("isolated writer receipt changed during execution"), bindingErr)
 			}

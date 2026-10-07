@@ -465,6 +465,136 @@ func ValidateAutonomousGraphWithIsolatedImplementations(g Graph, maxInitial int)
 	return validateAutonomousGraphWithImplementationLimit(g, maxInitial)
 }
 
+// ValidateAutonomousGraphWithStagedImplementations validates a dependent
+// hub-to-leaves graph for staged isolated execution. It permits up to eight
+// implementations where leaves may depend on hub implementations, while
+// preserving every other autonomous invariant: concrete disjoint write
+// ownership (conservative global disjointness; serial reuse without explicit
+// ownership versioning remains rejected), research/design read-only tasks,
+// exactly one native verification and one review gate depending transitively
+// on every implementation, and acyclic dependencies. Dependencies grant
+// readiness only when observed completed; coupling hints never grant ownership.
+func ValidateAutonomousGraphWithStagedImplementations(g Graph, maxInitial int) error {
+	if maxInitial < 1 || maxInitial > 8 {
+		return errors.New("staged implementation limit must be 1..8")
+	}
+	if err := g.Validate(); err != nil {
+		return err
+	}
+	byID := map[string]Task{}
+	for _, t := range g.Tasks {
+		byID[t.ID] = t
+	}
+	if g.Mode == ModeDirect {
+		if len(g.Tasks) != 1 {
+			return errors.New("direct plan must contain exactly one task")
+		}
+		only := g.Tasks[0]
+		if only.Kind != Implementation {
+			return errors.New("direct plan must be a single implementation")
+		}
+		if len(only.WritePaths) == 0 {
+			return errors.New("direct implementation requires concrete write paths")
+		}
+		if len(only.Dependencies) != 0 {
+			return errors.New("direct implementation must not carry dependencies")
+		}
+		return nil
+	}
+	impls := []Task{}
+	for _, t := range g.Tasks {
+		if t.Kind == Implementation {
+			impls = append(impls, t)
+		}
+	}
+	if len(impls) == 0 || len(impls) > maxInitial {
+		return fmt.Errorf("graph must contain one to %d staged implementations, found %d", maxInitial, len(impls))
+	}
+	for _, impl := range impls {
+		if len(impl.WritePaths) == 0 {
+			return fmt.Errorf("implementation %q requires concrete declared write paths", impl.ID)
+		}
+		for _, dep := range impl.Dependencies {
+			d := byID[dep]
+			if d.Kind != Research && d.Kind != Design && d.Kind != Implementation {
+				return fmt.Errorf("staged implementation dependency %q must be research, design or implementation", dep)
+			}
+		}
+	}
+	// At least one hub (no implementation dependencies) anchors the stage order.
+	hubs := 0
+	for _, impl := range impls {
+		hasImplDep := false
+		for _, dep := range impl.Dependencies {
+			if byID[dep].Kind == Implementation {
+				hasImplDep = true
+				break
+			}
+		}
+		if !hasImplDep {
+			hubs++
+		}
+	}
+	if hubs == 0 {
+		return errors.New("staged implementations require at least one hub without implementation dependencies")
+	}
+	// Conservative global write disjointness across every implementation pair,
+	// including serial hub-to-leaf edges. No implicit serial reuse is admitted.
+	for i := range impls {
+		for _, other := range impls[i+1:] {
+			for _, a := range impls[i].WritePaths {
+				for _, b := range other.WritePaths {
+					if pathsOverlapFold(a, b) {
+						return fmt.Errorf("staged implementation write paths overlap: %q and %q", a, b)
+					}
+				}
+			}
+		}
+	}
+	hasVerification, hasReview := false, false
+	verificationCount, reviewCount := 0, 0
+	for _, t := range g.Tasks {
+		switch t.Kind {
+		case Research, Design:
+			if len(t.WritePaths) != 0 {
+				return fmt.Errorf("research/design task %q must not declare writes", t.ID)
+			}
+		case Verification:
+			verificationCount++
+			hasVerification = true
+			if len(t.WritePaths) != 0 {
+				return fmt.Errorf("verification task %q must not declare writes", t.ID)
+			}
+			for _, impl := range impls {
+				if !dependsOn(t.ID, impl.ID, byID) {
+					return fmt.Errorf("verification task %q must depend on implementation %q", t.ID, impl.ID)
+				}
+			}
+		case Review:
+			reviewCount++
+			hasReview = true
+			if len(t.WritePaths) != 0 {
+				return fmt.Errorf("review task %q must not declare writes", t.ID)
+			}
+			for _, impl := range impls {
+				if !dependsOn(t.ID, impl.ID, byID) {
+					return fmt.Errorf("review task %q must depend on implementation %q", t.ID, impl.ID)
+				}
+			}
+		}
+	}
+	if !hasVerification {
+		return errors.New("graph requires a native verification gate")
+	}
+	if !hasReview {
+		return errors.New("graph requires a native review gate")
+	}
+	if verificationCount != 1 || reviewCount != 1 {
+		return errors.New("initial autonomous graph requires exactly one verification and one review gate")
+	}
+	return nil
+}
+
 func validateAutonomousGraphWithImplementationLimit(g Graph, maxInitial int) error {
 	if err := g.Validate(); err != nil {
 		return err
