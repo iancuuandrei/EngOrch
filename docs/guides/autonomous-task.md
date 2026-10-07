@@ -245,6 +245,12 @@ and code: for example `response_decode` / `validation_or_runtime_failure`.
 The runtime's first diagnostic is also retained beside its journal as
 `<runtime journal>.failure.json`. These labels contain no provider response,
 prompt or credentials and never authorize a retry or validate an output.
+When the validated gateway journal shows a pending-free, unfinished call
+budget exhaustion for the exact configured binding, the sidecar keeps its
+stage and UNKNOWN status but reports `provider_call_budget_exhausted`. The
+failed invocation remains UNKNOWN until admissible evidence settles it; preserve
+it and reconcile without resending. The diagnostic grants no retry, resume, or
+settlement authority; see [durable run lifecycle](../specifications/run-lifecycle.md).
 
 An exactly sealed initial Codex planner `serverOverloaded` refusal is reported
 as `planner_capacity_refused` / `NEEDS_ATTENTION`. It contains no accepted plan;
