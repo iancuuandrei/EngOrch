@@ -269,19 +269,19 @@ func (p ExecutionPolicy) Validate() error {
 	if p.ParallelImplementationVersion == 1 && (p.GraphVersion != 1 || p.RepairPlanningVersion != 1 || p.Context != taskContextBoundedV1) {
 		return errors.New("parallel implementation requires graph execution, bounded task context, and repair planning")
 	}
-	if p.IsolatedImplementationVersion != 0 && p.IsolatedImplementationVersion != 1 && p.IsolatedImplementationVersion != 2 {
+	if p.IsolatedImplementationVersion != 0 && p.IsolatedImplementationVersion != 1 && p.IsolatedImplementationVersion != 2 && p.IsolatedImplementationVersion != 3 {
 		return errors.New("invalid isolated implementation version")
 	}
-	if (p.IsolatedImplementationVersion == 1 || p.IsolatedImplementationVersion == 2) && (p.GraphVersion != 1 || p.RepairPlanningVersion != 1 || p.Context != taskContextBoundedV1) {
+	if (p.IsolatedImplementationVersion == 1 || p.IsolatedImplementationVersion == 2 || p.IsolatedImplementationVersion == 3) && (p.GraphVersion != 1 || p.RepairPlanningVersion != 1 || p.Context != taskContextBoundedV1) {
 		return errors.New("isolated implementation requires graph execution, bounded task context, and repair planning")
 	}
-	if (p.IsolatedImplementationVersion == 1 || p.IsolatedImplementationVersion == 2) && (p.IsolationCapacity == nil || p.IsolationEstimate == nil || p.IsolationEstimate.Validate() != nil) {
+	if (p.IsolatedImplementationVersion == 1 || p.IsolatedImplementationVersion == 2 || p.IsolatedImplementationVersion == 3) && (p.IsolationCapacity == nil || p.IsolationEstimate == nil || p.IsolationEstimate.Validate() != nil) {
 		return errors.New("isolated implementation requires capacity and estimate template")
 	}
 	if p.IsolatedImplementationVersion == 0 && (p.IsolationCapacity != nil || p.IsolationEstimate != nil) {
 		return errors.New("isolation capacity requires isolated implementation")
 	}
-	if (p.IsolatedImplementationVersion == 1 || p.IsolatedImplementationVersion == 2) && p.ParallelImplementationVersion == 1 {
+	if (p.IsolatedImplementationVersion == 1 || p.IsolatedImplementationVersion == 2 || p.IsolatedImplementationVersion == 3) && p.ParallelImplementationVersion == 1 {
 		return errors.New("parallel aggregate and isolated implementation modes are exclusive")
 	}
 	if p.ScopeReplanVersion < 0 || p.ScopeReplanVersion > 2 {
@@ -290,12 +290,15 @@ func (p ExecutionPolicy) Validate() error {
 	if p.IsolatedImplementationVersion == 2 && p.ScopeReplanVersion != 0 {
 		return errors.New("isolated waves do not support scope replanning")
 	}
+	if p.IsolatedImplementationVersion == 3 && p.ScopeReplanVersion != 0 {
+		return errors.New("staged isolated cohorts do not support scope replanning")
+	}
 	if p.ScopeReplanVersion == 1 {
 		if p.GraphVersion != 1 || p.RepairPlanningVersion != 1 || p.MaxScopeReplans < 1 || p.MaxScopeReplans > 2 || p.ParallelImplementationVersion != 0 || p.IsolatedImplementationVersion != 0 || p.ScopeReplanDesignVersion > 1 {
 			return errors.New("scope replanning requires serial graph repair planning and a budget of one or two")
 		}
 	} else if p.ScopeReplanVersion == 2 {
-		if p.IsolatedImplementationVersion == 2 {
+		if p.IsolatedImplementationVersion == 2 || p.IsolatedImplementationVersion == 3 {
 			return errors.New("isolated waves do not support scope replanning")
 		}
 		cohortMode := (p.ParallelImplementationVersion == 1) != (p.IsolatedImplementationVersion == 1)
@@ -420,6 +423,8 @@ type Snapshot struct {
 	Graph                     *GraphState                        `json:"graph,omitempty"`
 	GraphIsolations           map[string]GraphIsolationState     `json:"graph_isolations,omitempty"`
 	GraphIsolationPreparation *GraphIsolationPreparation         `json:"graph_isolation_preparation,omitempty"`
+	GraphStagedCohorts        []StagedCohortArchive              `json:"graph_staged_cohorts,omitempty"`
+	GraphStagedForks          map[string]StagedForkState         `json:"graph_staged_forks,omitempty"`
 	GraphMemoryAdmission      *GraphMemoryAdmissionState         `json:"graph_memory_admission,omitempty"`
 	ScopeReplans              []ScopeReplanRecord                `json:"scope_replans,omitempty"`
 	ScopeReplanRequests       []ScopeReplanRequest               `json:"scope_replan_requests,omitempty"`
@@ -695,7 +700,7 @@ func Replay(events []journal.Event) (Snapshot, error) {
 			if c.Config.Repository != c.Repository.Name {
 				return s, errors.New("configuration binding mismatch")
 			}
-			if c.Config.PlannerContract == "plan-graph-v7" {
+			if c.Config.PlannerContract == "plan-graph-v7" || c.Config.PlannerContract == plannerContractGraphV8 {
 				if _, err := plannerInvocationWithContextsAndRecipe(c.Config, c.Objective, nil, nil, c.Execution); err != nil {
 					return s, err
 				}
@@ -872,6 +877,9 @@ func Replay(events []journal.Event) (Snapshot, error) {
 			if err := filesAllowed(s); err != nil {
 				return s, err
 			}
+			if stagedIsolationEnabled(s) && s.FileIntent != nil {
+				return s, errors.New("staged cohort requires advance before another file effect")
+			}
 			var intent FileIntent
 			if err := canonical.Decode(e.Payload, &intent); err != nil {
 				return s, err
@@ -1022,6 +1030,18 @@ func Replay(events []journal.Event) (Snapshot, error) {
 			if err := replayGraphIsolation(&s, e); err != nil {
 				return s, err
 			}
+		case "graph.staged-prepared":
+			if err := replayStagedPreparation(&s, e); err != nil {
+				return s, err
+			}
+		case "graph.staged-fork-intent", "graph.staged-fork-confirmed":
+			if err := replayStagedFork(&s, e); err != nil {
+				return s, err
+			}
+		case "graph.staged-advanced":
+			if err := replayStagedAdvance(&s, e); err != nil {
+				return s, err
+			}
 		case "graph.writer.memory-admitted", "graph.writer.memory-released":
 			if err := replayGraphMemoryAdmission(&s, e); err != nil {
 				return s, err
@@ -1067,14 +1087,24 @@ func validateRepairPlanningBinding(c Creation) error {
 	serialContract := c.Config.PlannerContract == plannerContractGraphV3 || c.Config.PlannerContract == plannerContractGraphV5
 	parallelContract := c.Config.PlannerContract == plannerContractGraphV4 || c.Config.PlannerContract == plannerContractGraphV6
 	isolationContract := c.Config.PlannerContract == "plan-graph-v7"
+	stagedContract := c.Config.PlannerContract == plannerContractGraphV8
 	if isolationVersion == 1 || isolationVersion == 2 {
 		if version != 1 || parallelVersion != 0 || !isolationContract {
 			return errors.New("isolated implementation policy requires plan-graph-v7")
 		}
 		return nil
 	}
+	if isolationVersion == 3 {
+		if version != 1 || parallelVersion != 0 || !stagedContract {
+			return errors.New("staged isolated policy requires plan-graph-v8")
+		}
+		return nil
+	}
 	if isolationContract {
 		return errors.New("plan-graph-v7 requires isolated implementation policy")
+	}
+	if stagedContract {
+		return errors.New("plan-graph-v8 requires staged isolated policy")
 	}
 	if version == 1 && !(serialContract && parallelVersion == 0 || parallelContract && parallelVersion == 1) ||
 		version == 0 && (serialContract || parallelContract || parallelVersion != 0) {

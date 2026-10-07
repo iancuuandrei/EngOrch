@@ -832,12 +832,28 @@ func (g *graphMemoryAdmissionGate) signalLocked() {
 
 // isolatedMemoryStableMaxWorkers is the run-stable configured maximum used as
 // memoryadmission Decision.ConfiguredMaxWorkers. It never changes across
-// waves so durable replay never observes a policy change within one run.
+// waves or staged cohorts so durable replay never observes a policy change
+// within one run. Version 3 staged cohorts use the configured execution
+// ceiling for the whole admitted run; per-wave grants remain bounded by
+// isolatedMemoryMaxWorkers. Versions 1 and 2 retain absent-field legacy
+// behavior bounding by the frozen selected cohort.
 func isolatedMemoryStableMaxWorkers(s Snapshot) int {
-	if s.Creation.Execution == nil || s.GraphIsolationPreparation == nil {
+	if s.Creation.Execution == nil {
 		return 0
 	}
 	maxWorkers := s.Creation.Execution.EffectiveMaxParallel()
+	if maxWorkers > 8 {
+		maxWorkers = 8
+	}
+	if s.GraphIsolationPreparation != nil && s.GraphIsolationPreparation.Version == 3 {
+		if maxWorkers < 1 {
+			return 0
+		}
+		return maxWorkers
+	}
+	if s.GraphIsolationPreparation == nil {
+		return 0
+	}
 	bound := len(s.GraphIsolationPreparation.SelectedTaskIDs)
 	if maxWorkers > bound {
 		maxWorkers = bound
@@ -854,7 +870,7 @@ func isolatedMemoryMaxWorkers(s Snapshot, graphTaskID string) int {
 	}
 	maxWorkers := s.Creation.Execution.EffectiveMaxParallel()
 	bound := len(s.GraphIsolationPreparation.SelectedTaskIDs)
-	if s.GraphIsolationPreparation.Version == 2 && len(s.GraphIsolationPreparation.Waves) != 0 {
+	if (s.GraphIsolationPreparation.Version == 2 || s.GraphIsolationPreparation.Version == 3) && len(s.GraphIsolationPreparation.Waves) != 0 {
 		bound = 0
 		for _, wave := range s.GraphIsolationPreparation.Waves {
 			for _, id := range wave {

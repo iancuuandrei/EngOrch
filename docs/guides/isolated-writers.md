@@ -89,6 +89,42 @@ gates are retained. Cohort scope replanning is unsupported for version 2
 waves: runs are created without a scope-replan policy, and a scope violation
 remains a bounded rejection without silent widening.
 
+## Dependent hub-to-leaf staged cohorts (version 3)
+
+`--isolated-writer-staged --isolation-policy PATH --max-parallel N` opts into
+`isolated_implementation_version: 3` with the `plan-graph-v8` planner, capacity,
+estimate, graph, repair, route, and external-state requirements of version 2.
+It is mutually exclusive with `--parallel-writers`, `--isolated-writers`, and
+`--isolated-writer-waves`, and it is not a default promotion. Versions 1 and 2
+remain unchanged.
+
+Version 3 freezes each exact current ready implementation subset (hub then
+leaves) with exact graph, candidate, HEAD, and resources, partitioning the
+current subset into resource-bounded waves when it exceeds capacity. Each leaf
+child is forked from its exact post-hub parent candidate through a durable fork
+intent before destination creation, copying only the parent-authorized delta
+with existing worktree and file-effect primitives; RI, overlay, and lexical
+views never authorize the copy. Cumulative fork deltas enforce the existing
+64-change, 256 KiB, and canonical-base64 bounds before intent or creation; full
+preflight still needs the child binding and runs after intent, so its failure
+stays UNKNOWN without redispatch. A streaming copy is a documented alternative
+to the current bounded reuse. Each stage performs one parent aggregate and
+file effect, advances the CONFIRMED cohort via a compact identity event (exact
+cohort, preparation, candidate, task, proposal, and observation hashes,
+pre-effect envelope checked) that reconstructs the full archive from validated
+current state, and preserves completed graph
+evidence, journal history, and repair budgets with stable version 3 memory
+ceilings and retained adaptive history. Foreign, stale, manifest, mode,
+path, or source drift is rejected; UNKNOWN stops without next dispatch or
+redispatch. Intermediate hubs may integrate without final READY; final native
+verification and review bind the exact last candidate with no stale receipt.
+Cohort scope replanning is unsupported for version 3.
+
+This is an opt-in scheduling and isolation policy. It does not infer host
+capacity from environment data, measure actual CPU or memory use, qualify a
+provider route, authorize unrestricted operating-system sandboxing, or claim
+measured quality, latency, or cost benefit.
+
 The Windows evaluation runner configures one external namespace per task under
 that task's evaluation output directory before invoking `fabric run`. The
 absolute setting is included in the task configuration hash and checked again

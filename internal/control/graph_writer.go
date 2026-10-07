@@ -252,6 +252,7 @@ type GraphWriterBatchRecord struct {
 	Prepared               PreparedFiles       `json:"prepared"`
 	IsolationPreparationID string              `json:"isolation_preparation_id,omitempty"`
 	ScopeReplanRequestID   string              `json:"scope_replan_request_id,omitempty"`
+	CohortIndex            int                 `json:"cohort_index,omitempty"`
 }
 
 type graphWriterAggregateIdentity struct {
@@ -261,6 +262,7 @@ type graphWriterAggregateIdentity struct {
 	CandidateID            string              `json:"candidate_id"`
 	Members                []GraphWriterMember `json:"members"`
 	IsolationPreparationID string              `json:"isolation_preparation_id,omitempty"`
+	CohortIndex            int                 `json:"cohort_index,omitempty"`
 }
 
 func expectedWriterHostForTask(s Snapshot, taskID string) (WriterHostIntent, error) {
@@ -531,10 +533,16 @@ func replayGraphWriterBatch(s *Snapshot, e journal.Event) error {
 		return err
 	}
 	if batch.Version == 2 {
+		if stagedIsolationEnabled(*s) {
+			return errors.New("isolated writer aggregate requires non-staged policy")
+		}
 		return replayIsolatedGraphWriterBatch(s, batch)
 	}
 	if batch.Version == 3 {
 		return replayScopeReplannedGraphWriterBatch(s, batch)
+	}
+	if batch.Version == 4 {
+		return replayStagedBatch(s, batch)
 	}
 	if batch.Version != 1 || s.Graph == nil || s.Candidate == nil || s.GraphWriterBatch != nil || batch.GraphDigest != s.Graph.Digest || batch.Revision != s.Graph.Revision {
 		return errors.New("graph writer batch identity or transition rejected")
@@ -579,32 +587,12 @@ func replayGraphWriterBatch(s *Snapshot, e journal.Event) error {
 }
 
 func replayIsolatedGraphWriterBatch(s *Snapshot, batch GraphWriterBatchRecord) error {
-	if batch.Version != 2 || !isolatedImplementationEnabled(*s) || s.Graph == nil || s.Candidate == nil || s.GraphWriterBatch != nil || s.GraphIsolationPreparation == nil || batch.GraphDigest != s.Graph.Digest || batch.Revision != s.Graph.Revision || batch.IsolationPreparationID != s.GraphIsolationPreparation.PreparationID {
+	if batch.Version != 2 || !isolatedImplementationEnabled(*s) || stagedIsolationEnabled(*s) || s.Graph == nil || s.Candidate == nil || s.GraphWriterBatch != nil || s.GraphIsolationPreparation == nil || (s.GraphIsolationPreparation.Version != 1 && s.GraphIsolationPreparation.Version != 2) || batch.GraphDigest != s.Graph.Digest || batch.Revision != s.Graph.Revision || batch.IsolationPreparationID != s.GraphIsolationPreparation.PreparationID {
 		return errors.New("isolated writer aggregate identity or transition rejected")
 	}
-	candidateID, err := s.Candidate.ID()
-	if err != nil || batch.CandidateID != candidateID || s.GraphIsolationPreparation.BaseCandidateID != candidateID {
-		return errors.Join(errors.New("isolated writer aggregate parent candidate changed"), err)
-	}
-	ids := make([]string, 0, len(batch.Members))
-	seen := map[string]bool{}
-	if len(batch.Members) == 0 || len(batch.Members) > 8 {
-		return errors.New("isolated writer aggregate must contain one to eight members")
-	}
-	for _, member := range batch.Members {
-		if seen[member.TaskID] || member.IsolationID == "" || member.ChildCandidateID == "" {
-			return errors.New("invalid or duplicate isolated writer aggregate member")
-		}
-		seen[member.TaskID] = true
-		record, ok := s.GraphWriterResults[member.TaskID]
-		if !ok || record.Isolated == nil || graphWriterRecordInvocation(record).ID != member.InvocationID || record.Isolated.IsolationID != member.IsolationID {
-			return errors.New("isolated writer aggregate member evidence mismatch")
-		}
-		childID, idErr := record.Isolated.Candidate.ID()
-		if idErr != nil || childID != member.ChildCandidateID {
-			return errors.Join(errors.New("isolated writer aggregate child candidate mismatch"), idErr)
-		}
-		ids = append(ids, member.TaskID)
+	ids, err := resolveWriterBatchMemberIDs(*s, batch, "isolated writer aggregate parent candidate changed", "isolated writer aggregate must contain one to eight members", "invalid or duplicate isolated writer aggregate member", "isolated writer aggregate child candidate mismatch", "isolated writer aggregate member evidence mismatch")
+	if err != nil {
+		return err
 	}
 	expected, err := expectedIsolatedGraphWriterBatch(*s, ids, batch.Prepared)
 	if err != nil {
@@ -679,19 +667,10 @@ func validateIsolatedGraphWriterCohort(s Snapshot, tasks []engineeringplan.Task)
 	if s.GraphIsolationPreparation != nil && !sameCanonical(*s.GraphIsolationPreparation, preparation) {
 		return errors.New("recorded isolated preparation differs from the complete initial cohort")
 	}
-	for _, task := range tasks {
-		if !containsGraphIsolationTask(preparation.SelectedTaskIDs, task.ID) {
-			return errors.New("resource-bounded initial cohort differs from ready implementations")
-		}
+	if err := requireCohortTasksInSelection(tasks, preparation.SelectedTaskIDs, "resource-bounded initial cohort differs from ready implementations"); err != nil {
+		return err
 	}
-	for i := range tasks {
-		for j := i + 1; j < len(tasks); j++ {
-			if !tasksIndependentAndDisjoint(tasks[i], tasks[j]) {
-				return errors.New("isolated initial implementation tasks are not independent and disjoint")
-			}
-		}
-	}
-	return nil
+	return requireCohortTasksDisjoint(tasks, "isolated initial implementation tasks are not independent and disjoint")
 }
 
 func validateIsolatedGraphWriterWavesCohort(s Snapshot, tasks []engineeringplan.Task, readyByID map[string]engineeringplan.Task, allImpl map[string]bool) error {
@@ -725,22 +704,13 @@ func validateIsolatedGraphWriterWavesCohort(s Snapshot, tasks []engineeringplan.
 	if s.GraphIsolationPreparation != nil && !sameCanonical(*s.GraphIsolationPreparation, preparation) {
 		return errors.New("recorded isolated preparation differs from the complete initial cohort")
 	}
-	for _, task := range tasks {
-		if !containsGraphIsolationTask(preparation.SelectedTaskIDs, task.ID) {
-			return errors.New("resource-bounded initial cohort differs from ready implementations")
-		}
+	if err := requireCohortTasksInSelection(tasks, preparation.SelectedTaskIDs, "resource-bounded initial cohort differs from ready implementations"); err != nil {
+		return err
 	}
 	if err := validateIsolatedWavesPartition(preparation, tasks); err != nil {
 		return err
 	}
-	for i := range tasks {
-		for j := i + 1; j < len(tasks); j++ {
-			if !tasksIndependentAndDisjoint(tasks[i], tasks[j]) {
-				return errors.New("isolated initial implementation tasks are not independent and disjoint")
-			}
-		}
-	}
-	return nil
+	return requireCohortTasksDisjoint(tasks, "isolated initial implementation tasks are not independent and disjoint")
 }
 
 func validateIsolatedWavesPartition(preparation GraphIsolationPreparation, tasks []engineeringplan.Task) error {
@@ -795,10 +765,6 @@ func buildIsolatedGraphWriterBatch(ctx context.Context, path string, taskIDs []s
 	if err != nil {
 		return GraphWriterBatchRecord{}, err
 	}
-	candidateID, err := s.Candidate.ID()
-	if err != nil {
-		return GraphWriterBatchRecord{}, err
-	}
 	identity, members, changes, err := isolatedGraphWriterAggregateParts(s, ids)
 	if err != nil {
 		return GraphWriterBatchRecord{}, err
@@ -807,29 +773,7 @@ func buildIsolatedGraphWriterBatch(ctx context.Context, path string, taskIDs []s
 	if err != nil {
 		return GraphWriterBatchRecord{}, err
 	}
-	lease, err := worktree.AcquireRead(s.Workspace.Request)
-	if err != nil {
-		return GraphWriterBatchRecord{}, err
-	}
-	defer func() { _ = lease.Close() }()
-	latest, err := Inspect(path)
-	if err != nil {
-		return GraphWriterBatchRecord{}, err
-	}
-	if latest.Candidate == nil || *latest.Candidate != *s.Candidate || latest.GraphIsolationPreparation == nil || latest.GraphIsolationPreparation.PreparationID != identity.IsolationPreparationID {
-		return GraphWriterBatchRecord{}, errors.New("isolated aggregate parent or frozen cohort changed")
-	}
-	proposal, err := fileeffects.Prepare(ctx, *latest.Workspace, "isolated-graph-writers-"+nonce, changes)
-	if err != nil {
-		return GraphWriterBatchRecord{}, err
-	}
-	if err := fileeffects.Preflight(ctx, *latest.Workspace, proposal); err != nil {
-		return GraphWriterBatchRecord{}, err
-	}
-	if proposal.Before != *latest.Candidate {
-		return GraphWriterBatchRecord{}, errors.New("isolated aggregate preimage differs from current parent candidate")
-	}
-	prepared, err := preparedFiles(latest, proposal)
+	latest, prepared, candidateID, err := proposeAggregateParentEffect(ctx, path, s, identity.IsolationPreparationID, "isolated-graph-writers-"+nonce, "isolated aggregate parent or frozen cohort changed", "isolated aggregate preimage differs from current parent candidate", changes)
 	if err != nil {
 		return GraphWriterBatchRecord{}, err
 	}
@@ -855,23 +799,9 @@ func expectedIsolatedGraphWriterBatch(s Snapshot, taskIDs []string, supplied Pre
 	if err != nil {
 		return GraphWriterBatchRecord{}, err
 	}
-	proposal := supplied.Proposal
-	if proposal.Version != 1 || proposal.Nonce != "isolated-graph-writers-"+identityHash || proposal.Before != *s.Candidate || !sameCanonical(proposal.Changes, changes) {
-		return GraphWriterBatchRecord{}, errors.New("isolated aggregate parent proposal identity mismatch")
-	}
-	if err := proposal.Validate(); err != nil {
-		return GraphWriterBatchRecord{}, err
-	}
-	after, err := composeGraphWriterCandidate(proposal.Before, proposal.BeforeFiles, changes)
-	if err != nil || after != proposal.After {
-		return GraphWriterBatchRecord{}, errors.Join(errors.New("isolated aggregate after-candidate mismatch"), err)
-	}
-	expected, err := preparedFiles(s, proposal)
+	expected, err := validateAggregateProposalEffect(s, supplied, changes, "isolated-graph-writers-"+identityHash, "isolated aggregate parent proposal identity mismatch", "isolated aggregate after-candidate mismatch", "isolated aggregate prepared effect identity mismatch")
 	if err != nil {
 		return GraphWriterBatchRecord{}, err
-	}
-	if !sameCanonical(expected, supplied) {
-		return GraphWriterBatchRecord{}, errors.New("isolated aggregate prepared effect identity mismatch")
 	}
 	candidateID, err := s.Candidate.ID()
 	if err != nil {
@@ -884,19 +814,7 @@ func isolatedGraphWriterIDsForResults(s Snapshot, requested []string) ([]string,
 	if s.GraphIsolationPreparation == nil || s.Candidate == nil || len(requested) == 0 {
 		return nil, errors.New("frozen isolated graph writer results required")
 	}
-	ids := append([]string(nil), requested...)
-	sort.Strings(ids)
-	selected := append([]string(nil), s.GraphIsolationPreparation.SelectedTaskIDs...)
-	sort.Strings(selected)
-	if len(ids) != len(selected) {
-		return nil, errors.New("isolated aggregate must include the entire frozen cohort")
-	}
-	for i := range ids {
-		if ids[i] == "" || (i > 0 && ids[i] == ids[i-1]) || ids[i] != selected[i] {
-			return nil, errors.New("isolated aggregate membership differs from frozen cohort")
-		}
-	}
-	return ids, nil
+	return sortedFrozenCohortIDs(requested, s.GraphIsolationPreparation.SelectedTaskIDs, "isolated aggregate must include the entire frozen cohort", "isolated aggregate membership differs from frozen cohort")
 }
 
 func isolatedGraphWriterAggregateParts(s Snapshot, ids []string) (graphWriterAggregateIdentity, []GraphWriterMember, []fileeffects.Change, error) {
@@ -1193,7 +1111,17 @@ func isStaticGraphWriterCohort(s Snapshot, claim taskscheduler.Claim) bool {
 	if err != nil {
 		return false
 	}
-	if isolatedImplementationEnabled(s) {
+	if stagedIsolationEnabled(s) {
+		var implementations []engineeringplan.Task
+		for _, task := range ready {
+			if task.Kind == engineeringplan.Implementation {
+				implementations = append(implementations, task)
+			}
+		}
+		if err := validateStagedCohort(s, implementations); err != nil {
+			return false
+		}
+	} else if isolatedImplementationEnabled(s) {
 		var implementations []engineeringplan.Task
 		for _, task := range ready {
 			if task.Kind == engineeringplan.Implementation {
@@ -1263,7 +1191,18 @@ func verifyGraphWriterCohortDelta(controllerPath string, claim taskscheduler.Cla
 		invocations[invocation.ID] = task.ID
 	}
 	maxCohort := 2
-	if isolatedImplementationEnabled(bound) && bound.State == "IMPLEMENTING" {
+	if stagedIsolationEnabled(bound) && bound.State == "IMPLEMENTING" {
+		var implementations []engineeringplan.Task
+		for _, task := range ready {
+			if task.Kind == engineeringplan.Implementation {
+				implementations = append(implementations, task)
+			}
+		}
+		if err := validateStagedCohort(bound, implementations); err != nil {
+			return err
+		}
+		maxCohort = 8
+	} else if isolatedImplementationEnabled(bound) && bound.State == "IMPLEMENTING" {
 		var implementations []engineeringplan.Task
 		for _, task := range ready {
 			if task.Kind == engineeringplan.Implementation {
@@ -1525,22 +1464,7 @@ func buildGraphWriterBatchSpecs(controllerPath string, s Snapshot, tasks []engin
 	if len(tasks) < 1 || len(tasks) > maxCohort {
 		return nil, fmt.Errorf("writer cohort must contain one to %d implementations", maxCohort)
 	}
-	specs := make([]taskscheduler.TaskSpec, 0, len(tasks))
-	for _, task := range tasks {
-		if task.Kind != engineeringplan.Implementation {
-			return nil, errors.New("writer cohort contains a non-implementation")
-		}
-		invocation, err := writerInvocationForTask(s, task.ID)
-		if err != nil {
-			return nil, err
-		}
-		if invocation.Profile.Runtime != "codex-app-server" {
-			return nil, errors.New("parallel graph writer runtime unsupported")
-		}
-		specs = append(specs, taskscheduler.TaskSpec{ID: task.ID, RunID: s.RunID, ControllerPath: controllerPath, Operation: taskscheduler.OperationWriter, InvocationID: invocation.ID})
-	}
-	sort.Slice(specs, func(i, j int) bool { return specs[i].ID < specs[j].ID })
-	return specs, nil
+	return buildWriterTaskSpecs(s, controllerPath, tasks)
 }
 
 func graphWriterCohortEnabled(s Snapshot) bool {
@@ -1667,61 +1591,7 @@ func buildIsolatedGraphWriterWaveSpecs(controllerPath string, s Snapshot, waveTa
 	if waveIndex < 0 || waveIndex >= len(s.GraphIsolationPreparation.Waves) {
 		return nil, errors.New("isolated wave index is outside the frozen cohort")
 	}
-	frozen := append([]string(nil), s.GraphIsolationPreparation.Waves[waveIndex]...)
-	sort.Strings(frozen)
-	if len(waveTasks) == 0 || len(waveTasks) != len(frozen) {
-		return nil, errors.New("isolated wave membership differs from frozen cohort")
-	}
-	ready, err := graphReadyTasks(s)
-	if err != nil {
-		return nil, err
-	}
-	readyByID := map[string]engineeringplan.Task{}
-	for _, task := range ready {
-		if task.Kind == engineeringplan.Implementation {
-			readyByID[task.ID] = task
-		}
-	}
-	got := make([]string, 0, len(waveTasks))
-	for _, task := range waveTasks {
-		readyTask, ok := readyByID[task.ID]
-		if !ok || !reflect.DeepEqual(task, readyTask) {
-			return nil, errors.New("isolated wave task is stale or substituted")
-		}
-		if !containsGraphIsolationTask(frozen, task.ID) {
-			return nil, errors.New("isolated wave task is outside its frozen wave")
-		}
-		got = append(got, task.ID)
-	}
-	sort.Strings(got)
-	for i := range got {
-		if got[i] != frozen[i] {
-			return nil, errors.New("isolated wave membership differs from frozen cohort")
-		}
-	}
-	for i := range waveTasks {
-		for j := i + 1; j < len(waveTasks); j++ {
-			if !tasksIndependentAndDisjoint(waveTasks[i], waveTasks[j]) {
-				return nil, errors.New("isolated wave tasks are not independent and disjoint")
-			}
-		}
-	}
-	specs := make([]taskscheduler.TaskSpec, 0, len(waveTasks))
-	for _, task := range waveTasks {
-		if task.Kind != engineeringplan.Implementation {
-			return nil, errors.New("writer cohort contains a non-implementation")
-		}
-		invocation, err := writerInvocationForTask(s, task.ID)
-		if err != nil {
-			return nil, err
-		}
-		if invocation.Profile.Runtime != "codex-app-server" {
-			return nil, errors.New("parallel graph writer runtime unsupported")
-		}
-		specs = append(specs, taskscheduler.TaskSpec{ID: task.ID, RunID: s.RunID, ControllerPath: controllerPath, Operation: taskscheduler.OperationWriter, InvocationID: invocation.ID})
-	}
-	sort.Slice(specs, func(i, j int) bool { return specs[i].ID < specs[j].ID })
-	return specs, nil
+	return buildFrozenWaveSpecs(s, controllerPath, waveTasks, waveIndex, "isolated wave membership differs from frozen cohort", "isolated wave task is stale or substituted", "isolated wave task is outside its frozen wave", "isolated wave tasks are not independent and disjoint")
 }
 
 func runIsolatedGraphWriterWaves(ctx context.Context, controllerPath string, initial Snapshot, tasks []engineeringplan.Task) error {
@@ -1781,73 +1651,23 @@ func runIsolatedGraphWriterWaves(ctx context.Context, controllerPath string, ini
 				return errors.New("isolated waves blocked on UNKNOWN child isolation; explicit reconciliation required")
 			}
 		}
-		waveTasks := make([]engineeringplan.Task, 0, len(waveIDs))
-		for _, id := range waveIDs {
-			task, ok := byID[id]
-			if !ok {
-				return errors.New("isolated wave task is outside the frozen cohort")
-			}
-			waveTasks = append(waveTasks, task)
+		waveTasks, err := waveTasksForCohort(byID, waveIDs, "isolated wave task is outside the frozen cohort")
+		if err != nil {
+			return err
 		}
-		allProposed := true
-		for _, task := range waveTasks {
-			record, ok := latest.GraphWriterResults[task.ID]
-			if !ok || record.Isolated == nil {
-				allProposed = false
-				break
-			}
+		allProposed, err := waveProposalStatus(latest, waveTasks, "isolated wave is partially proposed; UNKNOWN or tamper suspected")
+		if err != nil {
+			return err
 		}
 		if allProposed {
 			continue
-		}
-		for _, task := range waveTasks {
-			if _, ok := latest.GraphWriterResults[task.ID]; ok {
-				return errors.New("isolated wave is partially proposed; UNKNOWN or tamper suspected")
-			}
 		}
 		specs, err := buildIsolatedGraphWriterWaveSpecs(controllerPath, latest, waveTasks, waveIndex)
 		if err != nil {
 			return err
 		}
-		workers := latest.Creation.Execution.EffectiveMaxParallel()
-		if workers > len(specs) {
-			workers = len(specs)
-		}
-		if workers > 8 {
-			workers = 8
-		}
-		if workers < 1 {
-			return errors.New("isolated wave has no scheduler capacity")
-		}
-		id, err := graphCohortID(latest.Graph.Digest, latest.Graph.Revision, specs)
-		if err != nil {
+		if err := scheduleWaveCohort(ctx, controllerPath, latest, specs, preparationID, waveIndex, ".isolated-graph-writers-wave-", "harness.isolated-wave-schedule.v1", "isolated wave has no scheduler capacity", "isolated wave settled without a complete candidate-bound proposal set"); err != nil {
 			return err
-		}
-		waveNonce, err := canonical.Hash("harness.isolated-wave-schedule.v1", struct {
-			PreparationID string
-			WaveIndex     int
-			CohortID      string
-		}{preparationID, waveIndex, id})
-		if err != nil {
-			return err
-		}
-		schedulePath := controllerPath + ".isolated-graph-writers-wave-" + waveNonce[:16] + ".jsonl"
-		definition := taskscheduler.Definition{Version: 1, Nonce: "isolated-graph-writers-wave-" + waveNonce, Tasks: specs}
-		if _, err := taskscheduler.Bind(schedulePath, definition); err != nil {
-			return err
-		}
-		if err := runScheduledGraphWriterCohort(ctx, controllerPath, schedulePath, specs, workers, true); err != nil {
-			return err
-		}
-		after, err := Inspect(controllerPath)
-		if err != nil {
-			return err
-		}
-		for _, task := range waveTasks {
-			record, ok := after.GraphWriterResults[task.ID]
-			if !ok || record.Isolated == nil {
-				return errors.New("isolated wave settled without a complete candidate-bound proposal set")
-			}
 		}
 	}
 	return nil

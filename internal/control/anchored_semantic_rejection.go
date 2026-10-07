@@ -22,7 +22,13 @@ func anchoredCorrectionSnapshot(s Snapshot, taskID string) (Snapshot, error) {
 	if taskID == "" || !isolatedImplementationEnabled(s) {
 		return s, nil
 	}
-	binding, err := isolatedWriterBindingForTask(s, taskID)
+	var binding isolatedWriterBinding
+	var err error
+	if stagedIsolationEnabled(s) {
+		binding, err = stagedForkBindingForTask(s, taskID)
+	} else {
+		binding, err = isolatedWriterBindingForTask(s, taskID)
+	}
 	if err != nil {
 		return s, err
 	}

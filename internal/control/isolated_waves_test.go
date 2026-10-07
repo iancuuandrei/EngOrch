@@ -22,25 +22,7 @@ func isolatedWavesThreeWriterCreation(t *testing.T) Creation {
 	c.Execution.IsolatedImplementationVersion = 2
 	c.Execution.MaxParallel = 2
 	c.Config.PlannerContract = plannerContractGraphV7
-	c.Config.WriterContract = "anchored-edits-v1"
-	profileID, err := canonical.Hash("harness.isolation-writer-profile.v1", *c.Config.Writer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	model := engineeringplan.ProviderModelKey{Provider: c.Config.Writer.Provider, Model: c.Config.Writer.Model}
-	route := engineeringplan.RuntimeResourceKey{ProfileID: profileID, Provider: model.Provider, Model: model.Model}
-	c.Execution.IsolationEstimate = &IsolationEstimateTemplate{CPUMilli: 1, MemoryMiB: 1, VerificationSlots: 1, RuntimeSlots: 1}
-	c.Execution.IsolationCapacity = &engineeringplan.ResourceCapacity{
-		CPUMilli: 2, MemoryMiB: 2, VerificationSlots: 2, TotalRuntimeSlots: 2,
-		ProviderSlots: []engineeringplan.ProviderSlotLimit{{Provider: model.Provider, Slots: 2}},
-		ModelSlots:    []engineeringplan.ModelSlotLimit{{Model: model, Slots: 2}},
-		RuntimeSlots:  []engineeringplan.RuntimeSlotLimit{{Runtime: route, Slots: 2}},
-	}
-	c.Config.ControllerStateRoot = filepath.Join(t.TempDir(), "controller-state")
-	if err := c.Execution.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	return c
+	return applyTwoSlotIsolationCapacity(t, c)
 }
 
 func TestIsolatedWavesThreeWritersAcrossTwoWavesIntegrateOnce(t *testing.T) {
