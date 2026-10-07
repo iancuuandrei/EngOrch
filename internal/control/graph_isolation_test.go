@@ -38,7 +38,7 @@ func TestIsolatedImplementationPolicyRequiresBoundedGraphRepair(t *testing.T) {
 		"graph":    func(p *ExecutionPolicy) { p.GraphVersion = 0 },
 		"repair":   func(p *ExecutionPolicy) { p.RepairPlanningVersion = 0 },
 		"context":  func(p *ExecutionPolicy) { p.Context = "" },
-		"version":  func(p *ExecutionPolicy) { p.IsolatedImplementationVersion = 3 },
+		"version":  func(p *ExecutionPolicy) { p.IsolatedImplementationVersion = 4 },
 		"parallel": func(p *ExecutionPolicy) { p.ParallelImplementationVersion = 1 },
 	} {
 		t.Run(name, func(t *testing.T) {

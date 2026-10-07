@@ -29,13 +29,16 @@ pair, not a general speedup guarantee; see the real-repository evaluation report
 - Empty `Context` and `GraphVersion 0 / MaxParallel 0` preserve the legacy
   sequential workflow byte-for-byte; `canonical.Hash("harness.run.v1")` and
   `canonical.Hash("harness.execution-policy.v1")` are unchanged for old runs.
-- `Config.PlannerContract` may be `""`, `plan-v1` (legacy) or `plan-graph-v1` through `plan-graph-v6`.
+- `Config.PlannerContract` may be `""`, `plan-v1` (legacy) or `plan-graph-v1` through `plan-graph-v8`.
   (strict autonomous graph). Empty retains historical raw planner input
-  identity.
+  identity. `plan-graph-v7` binds isolated initial cohorts (version 1) and
+  resource-bounded initial waves (version 2); `plan-graph-v8` binds dependent
+  hub-to-leaf staged cohorts (version 3) with implementation dependencies
+  permitted from leaves to completed hubs.
 
 ## Planner contract
 
-- Default new autonomous CLI runs freeze `plan-graph-v5`; the parallel-writer opt-in freezes `plan-graph-v6`. These recipes include generated-source ownership guidance and the exact JSON schema in the invocation and Codex request. Earlier recipes, including V3/V4, retain their original input bytes so existing journals remain inspectable. Evidence entries require `kind` and `description`; root scope `.` is allowed, but writes require concrete paths. Strict wire objects include every property; empty parent IDs and empty dependency/write arrays represent absent values. Initial implementation scope also bounds subsequent repair designs.
+- Default new autonomous CLI runs freeze `plan-graph-v5`; the parallel-writer opt-in freezes `plan-graph-v6`. These recipes include generated-source ownership guidance and the exact JSON schema in the invocation and Codex request. Earlier recipes, including V3/V4, retain their original input bytes so existing journals remain inspectable. Evidence entries require `kind` and `description`; root scope `.` is allowed, but writes require concrete paths. Strict wire objects include every property; empty parent IDs and empty dependency/write arrays represent absent values. Initial implementation scope also bounds subsequent repair designs. The isolated-writer opt-in freezes `plan-graph-v7` (versions 1 and 2); the staged opt-in freezes `plan-graph-v8` (version 3) permitting leaf implementations to depend on completed hub implementations with disjoint writes and gates depending transitively on every implementation.
 
 - `plan-graph-v1` instructs planners to return only the engineeringplan v1
   strict JSON schema (version, mode, summary, tasks). `completed` and

@@ -55,7 +55,13 @@ type GraphIsolationState struct {
 // per-wave peak and WaveBlocked retains each wave's bounded typed block
 // provenance. Waves, WaveEstimated, and WaveBlocked are omitted for version 1
 // to preserve absent-field legacy serialization; version 2 requires Waves and
-// WaveEstimated with WaveBlocked length matching Waves.
+// WaveEstimated with WaveBlocked length matching Waves. Version 3 is the
+// staged dependent mode: it freezes the exact CURRENT ready implementation
+// subset (hub then leaves) with CohortIndex keying the stage order,
+// BaseCandidateID binding the exact parent candidate for that stage, and
+// Waves partitioning the current subset via the same resource-bounded
+// derivation. CohortIndex is omitted for versions 1 and 2 to preserve
+// absent-field legacy serialization.
 type GraphIsolationPreparation struct {
 	Version         int                                     `json:"version"`
 	PlanID          string                                  `json:"plan_id"`
@@ -69,6 +75,7 @@ type GraphIsolationPreparation struct {
 	Waves           [][]string                              `json:"waves,omitempty"`
 	WaveEstimated   []engineeringplan.ResourceTotals        `json:"wave_estimated,omitempty"`
 	WaveBlocked     [][]engineeringplan.ResourceBlockReason `json:"wave_blocked,omitempty"`
+	CohortIndex     int                                     `json:"cohort_index,omitempty"`
 	PreparationID   string                                  `json:"preparation_id"`
 }
 
@@ -91,11 +98,15 @@ func (t IsolationEstimateTemplate) Validate() error {
 }
 
 func isolatedImplementationEnabled(s Snapshot) bool {
-	return s.Creation.Execution != nil && (s.Creation.Execution.IsolatedImplementationVersion == 1 || s.Creation.Execution.IsolatedImplementationVersion == 2)
+	return s.Creation.Execution != nil && (s.Creation.Execution.IsolatedImplementationVersion == 1 || s.Creation.Execution.IsolatedImplementationVersion == 2 || s.Creation.Execution.IsolatedImplementationVersion == 3)
 }
 
 func isolatedWavesEnabled(s Snapshot) bool {
 	return s.Creation.Execution != nil && s.Creation.Execution.IsolatedImplementationVersion == 2
+}
+
+func stagedIsolationEnabled(s Snapshot) bool {
+	return s.Creation.Execution != nil && s.Creation.Execution.IsolatedImplementationVersion == 3
 }
 
 // InspectTaskIsolation returns the durable state only; it does not observe,
@@ -293,15 +304,9 @@ func expectedGraphIsolationPreparation(s Snapshot) (GraphIsolationPreparation, e
 	if s.Creation.Execution.IsolationCapacity == nil || s.Creation.Execution.IsolationEstimate == nil {
 		return GraphIsolationPreparation{}, errors.New("isolation capacity and template required")
 	}
-	template := *s.Creation.Execution.IsolationEstimate
-	profileID, err := canonical.Hash("harness.isolation-writer-profile.v1", *s.Creation.Config.Writer)
+	demands, err := isolationResourceDemands(s, implementations)
 	if err != nil {
 		return GraphIsolationPreparation{}, err
-	}
-	route := engineeringplan.RuntimeResourceKey{ProfileID: profileID, Provider: s.Creation.Config.Writer.Provider, Model: s.Creation.Config.Writer.Model}
-	demands := make([]engineeringplan.TaskResourceDemand, len(implementations))
-	for i, task := range implementations {
-		demands[i] = engineeringplan.TaskResourceDemand{TaskID: task.ID, CPUMilli: template.CPUMilli, MemoryMiB: template.MemoryMiB, VerificationSlots: template.VerificationSlots, Runtime: route, RuntimeSlots: template.RuntimeSlots}
 	}
 	if isolatedWavesEnabled(s) {
 		return expectedGraphIsolationWavesPreparation(s, baseID, implementations, demands)
@@ -338,26 +343,9 @@ func expectedGraphIsolationWavesPreparation(s Snapshot, baseID string, implement
 		ids = append(ids, task.ID)
 	}
 	sortStrings(ids)
-	waveIDs := make([][]string, 0, len(waves))
-	waveEstimated := make([]engineeringplan.ResourceTotals, 0, len(waves))
-	waveBlocked := make([][]engineeringplan.ResourceBlockReason, 0, len(waves))
-	seen := map[string]bool{}
-	for _, wave := range waves {
-		if len(wave.Tasks) == 0 {
-			return GraphIsolationPreparation{}, errors.New("resource waves contain an empty wave")
-		}
-		waveIDList := make([]string, 0, len(wave.Tasks))
-		for _, task := range wave.Tasks {
-			if seen[task.ID] {
-				return GraphIsolationPreparation{}, errors.New("resource waves duplicated a task")
-			}
-			seen[task.ID] = true
-			waveIDList = append(waveIDList, task.ID)
-		}
-		waveIDs = append(waveIDs, waveIDList)
-		waveEstimated = append(waveEstimated, wave.Estimated)
-		blocked := append([]engineeringplan.ResourceBlockReason{}, wave.Blocked...)
-		waveBlocked = append(waveBlocked, blocked)
+	waveIDs, waveEstimated, waveBlocked, seen, err := collectWavePartition(waves, "resource waves contain an empty wave", "resource waves duplicated a task")
+	if err != nil {
+		return GraphIsolationPreparation{}, err
 	}
 	if len(seen) != len(implementations) {
 		return GraphIsolationPreparation{}, errors.New("resource waves do not cover all ready implementations")
@@ -458,13 +446,11 @@ func replayGraphIsolation(s *Snapshot, e journal.Event) error {
 		if err := receipt.Candidate.ValidateBinding(receipt.Binding); err != nil {
 			return err
 		}
-		if s.Candidate == nil || s.GraphIsolationPreparation == nil {
-			return errors.New("graph isolation base candidate missing")
+		baseID, err := isolationReceiptBaseID(*s, receipt.Intent.BaseCandidateID, "graph isolation base candidate missing", "graph isolation base candidate substitution")
+		if err != nil {
+			return err
 		}
-		baseID, err := s.Candidate.ID()
-		if err != nil || receipt.Intent.BaseCandidateID != baseID || s.GraphIsolationPreparation.BaseCandidateID != baseID {
-			return errors.New("graph isolation base candidate substitution")
-		}
+		_ = baseID
 		base := *s.Candidate
 		child := receipt.Candidate
 		if child.Version != base.Version || child.Head != base.Head || child.IndexHash != base.IndexHash || child.FilesHash != base.FilesHash || child.FileCount != base.FileCount {

@@ -15,6 +15,7 @@ type autonomousCapabilities struct {
 	parallel                                             bool
 	isolation                                            *isolatedWriterPolicyFile
 	isolationWaves                                       bool
+	isolationStaged                                      bool
 	plannerContext, parser, parserHash                   string
 	parseCache, plannerPPR, reviewImpact, candidateCache int
 	autoCompact                                          int64
@@ -41,12 +42,12 @@ func (o *autonomousCapabilities) resolve(cfg config.Config) error {
 			return err
 		}
 	}
-	if o.parallel || o.isolation != nil || o.isolationWaves {
+	if o.parallel || o.isolation != nil || o.isolationWaves || o.isolationStaged {
 		reason := ""
 		if cfg.Writer != nil && cfg.Writer.Runtime != "codex-app-server" && cfg.Writer.Runtime != "fake" {
 			reason = "runtime_unsupported"
 		}
-		if o.isolation != nil || o.isolationWaves {
+		if o.isolation != nil || o.isolationWaves || o.isolationStaged {
 			if o.isolation == nil {
 				reason = "external_state_unavailable"
 			} else {
@@ -61,7 +62,7 @@ func (o *autonomousCapabilities) resolve(cfg config.Config) error {
 		}
 		if reason != "" {
 			add("parallel_writers", reason, "serial_writer")
-			o.parallel, o.isolation, o.isolationWaves = false, nil, false
+			o.parallel, o.isolation, o.isolationWaves, o.isolationStaged = false, nil, false, false
 		}
 	}
 	if o.autoCompact != 0 {

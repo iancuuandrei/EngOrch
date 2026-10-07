@@ -98,6 +98,16 @@ func writerInvocationForTask(s Snapshot, taskID string) (runtime.Invocation, err
 }
 
 func writerInvocationForTaskBase(s Snapshot, taskID string) (runtime.Invocation, error) {
+	if stagedIsolationEnabled(s) {
+		if s.GraphIsolationPreparation != nil && s.GraphIsolationPreparation.Version == 3 && containsGraphIsolationTask(s.GraphIsolationPreparation.SelectedTaskIDs, taskID) {
+			binding, err := stagedForkBindingForTask(s, taskID)
+			if err != nil {
+				return runtime.Invocation{}, err
+			}
+			return writerInvocationForIsolatedTask(s, binding)
+		}
+		return writerInvocationForTaskLegacy(s, taskID)
+	}
 	isolated, err := isolatedInitialWriterForTask(s, taskID)
 	if err != nil {
 		return runtime.Invocation{}, err
@@ -346,6 +356,13 @@ func writerInvocationForTaskWithIsolation(s Snapshot, taskID string, isolated *i
 	}
 	if !isolatedImplementationEnabled(s) || taskID == "" || isolated.TaskID != taskID {
 		return runtime.Invocation{}, errors.New("isolated writer task binding mismatch")
+	}
+	if stagedIsolationEnabled(s) {
+		current, err := stagedForkBindingForTask(s, taskID)
+		if err != nil || !sameCanonical(current, *isolated) {
+			return runtime.Invocation{}, errors.Join(errors.New("isolated writer binding is stale or substituted"), err)
+		}
+		return buildWriterInvocation(s, taskID, isolated)
 	}
 	current, err := isolatedWriterBindingForTask(s, taskID)
 	if err != nil || !sameCanonical(current, *isolated) {
