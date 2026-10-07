@@ -61,6 +61,34 @@ verification is not charged as writer runtime. Separate worktrees isolate the
 writers' proposals, while parent-candidate integration remains a distinct
 controller step.
 
+## Resource-bounded initial writer waves (version 2)
+
+`--isolated-writer-waves --isolation-policy PATH --max-parallel N` opts into
+`isolated_implementation_version: 2` with the same v7 planner, capacity,
+estimate, graph, repair, route, and external-state requirements as version 1.
+It is mutually exclusive with `--parallel-writers` and `--isolated-writers`,
+and it is not a default promotion. Version 1 remains unchanged.
+
+Version 2 freezes all initial ready implementations (up to eight) with their
+exact demands and deterministically derives nonempty resource-bounded waves
+via repeated resource-cohort selection over each remainder. Each wave fits CPU,
+memory, verification, global runtime, provider, model, and exact-route
+ceilings and `--max-parallel`; hard write or dependency conflicts are rejected
+under the existing independent-cohort contract. Child workspaces share the
+same pristine parent source, execute serially with the existing
+scheduler and memory admission (per-wave workers and admission ceilings, unique
+deterministic wave schedules, no redundant provider calls), accumulate fully
+validated per-child proposals, and perform a single parent aggregation and file
+effect only after all required initial tasks have valid proposals. Graph tasks
+complete only after that aggregate effect. Budgets do not reset, and UNKNOWN
+stops without advancing, recreating, or retrying.
+
+Dependent hub-to-leaves dirty-candidate isolation is explicitly pending and is
+not implemented in version 2; all readiness, ownership, UNKNOWN, and budget
+gates are retained. Cohort scope replanning is unsupported for version 2
+waves: runs are created without a scope-replan policy, and a scope violation
+remains a bounded rejection without silent widening.
+
 The Windows evaluation runner configures one external namespace per task under
 that task's evaluation output directory before invoking `fabric run`. The
 absolute setting is included in the task configuration hash and checked again

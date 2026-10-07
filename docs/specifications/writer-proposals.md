@@ -12,6 +12,17 @@ This example creates `hello` followed by a newline; the candidate digest must ma
 
 `PrepareWriterFiles` treats model output as untrusted, rejecting routing/input substitution, stale candidates and invalid output. It prepares the normal leased file proposal and checks that preparation observed the invocation's candidate. `RecordWriterProposal` records the invocation, result and prepared effect; replay reconstructs these bindings and rejects duplicate invocation proposals. `ApplyFiles` requires separate authorization for the exact effect identity.
 
+Isolated version 2 initial waves MUST freeze `isolated_implementation_version: 2`,
+all initial ready implementation identities with exact demands, and
+deterministically derived `waves` with per-wave `wave_estimated` peaks and
+per-wave `wave_blocked` typed provenance; legacy version 1 MUST omit wave
+fields. `estimated` is the overall work total across all demands, while each
+`wave_estimated` entry is that wave's per-wave peak. Each wave MUST be
+nonempty and resource-bounded, and the single parent aggregate MUST require
+every frozen proposal with one file effect. Foreign, stale, or missing wave,
+demand, or proposal identities MUST be rejected, and UNKNOWN MUST stop without
+a next wave. Cohort scope replanning is unsupported for version 2 waves.
+
 ## Runtime and provenance
 
 `RunWriter` creates a private host per invocation and records host intent, readiness and observation. A workspace lease spans dispatch and before/after candidate fingerprints. The adapter executes or resumes its durable runtime; source, candidate, thread configuration, requested/observed model and result must match before admission. Host closure precedes lease release.

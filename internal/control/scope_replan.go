@@ -1285,6 +1285,9 @@ func cohortScopeReplanMode(policy ExecutionPolicy) string {
 	if policy.IsolatedImplementationVersion == 1 {
 		return "isolated"
 	}
+	if policy.IsolatedImplementationVersion == 2 {
+		return "isolated-waves-unsupported"
+	}
 	return "parallel"
 }
 

@@ -269,29 +269,35 @@ func (p ExecutionPolicy) Validate() error {
 	if p.ParallelImplementationVersion == 1 && (p.GraphVersion != 1 || p.RepairPlanningVersion != 1 || p.Context != taskContextBoundedV1) {
 		return errors.New("parallel implementation requires graph execution, bounded task context, and repair planning")
 	}
-	if p.IsolatedImplementationVersion != 0 && p.IsolatedImplementationVersion != 1 {
+	if p.IsolatedImplementationVersion != 0 && p.IsolatedImplementationVersion != 1 && p.IsolatedImplementationVersion != 2 {
 		return errors.New("invalid isolated implementation version")
 	}
-	if p.IsolatedImplementationVersion == 1 && (p.GraphVersion != 1 || p.RepairPlanningVersion != 1 || p.Context != taskContextBoundedV1) {
+	if (p.IsolatedImplementationVersion == 1 || p.IsolatedImplementationVersion == 2) && (p.GraphVersion != 1 || p.RepairPlanningVersion != 1 || p.Context != taskContextBoundedV1) {
 		return errors.New("isolated implementation requires graph execution, bounded task context, and repair planning")
 	}
-	if p.IsolatedImplementationVersion == 1 && (p.IsolationCapacity == nil || p.IsolationEstimate == nil || p.IsolationEstimate.Validate() != nil) {
+	if (p.IsolatedImplementationVersion == 1 || p.IsolatedImplementationVersion == 2) && (p.IsolationCapacity == nil || p.IsolationEstimate == nil || p.IsolationEstimate.Validate() != nil) {
 		return errors.New("isolated implementation requires capacity and estimate template")
 	}
 	if p.IsolatedImplementationVersion == 0 && (p.IsolationCapacity != nil || p.IsolationEstimate != nil) {
 		return errors.New("isolation capacity requires isolated implementation")
 	}
-	if p.IsolatedImplementationVersion == 1 && p.ParallelImplementationVersion == 1 {
+	if (p.IsolatedImplementationVersion == 1 || p.IsolatedImplementationVersion == 2) && p.ParallelImplementationVersion == 1 {
 		return errors.New("parallel aggregate and isolated implementation modes are exclusive")
 	}
 	if p.ScopeReplanVersion < 0 || p.ScopeReplanVersion > 2 {
 		return errors.New("invalid scope replan version")
+	}
+	if p.IsolatedImplementationVersion == 2 && p.ScopeReplanVersion != 0 {
+		return errors.New("isolated waves do not support scope replanning")
 	}
 	if p.ScopeReplanVersion == 1 {
 		if p.GraphVersion != 1 || p.RepairPlanningVersion != 1 || p.MaxScopeReplans < 1 || p.MaxScopeReplans > 2 || p.ParallelImplementationVersion != 0 || p.IsolatedImplementationVersion != 0 || p.ScopeReplanDesignVersion > 1 {
 			return errors.New("scope replanning requires serial graph repair planning and a budget of one or two")
 		}
 	} else if p.ScopeReplanVersion == 2 {
+		if p.IsolatedImplementationVersion == 2 {
+			return errors.New("isolated waves do not support scope replanning")
+		}
 		cohortMode := (p.ParallelImplementationVersion == 1) != (p.IsolatedImplementationVersion == 1)
 		if p.GraphVersion != 1 || p.RepairPlanningVersion != 1 || p.MaxScopeReplans < 1 || p.MaxScopeReplans > 2 || !cohortMode || p.ScopeReplanDesignVersion != 2 {
 			return errors.New("cohort scope replanning requires one bounded parallel or isolated graph mode and candidate-bound design v2")
@@ -1061,7 +1067,7 @@ func validateRepairPlanningBinding(c Creation) error {
 	serialContract := c.Config.PlannerContract == plannerContractGraphV3 || c.Config.PlannerContract == plannerContractGraphV5
 	parallelContract := c.Config.PlannerContract == plannerContractGraphV4 || c.Config.PlannerContract == plannerContractGraphV6
 	isolationContract := c.Config.PlannerContract == "plan-graph-v7"
-	if isolationVersion == 1 {
+	if isolationVersion == 1 || isolationVersion == 2 {
 		if version != 1 || parallelVersion != 0 || !isolationContract {
 			return errors.New("isolated implementation policy requires plan-graph-v7")
 		}

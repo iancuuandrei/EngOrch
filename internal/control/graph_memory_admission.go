@@ -322,14 +322,12 @@ func expectedGraphMemoryAdmission(s Snapshot, task taskscheduler.TaskSpec, obser
 	if err != nil || candidateID != s.GraphIsolationPreparation.BaseCandidateID {
 		return GraphMemoryAdmissionRecord{}, errors.Join(errors.New("memory admission candidate differs"), err)
 	}
-	maxWorkers := s.Creation.Execution.EffectiveMaxParallel()
-	if maxWorkers > len(s.GraphIsolationPreparation.SelectedTaskIDs) {
-		maxWorkers = len(s.GraphIsolationPreparation.SelectedTaskIDs)
-	}
-	if maxWorkers > 8 {
-		maxWorkers = 8
-	}
-	if maxWorkers < 1 {
+	// Decision.ConfiguredMaxWorkers stays stable for the whole run so replay
+	// never observes a policy change across waves. The per-wave bound is
+	// enforced separately on the grant, not as a new configured maximum.
+	maxWorkers := isolatedMemoryStableMaxWorkers(s)
+	waveBound := isolatedMemoryMaxWorkers(s, graphTaskID)
+	if maxWorkers < 1 || waveBound < 1 {
 		return GraphMemoryAdmissionRecord{}, errors.New("memory admission has no configured workers")
 	}
 	var previous *memoryadmission.Decision
@@ -367,7 +365,7 @@ func expectedGraphMemoryAdmission(s Snapshot, task taskscheduler.TaskSpec, obser
 		TaskID: task.ID, InvocationID: invocation.ID, Sequence: sequence, PreviousID: previousID,
 		SampledAtUTC: sampledAt.Format(time.RFC3339Nano), Observation: observation,
 		Decision: decision, ActiveTaskIDs: activeIDs,
-		Granted: len(activeIDs) < decision.EffectiveWorkers,
+		Granted: len(activeIDs) < decision.EffectiveWorkers && len(activeIDs) < waveBound,
 	}
 	if correction != nil {
 		record.GraphTaskID = graphTaskID
@@ -502,12 +500,10 @@ func validateGraphMemoryAdmission(s Snapshot, record GraphMemoryAdmissionRecord)
 	if err != nil || sampledAt.Location() != time.UTC || sampledAt.Format(time.RFC3339Nano) != record.SampledAtUTC {
 		return errors.Join(errors.New("invalid memory observation time"), err)
 	}
-	maxWorkers := s.Creation.Execution.EffectiveMaxParallel()
-	if maxWorkers > len(s.GraphIsolationPreparation.SelectedTaskIDs) {
-		maxWorkers = len(s.GraphIsolationPreparation.SelectedTaskIDs)
-	}
-	if maxWorkers > 8 {
-		maxWorkers = 8
+	maxWorkers := isolatedMemoryStableMaxWorkers(s)
+	waveBound := isolatedMemoryMaxWorkers(s, graphTaskID)
+	if maxWorkers < 1 || waveBound < 1 {
+		return errors.New("memory admission has no configured workers")
 	}
 	var previous *memoryadmission.Decision
 	sequence, previousID := 1, ""
@@ -527,7 +523,7 @@ func validateGraphMemoryAdmission(s Snapshot, record GraphMemoryAdmissionRecord)
 	if err != nil || decision != record.Decision {
 		return errors.Join(errors.New("graph memory admission decision differs"), err)
 	}
-	if record.Granted != (len(activeIDs) < decision.EffectiveWorkers) {
+	if record.Granted != (len(activeIDs) < decision.EffectiveWorkers && len(activeIDs) < waveBound) {
 		return errors.New("graph memory admission grant differs from effective capacity")
 	}
 	want := record
@@ -832,4 +828,54 @@ func (g *graphMemoryAdmissionGate) signal() {
 func (g *graphMemoryAdmissionGate) signalLocked() {
 	close(g.changed)
 	g.changed = make(chan struct{})
+}
+
+// isolatedMemoryStableMaxWorkers is the run-stable configured maximum used as
+// memoryadmission Decision.ConfiguredMaxWorkers. It never changes across
+// waves so durable replay never observes a policy change within one run.
+func isolatedMemoryStableMaxWorkers(s Snapshot) int {
+	if s.Creation.Execution == nil || s.GraphIsolationPreparation == nil {
+		return 0
+	}
+	maxWorkers := s.Creation.Execution.EffectiveMaxParallel()
+	bound := len(s.GraphIsolationPreparation.SelectedTaskIDs)
+	if maxWorkers > bound {
+		maxWorkers = bound
+	}
+	if maxWorkers > 8 {
+		maxWorkers = 8
+	}
+	return maxWorkers
+}
+
+func isolatedMemoryMaxWorkers(s Snapshot, graphTaskID string) int {
+	if s.Creation.Execution == nil || s.GraphIsolationPreparation == nil {
+		return 0
+	}
+	maxWorkers := s.Creation.Execution.EffectiveMaxParallel()
+	bound := len(s.GraphIsolationPreparation.SelectedTaskIDs)
+	if s.GraphIsolationPreparation.Version == 2 && len(s.GraphIsolationPreparation.Waves) != 0 {
+		bound = 0
+		for _, wave := range s.GraphIsolationPreparation.Waves {
+			for _, id := range wave {
+				if id == graphTaskID {
+					bound = len(wave)
+					break
+				}
+			}
+			if bound != 0 {
+				break
+			}
+		}
+		if bound == 0 {
+			return 0
+		}
+	}
+	if maxWorkers > bound {
+		maxWorkers = bound
+	}
+	if maxWorkers > 8 {
+		maxWorkers = 8
+	}
+	return maxWorkers
 }

@@ -38,7 +38,7 @@ func TestIsolatedImplementationPolicyRequiresBoundedGraphRepair(t *testing.T) {
 		"graph":    func(p *ExecutionPolicy) { p.GraphVersion = 0 },
 		"repair":   func(p *ExecutionPolicy) { p.RepairPlanningVersion = 0 },
 		"context":  func(p *ExecutionPolicy) { p.Context = "" },
-		"version":  func(p *ExecutionPolicy) { p.IsolatedImplementationVersion = 2 },
+		"version":  func(p *ExecutionPolicy) { p.IsolatedImplementationVersion = 3 },
 		"parallel": func(p *ExecutionPolicy) { p.ParallelImplementationVersion = 1 },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -48,6 +48,11 @@ func TestIsolatedImplementationPolicyRequiresBoundedGraphRepair(t *testing.T) {
 				t.Fatal("invalid isolation policy admitted")
 			}
 		})
+	}
+	waves := base
+	waves.IsolatedImplementationVersion = 2
+	if err := waves.Validate(); err != nil {
+		t.Fatalf("versioned wave policy rejected: %v", err)
 	}
 }
 
@@ -68,6 +73,11 @@ func TestIsolatedCreationRequiresV7Contract(t *testing.T) {
 		if err := validateRepairPlanningBinding(Creation{Config: config.Config{PlannerContract: contract}, Execution: p}); (err == nil) != want {
 			t.Fatalf("contract %s admitted=%v err=%v", contract, err == nil, err)
 		}
+	}
+	waves := *p
+	waves.IsolatedImplementationVersion = 2
+	if err := validateRepairPlanningBinding(Creation{Config: config.Config{PlannerContract: "plan-graph-v7"}, Execution: &waves}); err != nil {
+		t.Fatalf("wave policy did not bind plan-graph-v7: %v", err)
 	}
 }
 

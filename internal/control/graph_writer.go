@@ -649,6 +649,9 @@ func validateIsolatedGraphWriterCohort(s Snapshot, tasks []engineeringplan.Task)
 	if len(allImpl) == 0 || len(readyByID) != len(allImpl) || len(tasks) != len(allImpl) {
 		return errors.New("isolated initial cohort requires every implementation to be ready together")
 	}
+	if isolatedWavesEnabled(s) {
+		return validateIsolatedGraphWriterWavesCohort(s, tasks, readyByID, allImpl)
+	}
 	maxParallel := s.Creation.Execution.EffectiveMaxParallel()
 	if len(allImpl) > maxParallel {
 		return errors.New("isolated initial cohort exceeds max parallel; serial integration is unsupported")
@@ -667,6 +670,9 @@ func validateIsolatedGraphWriterCohort(s Snapshot, tasks []engineeringplan.Task)
 	if err != nil {
 		return err
 	}
+	if preparation.Version != 1 {
+		return errors.New("isolated initial cohort version differs from policy")
+	}
 	if len(preparation.SelectedTaskIDs) != len(tasks) {
 		return errors.New("isolated initial cohort does not fit declared resource capacities")
 	}
@@ -683,6 +689,86 @@ func validateIsolatedGraphWriterCohort(s Snapshot, tasks []engineeringplan.Task)
 			if !tasksIndependentAndDisjoint(tasks[i], tasks[j]) {
 				return errors.New("isolated initial implementation tasks are not independent and disjoint")
 			}
+		}
+	}
+	return nil
+}
+
+func validateIsolatedGraphWriterWavesCohort(s Snapshot, tasks []engineeringplan.Task, readyByID map[string]engineeringplan.Task, allImpl map[string]bool) error {
+	if len(allImpl) == 0 || len(allImpl) > 8 {
+		return errors.New("isolated wave cohort requires one to eight initial implementations")
+	}
+	remaining := map[string]engineeringplan.Task{}
+	for id, task := range readyByID {
+		remaining[id] = task
+	}
+	for _, task := range tasks {
+		readyTask, ok := remaining[task.ID]
+		if !ok || !reflect.DeepEqual(task, readyTask) {
+			return errors.New("isolated implementation cohort differs from exact ready set")
+		}
+		delete(remaining, task.ID)
+	}
+	if len(remaining) != 0 {
+		return errors.New("isolated implementation cohort is incomplete")
+	}
+	preparation, err := expectedGraphIsolationPreparation(s)
+	if err != nil {
+		return err
+	}
+	if preparation.Version != 2 {
+		return errors.New("isolated wave cohort version differs from policy")
+	}
+	if len(preparation.SelectedTaskIDs) != len(tasks) || len(preparation.Waves) == 0 || len(preparation.WaveEstimated) != len(preparation.Waves) || len(preparation.WaveBlocked) != len(preparation.Waves) {
+		return errors.New("isolated wave cohort does not cover all ready implementations")
+	}
+	if s.GraphIsolationPreparation != nil && !sameCanonical(*s.GraphIsolationPreparation, preparation) {
+		return errors.New("recorded isolated preparation differs from the complete initial cohort")
+	}
+	for _, task := range tasks {
+		if !containsGraphIsolationTask(preparation.SelectedTaskIDs, task.ID) {
+			return errors.New("resource-bounded initial cohort differs from ready implementations")
+		}
+	}
+	if err := validateIsolatedWavesPartition(preparation, tasks); err != nil {
+		return err
+	}
+	for i := range tasks {
+		for j := i + 1; j < len(tasks); j++ {
+			if !tasksIndependentAndDisjoint(tasks[i], tasks[j]) {
+				return errors.New("isolated initial implementation tasks are not independent and disjoint")
+			}
+		}
+	}
+	return nil
+}
+
+func validateIsolatedWavesPartition(preparation GraphIsolationPreparation, tasks []engineeringplan.Task) error {
+	if preparation.Version != 2 || len(preparation.Waves) == 0 {
+		return errors.New("isolated waves are unavailable")
+	}
+	seen := map[string]bool{}
+	for waveIndex, wave := range preparation.Waves {
+		if len(wave) == 0 {
+			return errors.New("isolated wave is empty")
+		}
+		for _, id := range wave {
+			if id == "" || seen[id] {
+				return errors.New("isolated wave membership is duplicated or empty")
+			}
+			seen[id] = true
+			if !containsGraphIsolationTask(preparation.SelectedTaskIDs, id) {
+				return errors.New("isolated wave task is outside the frozen cohort")
+			}
+		}
+		_ = waveIndex
+	}
+	if len(seen) != len(tasks) || len(seen) != len(preparation.SelectedTaskIDs) {
+		return errors.New("isolated waves do not cover the frozen cohort")
+	}
+	for _, task := range tasks {
+		if !seen[task.ID] {
+			return errors.New("isolated wave cohort differs from ready implementations")
 		}
 	}
 	return nil
@@ -1510,6 +1596,9 @@ func runIsolatedGraphWriterBatch(ctx context.Context, controllerPath string, ini
 	if !isolatedImplementationEnabled(initial) || initial.Creation.Execution == nil || initial.State != "IMPLEMENTING" {
 		return errors.New("isolated graph writer batch is not enabled here")
 	}
+	if isolatedWavesEnabled(initial) {
+		return runIsolatedGraphWriterWaves(ctx, controllerPath, initial, tasks)
+	}
 	if _, err := isolatedGraphWriterIDs(initial, tasks); err != nil {
 		return err
 	}
@@ -1566,6 +1655,202 @@ func runIsolatedGraphWriterBatch(ctx context.Context, controllerPath string, ini
 		return err
 	}
 	return runScheduledGraphWriterCohort(ctx, controllerPath, schedulePath, specs, workers, true)
+}
+
+func buildIsolatedGraphWriterWaveSpecs(controllerPath string, s Snapshot, waveTasks []engineeringplan.Task, waveIndex int) ([]taskscheduler.TaskSpec, error) {
+	if !isolatedWavesEnabled(s) || s.State != "IMPLEMENTING" || s.Graph == nil || s.Candidate == nil || s.FileIntent != nil || s.Creation.Execution == nil {
+		return nil, errors.New("isolated wave writer requires a pristine initial graph candidate")
+	}
+	if s.GraphIsolationPreparation == nil || s.GraphIsolationPreparation.Version != 2 || len(s.GraphIsolationPreparation.Waves) == 0 {
+		return nil, errors.New("frozen isolated waves are unavailable")
+	}
+	if waveIndex < 0 || waveIndex >= len(s.GraphIsolationPreparation.Waves) {
+		return nil, errors.New("isolated wave index is outside the frozen cohort")
+	}
+	frozen := append([]string(nil), s.GraphIsolationPreparation.Waves[waveIndex]...)
+	sort.Strings(frozen)
+	if len(waveTasks) == 0 || len(waveTasks) != len(frozen) {
+		return nil, errors.New("isolated wave membership differs from frozen cohort")
+	}
+	ready, err := graphReadyTasks(s)
+	if err != nil {
+		return nil, err
+	}
+	readyByID := map[string]engineeringplan.Task{}
+	for _, task := range ready {
+		if task.Kind == engineeringplan.Implementation {
+			readyByID[task.ID] = task
+		}
+	}
+	got := make([]string, 0, len(waveTasks))
+	for _, task := range waveTasks {
+		readyTask, ok := readyByID[task.ID]
+		if !ok || !reflect.DeepEqual(task, readyTask) {
+			return nil, errors.New("isolated wave task is stale or substituted")
+		}
+		if !containsGraphIsolationTask(frozen, task.ID) {
+			return nil, errors.New("isolated wave task is outside its frozen wave")
+		}
+		got = append(got, task.ID)
+	}
+	sort.Strings(got)
+	for i := range got {
+		if got[i] != frozen[i] {
+			return nil, errors.New("isolated wave membership differs from frozen cohort")
+		}
+	}
+	for i := range waveTasks {
+		for j := i + 1; j < len(waveTasks); j++ {
+			if !tasksIndependentAndDisjoint(waveTasks[i], waveTasks[j]) {
+				return nil, errors.New("isolated wave tasks are not independent and disjoint")
+			}
+		}
+	}
+	specs := make([]taskscheduler.TaskSpec, 0, len(waveTasks))
+	for _, task := range waveTasks {
+		if task.Kind != engineeringplan.Implementation {
+			return nil, errors.New("writer cohort contains a non-implementation")
+		}
+		invocation, err := writerInvocationForTask(s, task.ID)
+		if err != nil {
+			return nil, err
+		}
+		if invocation.Profile.Runtime != "codex-app-server" {
+			return nil, errors.New("parallel graph writer runtime unsupported")
+		}
+		specs = append(specs, taskscheduler.TaskSpec{ID: task.ID, RunID: s.RunID, ControllerPath: controllerPath, Operation: taskscheduler.OperationWriter, InvocationID: invocation.ID})
+	}
+	sort.Slice(specs, func(i, j int) bool { return specs[i].ID < specs[j].ID })
+	return specs, nil
+}
+
+func runIsolatedGraphWriterWaves(ctx context.Context, controllerPath string, initial Snapshot, tasks []engineeringplan.Task) error {
+	if !isolatedWavesEnabled(initial) || initial.Creation.Execution == nil || initial.State != "IMPLEMENTING" {
+		return errors.New("isolated wave writer batch is not enabled here")
+	}
+	if _, err := isolatedGraphWriterIDs(initial, tasks); err != nil {
+		return err
+	}
+	bindings, err := prepareIsolatedGraphWriterCohort(ctx, controllerPath)
+	if err != nil {
+		return err
+	}
+	current, err := Inspect(controllerPath)
+	if err != nil {
+		return err
+	}
+	if len(bindings) != len(tasks) {
+		return errors.New("confirmed isolated bindings differ from complete implementation cohort")
+	}
+	bindingIDs := map[string]bool{}
+	for _, binding := range bindings {
+		bindingIDs[binding.TaskID] = true
+	}
+	for _, task := range tasks {
+		if !bindingIDs[task.ID] {
+			return errors.New("confirmed isolated binding membership differs from frozen task cohort")
+		}
+		if _, err := isolatedWriterBindingForTask(current, task.ID); err != nil {
+			return err
+		}
+	}
+	if _, err := isolatedGraphWriterIDs(current, tasks); err != nil {
+		return err
+	}
+	if current.GraphIsolationPreparation == nil || current.GraphIsolationPreparation.Version != 2 || len(current.GraphIsolationPreparation.Waves) == 0 {
+		return errors.New("frozen isolated waves are unavailable")
+	}
+	byID := map[string]engineeringplan.Task{}
+	for _, task := range tasks {
+		byID[task.ID] = task
+	}
+	preparationID := current.GraphIsolationPreparation.PreparationID
+	for waveIndex, waveIDs := range current.GraphIsolationPreparation.Waves {
+		latest, err := Inspect(controllerPath)
+		if err != nil {
+			return err
+		}
+		if latest.FileIntent != nil || latest.GraphWriterBatch != nil {
+			return errors.New("isolated waves require a pristine parent before aggregation")
+		}
+		if graphHasUnknown(latest) || latest.FileOutcome == "UNKNOWN" {
+			return errors.New("isolated waves blocked on UNKNOWN; explicit reconciliation required")
+		}
+		for _, isolation := range latest.GraphIsolations {
+			if isolation.Outcome == "UNKNOWN" {
+				return errors.New("isolated waves blocked on UNKNOWN child isolation; explicit reconciliation required")
+			}
+		}
+		waveTasks := make([]engineeringplan.Task, 0, len(waveIDs))
+		for _, id := range waveIDs {
+			task, ok := byID[id]
+			if !ok {
+				return errors.New("isolated wave task is outside the frozen cohort")
+			}
+			waveTasks = append(waveTasks, task)
+		}
+		allProposed := true
+		for _, task := range waveTasks {
+			record, ok := latest.GraphWriterResults[task.ID]
+			if !ok || record.Isolated == nil {
+				allProposed = false
+				break
+			}
+		}
+		if allProposed {
+			continue
+		}
+		for _, task := range waveTasks {
+			if _, ok := latest.GraphWriterResults[task.ID]; ok {
+				return errors.New("isolated wave is partially proposed; UNKNOWN or tamper suspected")
+			}
+		}
+		specs, err := buildIsolatedGraphWriterWaveSpecs(controllerPath, latest, waveTasks, waveIndex)
+		if err != nil {
+			return err
+		}
+		workers := latest.Creation.Execution.EffectiveMaxParallel()
+		if workers > len(specs) {
+			workers = len(specs)
+		}
+		if workers > 8 {
+			workers = 8
+		}
+		if workers < 1 {
+			return errors.New("isolated wave has no scheduler capacity")
+		}
+		id, err := graphCohortID(latest.Graph.Digest, latest.Graph.Revision, specs)
+		if err != nil {
+			return err
+		}
+		waveNonce, err := canonical.Hash("harness.isolated-wave-schedule.v1", struct {
+			PreparationID string
+			WaveIndex     int
+			CohortID      string
+		}{preparationID, waveIndex, id})
+		if err != nil {
+			return err
+		}
+		schedulePath := controllerPath + ".isolated-graph-writers-wave-" + waveNonce[:16] + ".jsonl"
+		definition := taskscheduler.Definition{Version: 1, Nonce: "isolated-graph-writers-wave-" + waveNonce, Tasks: specs}
+		if _, err := taskscheduler.Bind(schedulePath, definition); err != nil {
+			return err
+		}
+		if err := runScheduledGraphWriterCohort(ctx, controllerPath, schedulePath, specs, workers, true); err != nil {
+			return err
+		}
+		after, err := Inspect(controllerPath)
+		if err != nil {
+			return err
+		}
+		for _, task := range waveTasks {
+			record, ok := after.GraphWriterResults[task.ID]
+			if !ok || record.Isolated == nil {
+				return errors.New("isolated wave settled without a complete candidate-bound proposal set")
+			}
+		}
+	}
+	return nil
 }
 
 // runScheduledGraphWriterCohort keeps every initial member alive until the

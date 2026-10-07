@@ -14,6 +14,7 @@ type autonomousCapabilities struct {
 	workingContext                                       bool
 	parallel                                             bool
 	isolation                                            *isolatedWriterPolicyFile
+	isolationWaves                                       bool
 	plannerContext, parser, parserHash                   string
 	parseCache, plannerPPR, reviewImpact, candidateCache int
 	autoCompact                                          int64
@@ -40,23 +41,27 @@ func (o *autonomousCapabilities) resolve(cfg config.Config) error {
 			return err
 		}
 	}
-	if o.parallel || o.isolation != nil {
+	if o.parallel || o.isolation != nil || o.isolationWaves {
 		reason := ""
 		if cfg.Writer != nil && cfg.Writer.Runtime != "codex-app-server" && cfg.Writer.Runtime != "fake" {
 			reason = "runtime_unsupported"
 		}
-		if o.isolation != nil {
-			if cfg.ControllerStateRoot == "" {
+		if o.isolation != nil || o.isolationWaves {
+			if o.isolation == nil {
 				reason = "external_state_unavailable"
-			}
-			c, e := o.isolation.Capacity, o.isolation.Estimate
-			if e.CPUMilli > c.CPUMilli || e.MemoryMiB > c.MemoryMiB || e.VerificationSlots > c.VerificationSlots || e.RuntimeSlots > c.TotalRuntimeSlots || e.RuntimeSlots > c.RuntimeSlots {
-				reason = "capacity_insufficient"
+			} else {
+				if cfg.ControllerStateRoot == "" {
+					reason = "external_state_unavailable"
+				}
+				c, e := o.isolation.Capacity, o.isolation.Estimate
+				if e.CPUMilli > c.CPUMilli || e.MemoryMiB > c.MemoryMiB || e.VerificationSlots > c.VerificationSlots || e.RuntimeSlots > c.TotalRuntimeSlots || e.RuntimeSlots > c.RuntimeSlots {
+					reason = "capacity_insufficient"
+				}
 			}
 		}
 		if reason != "" {
 			add("parallel_writers", reason, "serial_writer")
-			o.parallel, o.isolation = false, nil
+			o.parallel, o.isolation, o.isolationWaves = false, nil, false
 		}
 	}
 	if o.autoCompact != 0 {

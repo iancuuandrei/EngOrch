@@ -114,11 +114,11 @@ func parseAcceptedGraph(s Snapshot) (engineeringplan.Graph, error) {
 	maxInitialImplementations := 1
 	if s.Creation.Execution != nil && s.Creation.Execution.ParallelImplementationVersion == 1 {
 		maxInitialImplementations = 2
-	} else if s.Creation.Execution != nil && s.Creation.Execution.IsolatedImplementationVersion == 1 {
+	} else if s.Creation.Execution != nil && (s.Creation.Execution.IsolatedImplementationVersion == 1 || s.Creation.Execution.IsolatedImplementationVersion == 2) {
 		maxInitialImplementations = 8
 	}
 	var validationErr error
-	if s.Creation.Execution != nil && s.Creation.Execution.IsolatedImplementationVersion == 1 {
+	if s.Creation.Execution != nil && (s.Creation.Execution.IsolatedImplementationVersion == 1 || s.Creation.Execution.IsolatedImplementationVersion == 2) {
 		validationErr = engineeringplan.ValidateAutonomousGraphWithIsolatedImplementations(g, maxInitialImplementations)
 	} else {
 		validationErr = engineeringplan.ValidateAutonomousGraphWithImplementations(g, maxInitialImplementations)
@@ -171,7 +171,7 @@ func parseAcceptedGraph(s Snapshot) (engineeringplan.Graph, error) {
 			engineeringplan.Task{ID: verifyID, Kind: engineeringplan.Verification, Title: "Verify the candidate", Dependencies: []string{impl.ID}, ScopePaths: impl.ScopePaths, ExpectedEvidence: []engineeringplan.Evidence{{Kind: "test", Description: "native candidate verification"}}, EstimatedSeconds: 300},
 			engineeringplan.Task{ID: reviewID, Kind: engineeringplan.Review, Title: "Review the verified candidate", Dependencies: []string{verifyID}, ScopePaths: impl.ScopePaths, ExpectedEvidence: []engineeringplan.Evidence{{Kind: "review", Description: "native independent review"}}, EstimatedSeconds: 300})
 		var directValidationErr error
-		if s.Creation.Execution != nil && s.Creation.Execution.IsolatedImplementationVersion == 1 {
+		if s.Creation.Execution != nil && (s.Creation.Execution.IsolatedImplementationVersion == 1 || s.Creation.Execution.IsolatedImplementationVersion == 2) {
 			directValidationErr = engineeringplan.ValidateAutonomousGraphWithIsolatedImplementations(g, maxInitialImplementations)
 		} else {
 			directValidationErr = engineeringplan.ValidateAutonomousGraphWithImplementations(g, maxInitialImplementations)

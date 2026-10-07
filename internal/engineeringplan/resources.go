@@ -199,28 +199,237 @@ func SelectResourceCohort(g Graph, ready []Task, demands []TaskResourceDemand, c
 		demandByID[demand.TaskID] = demand
 	}
 
+	ordered := orderResourceCandidates(provided, downstreamLengths(g))
+	byID := make(map[string]Task, len(g.Tasks))
+	for _, task := range g.Tasks {
+		byID[task.ID] = task
+	}
+	return selectResourceCohortGreedy(ordered, demandByID, capacity, maxTasks, byID), nil
+}
+
+// SelectResourceCohortSubset selects from an explicit candidate subset of the
+// graph's exact ready implementation set. Every candidate must be ready in the
+// graph (dependencies completed, no terminal UNKNOWN attempt) with identical
+// bytes; dependency-blocked or UNKNOWN candidates are rejected. It never
+// fabricates Completed mutations to trick Ready. Callers deriving
+// deterministic waves use this for each remainder after the first exact-ready
+// SelectResourceCohort.
+func SelectResourceCohortSubset(g Graph, candidates []Task, demands []TaskResourceDemand, capacity ResourceCapacity, maxTasks int) (ResourceCohort, error) {
+	if maxTasks < 1 || maxTasks > 8 {
+		return ResourceCohort{}, errors.New("resource cohort bound must be 1..8")
+	}
+	if err := g.Validate(); err != nil {
+		return ResourceCohort{}, err
+	}
+	if err := validateResourceCapacity(capacity); err != nil {
+		return ResourceCohort{}, err
+	}
+	if len(candidates) == 0 {
+		return ResourceCohort{}, errors.New("resource cohort subset is empty")
+	}
+	graphReady, err := Ready(g)
+	if err != nil {
+		return ResourceCohort{}, err
+	}
+	readyByID := make(map[string]Task, len(graphReady))
+	for _, task := range graphReady {
+		if task.Kind == Implementation {
+			readyByID[task.ID] = task
+		}
+	}
+	byID := make(map[string]Task, len(g.Tasks))
+	for _, task := range g.Tasks {
+		byID[task.ID] = task
+	}
+	provided := make(map[string]Task, len(candidates))
+	for _, task := range candidates {
+		if task.Kind != Implementation {
+			return ResourceCohort{}, fmt.Errorf("resource cohort task %q is not an implementation", task.ID)
+		}
+		if _, duplicate := provided[task.ID]; duplicate {
+			return ResourceCohort{}, fmt.Errorf("duplicate resource cohort task %q", task.ID)
+		}
+		readyTask, ok := readyByID[task.ID]
+		if !ok || !reflect.DeepEqual(readyTask, task) {
+			return ResourceCohort{}, fmt.Errorf("resource cohort task %q is not an exact ready implementation", task.ID)
+		}
+		graphTask, ok := byID[task.ID]
+		if !ok || !reflect.DeepEqual(graphTask, task) {
+			return ResourceCohort{}, fmt.Errorf("resource cohort task %q is stale or substituted", task.ID)
+		}
+		if graphTask.Completed {
+			return ResourceCohort{}, fmt.Errorf("resource cohort task %q is already completed", task.ID)
+		}
+		provided[task.ID] = task
+	}
+	if len(demands) != len(provided) {
+		return ResourceCohort{}, errors.New("resource demand set differs from candidate implementations")
+	}
+	demandByID := make(map[string]TaskResourceDemand, len(demands))
+	for _, demand := range demands {
+		if _, ok := provided[demand.TaskID]; !ok {
+			return ResourceCohort{}, fmt.Errorf("resource demand for non-candidate task %q", demand.TaskID)
+		}
+		if _, duplicate := demandByID[demand.TaskID]; duplicate {
+			return ResourceCohort{}, fmt.Errorf("duplicate resource demand for task %q", demand.TaskID)
+		}
+		if err := validateResourceDemand(demand); err != nil {
+			return ResourceCohort{}, fmt.Errorf("task %q: %w", demand.TaskID, err)
+		}
+		if _, ok := runtimeCapacity(capacity.RuntimeSlots, demand.Runtime); !ok {
+			return ResourceCohort{}, fmt.Errorf("missing exact runtime capacity for task %q", demand.TaskID)
+		}
+		if _, ok := providerCapacity(capacity.ProviderSlots, demand.Runtime.Provider); !ok {
+			return ResourceCohort{}, fmt.Errorf("missing provider capacity for task %q", demand.TaskID)
+		}
+		if _, ok := modelCapacity(capacity.ModelSlots, providerModel(demand.Runtime)); !ok {
+			return ResourceCohort{}, fmt.Errorf("missing provider/model capacity for task %q", demand.TaskID)
+		}
+		demandByID[demand.TaskID] = demand
+	}
+	ordered := orderResourceCandidates(provided, downstreamLengths(g))
+	return selectResourceCohortGreedy(ordered, demandByID, capacity, maxTasks, byID), nil
+}
+
+// SelectResourceWaves deterministically partitions the exact ready
+// implementation set into nonempty resource-bounded waves. The ready set must
+// already be globally independent: every pair is dependency-free with disjoint
+// casefolded write prefixes, rejected upfront under the existing independent
+// cohort contract rather than deferred across waves. The first wave uses the
+// exact-ready SelectResourceCohort contract; each remainder uses the subset
+// contract without fabricating Completed mutations. Every selected task
+// identity is exact against the graph. A task that fits no empty wave yields
+// a no-fit capacity diagnostic. Blocked reasons and per-wave estimates are
+// retained in each returned in-memory cohort (not durable preparation state);
+// the final cohort's Blocked must be empty when all tasks are covered.
+func SelectResourceWaves(g Graph, ready []Task, demands []TaskResourceDemand, capacity ResourceCapacity, maxTasks int) ([]ResourceCohort, error) {
+	if maxTasks < 1 || maxTasks > 8 {
+		return nil, errors.New("resource cohort bound must be 1..8")
+	}
+	if len(ready) == 0 || len(ready) > 8 {
+		return nil, errors.New("resource waves require one to eight ready implementations")
+	}
+	if err := g.Validate(); err != nil {
+		return nil, err
+	}
+	byID := make(map[string]Task, len(g.Tasks))
+	for _, task := range g.Tasks {
+		byID[task.ID] = task
+	}
+	sorted := append([]Task(nil), ready...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
+	for i := range sorted {
+		for j := i + 1; j < len(sorted); j++ {
+			if dependsOn(sorted[i].ID, sorted[j].ID, byID) || dependsOn(sorted[j].ID, sorted[i].ID, byID) {
+				return nil, fmt.Errorf("resource waves reject conflicting task %q blocked by %q", sorted[j].ID, sorted[i].ID)
+			}
+			if pathsOverlapFoldAny(sorted[i].WritePaths, sorted[j].WritePaths) {
+				return nil, fmt.Errorf("resource waves reject conflicting task %q blocked by %q", sorted[j].ID, sorted[i].ID)
+			}
+		}
+	}
+	first, err := SelectResourceCohort(g, ready, demands, capacity, maxTasks)
+	if err != nil {
+		return nil, err
+	}
+	for _, blocked := range first.Blocked {
+		if blocked.Reason == "dependency_or_write_conflict" {
+			return nil, fmt.Errorf("resource waves reject conflicting task %q blocked by %q", blocked.TaskID, blocked.BlockingTaskID)
+		}
+	}
+	if len(first.Tasks) == 0 {
+		if len(first.Blocked) == 0 {
+			return nil, errors.New("resource waves selected no implementation tasks")
+		}
+		leading := first.Blocked[0]
+		if leading.Reason == "capacity" {
+			resource := leading.Resource
+			if resource == "" {
+				resource = "capacity"
+			}
+			return nil, fmt.Errorf("resource waves admit no implementation task: task %q exceeds %s capacity", leading.TaskID, resource)
+		}
+		return nil, fmt.Errorf("resource waves admit no implementation task: task %q blocked (%s)", leading.TaskID, leading.Reason)
+	}
+	waves := []ResourceCohort{first}
+	if len(first.Blocked) == 0 && len(first.Tasks) == len(ready) {
+		return waves, nil
+	}
+	selected := map[string]bool{}
+	for _, task := range first.Tasks {
+		selected[task.ID] = true
+	}
+	demandByID := make(map[string]TaskResourceDemand, len(demands))
+	for _, demand := range demands {
+		demandByID[demand.TaskID] = demand
+	}
+	for len(selected) < len(ready) {
+		var remainder []Task
+		var remainderDemands []TaskResourceDemand
+		for _, task := range ready {
+			if !selected[task.ID] {
+				remainder = append(remainder, task)
+				remainderDemands = append(remainderDemands, demandByID[task.ID])
+			}
+		}
+		next, err := SelectResourceCohortSubset(g, remainder, remainderDemands, capacity, maxTasks)
+		if err != nil {
+			return nil, err
+		}
+		for _, blocked := range next.Blocked {
+			if blocked.Reason == "dependency_or_write_conflict" {
+				return nil, fmt.Errorf("resource waves reject conflicting task %q blocked by %q", blocked.TaskID, blocked.BlockingTaskID)
+			}
+		}
+		if len(next.Tasks) == 0 {
+			if len(next.Blocked) == 0 {
+				return nil, errors.New("resource waves selected no implementation tasks")
+			}
+			leading := next.Blocked[0]
+			if leading.Reason == "capacity" {
+				resource := leading.Resource
+				if resource == "" {
+					resource = "capacity"
+				}
+				return nil, fmt.Errorf("resource waves admit no implementation task: task %q exceeds %s capacity", leading.TaskID, resource)
+			}
+			return nil, fmt.Errorf("resource waves admit no implementation task: task %q blocked (%s)", leading.TaskID, leading.Reason)
+		}
+		waves = append(waves, next)
+		for _, task := range next.Tasks {
+			if selected[task.ID] {
+				return nil, fmt.Errorf("resource waves duplicated task %q", task.ID)
+			}
+			selected[task.ID] = true
+		}
+		if len(waves) > 8 {
+			return nil, errors.New("resource waves exceed eight-task bound")
+		}
+	}
+	last := waves[len(waves)-1]
+	if len(last.Blocked) != 0 {
+		return nil, errors.New("resource waves retain unexpected blocked tasks after covering all implementations")
+	}
+	return waves, nil
+}
+
+func orderResourceCandidates(provided map[string]Task, criticalPath map[string]int) []Task {
 	ordered := make([]Task, 0, len(provided))
 	for _, task := range provided {
 		ordered = append(ordered, task)
 	}
-	criticalPath := downstreamLengths(g)
 	sort.Slice(ordered, func(i, j int) bool {
 		if criticalPath[ordered[i].ID] != criticalPath[ordered[j].ID] {
 			return criticalPath[ordered[i].ID] > criticalPath[ordered[j].ID]
 		}
 		return ordered[i].ID < ordered[j].ID
 	})
+	return ordered
+}
 
+func selectResourceCohortGreedy(ordered []Task, demandByID map[string]TaskResourceDemand, capacity ResourceCapacity, maxTasks int, byID map[string]Task) ResourceCohort {
 	out := ResourceCohort{Tasks: make([]Task, 0, maxTasks), Blocked: []ResourceBlockReason{}, Estimated: ResourceTotals{ProviderSlots: []ProviderSlotTotal{}, ModelSlots: []ModelSlotTotal{}, RuntimeSlots: []RuntimeSlotTotal{}}}
-	byID := make(map[string]Task, len(g.Tasks))
-	for _, task := range g.Tasks {
-		byID[task.ID] = task
-	}
 	for _, task := range ordered {
-		if len(out.Tasks) >= maxTasks {
-			out.Blocked = append(out.Blocked, ResourceBlockReason{TaskID: task.ID, Reason: "cohort_limit"})
-			continue
-		}
 		conflict := ""
 		for _, chosen := range out.Tasks {
 			if dependsOn(task.ID, chosen.ID, byID) || dependsOn(chosen.ID, task.ID, byID) {
@@ -236,6 +445,10 @@ func SelectResourceCohort(g Graph, ready []Task, demands []TaskResourceDemand, c
 			out.Blocked = append(out.Blocked, ResourceBlockReason{TaskID: task.ID, Reason: "dependency_or_write_conflict", BlockingTaskID: conflict})
 			continue
 		}
+		if len(out.Tasks) >= maxTasks {
+			out.Blocked = append(out.Blocked, ResourceBlockReason{TaskID: task.ID, Reason: "cohort_limit"})
+			continue
+		}
 		demand := demandByID[task.ID]
 		if resource := resourceOverCapacity(out.Estimated, demand, capacity); resource != "" {
 			reason := ResourceBlockReason{TaskID: task.ID, Reason: "capacity", Resource: resource}
@@ -249,7 +462,7 @@ func SelectResourceCohort(g Graph, ready []Task, demands []TaskResourceDemand, c
 		out.Tasks = append(out.Tasks, task)
 		addResourceTotals(&out.Estimated, demand)
 	}
-	return out, nil
+	return out
 }
 
 func validateResourceCapacity(capacity ResourceCapacity) error {
@@ -358,6 +571,18 @@ func addResourceTotals(total *ResourceTotals, demand TaskResourceDemand) {
 	sort.Slice(total.RuntimeSlots, func(i, j int) bool {
 		return runtimeKeyLess(total.RuntimeSlots[i].Runtime, total.RuntimeSlots[j].Runtime)
 	})
+}
+
+// SumResourceDemands derives the exact overall work total for the supplied
+// demands in deterministic serialized order. It is the shared derivation for
+// durable preparation totals; per-wave Estimated values remain the separate
+// per-wave peak for that wave's members.
+func SumResourceDemands(demands []TaskResourceDemand) ResourceTotals {
+	total := ResourceTotals{ProviderSlots: []ProviderSlotTotal{}, ModelSlots: []ModelSlotTotal{}, RuntimeSlots: []RuntimeSlotTotal{}}
+	for _, demand := range demands {
+		addResourceTotals(&total, demand)
+	}
+	return total
 }
 
 func providerModel(runtime RuntimeResourceKey) ProviderModelKey {

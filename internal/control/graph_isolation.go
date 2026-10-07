@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"sort"
 
 	"harness.local/engorch/internal/canonical"
 	"harness.local/engorch/internal/engineeringplan"
@@ -45,17 +46,30 @@ type GraphIsolationState struct {
 
 // GraphIsolationPreparation freezes the exact ready cohort and its declared
 // scheduling estimates before any child workspace effect is admitted.
+// Estimated is the overall work total (sum of all demands), not measured
+// usage. Version 1 is the single-cohort isolated mode: SelectedTaskIDs must
+// fit together. Version 2 is the opt-in resource-bounded wave mode:
+// SelectedTaskIDs holds all initial ready implementations (up to eight) and
+// Waves partitions them into nonempty resource-bounded waves derived
+// deterministically via SelectResourceWaves; WaveEstimated holds each wave's
+// per-wave peak and WaveBlocked retains each wave's bounded typed block
+// provenance. Waves, WaveEstimated, and WaveBlocked are omitted for version 1
+// to preserve absent-field legacy serialization; version 2 requires Waves and
+// WaveEstimated with WaveBlocked length matching Waves.
 type GraphIsolationPreparation struct {
-	Version         int                                  `json:"version"`
-	PlanID          string                               `json:"plan_id"`
-	GraphDigest     string                               `json:"graph_digest"`
-	Revision        int                                  `json:"revision"`
-	BaseCandidateID string                               `json:"base_candidate_id"`
-	Capacity        engineeringplan.ResourceCapacity     `json:"capacity"`
-	Demands         []engineeringplan.TaskResourceDemand `json:"demands"`
-	SelectedTaskIDs []string                             `json:"selected_task_ids"`
-	Estimated       engineeringplan.ResourceTotals       `json:"estimated"`
-	PreparationID   string                               `json:"preparation_id"`
+	Version         int                                     `json:"version"`
+	PlanID          string                                  `json:"plan_id"`
+	GraphDigest     string                                  `json:"graph_digest"`
+	Revision        int                                     `json:"revision"`
+	BaseCandidateID string                                  `json:"base_candidate_id"`
+	Capacity        engineeringplan.ResourceCapacity        `json:"capacity"`
+	Demands         []engineeringplan.TaskResourceDemand    `json:"demands"`
+	SelectedTaskIDs []string                                `json:"selected_task_ids"`
+	Estimated       engineeringplan.ResourceTotals          `json:"estimated"`
+	Waves           [][]string                              `json:"waves,omitempty"`
+	WaveEstimated   []engineeringplan.ResourceTotals        `json:"wave_estimated,omitempty"`
+	WaveBlocked     [][]engineeringplan.ResourceBlockReason `json:"wave_blocked,omitempty"`
+	PreparationID   string                                  `json:"preparation_id"`
 }
 
 // IsolationEstimateTemplate is immutable policy input. Exact task IDs and the
@@ -77,7 +91,11 @@ func (t IsolationEstimateTemplate) Validate() error {
 }
 
 func isolatedImplementationEnabled(s Snapshot) bool {
-	return s.Creation.Execution != nil && s.Creation.Execution.IsolatedImplementationVersion == 1
+	return s.Creation.Execution != nil && (s.Creation.Execution.IsolatedImplementationVersion == 1 || s.Creation.Execution.IsolatedImplementationVersion == 2)
+}
+
+func isolatedWavesEnabled(s Snapshot) bool {
+	return s.Creation.Execution != nil && s.Creation.Execution.IsolatedImplementationVersion == 2
 }
 
 // InspectTaskIsolation returns the durable state only; it does not observe,
@@ -285,6 +303,9 @@ func expectedGraphIsolationPreparation(s Snapshot) (GraphIsolationPreparation, e
 	for i, task := range implementations {
 		demands[i] = engineeringplan.TaskResourceDemand{TaskID: task.ID, CPUMilli: template.CPUMilli, MemoryMiB: template.MemoryMiB, VerificationSlots: template.VerificationSlots, Runtime: route, RuntimeSlots: template.RuntimeSlots}
 	}
+	if isolatedWavesEnabled(s) {
+		return expectedGraphIsolationWavesPreparation(s, baseID, implementations, demands)
+	}
 	cohort, err := engineeringplan.SelectResourceCohort(s.Graph.Graph, implementations, demands, *s.Creation.Execution.IsolationCapacity, s.Creation.Execution.EffectiveMaxParallel())
 	if err != nil {
 		return GraphIsolationPreparation{}, err
@@ -298,6 +319,52 @@ func expectedGraphIsolationPreparation(s Snapshot) (GraphIsolationPreparation, e
 	}
 	prep := GraphIsolationPreparation{Version: 1, PlanID: s.Graph.PlanID, GraphDigest: s.Graph.Digest, Revision: s.Graph.Revision, BaseCandidateID: baseID, Capacity: *s.Creation.Execution.IsolationCapacity, Demands: demands, SelectedTaskIDs: ids, Estimated: cohort.Estimated}
 	prep.PreparationID, err = canonical.Hash("harness.graph-isolation-preparation.v1", prep)
+	return prep, err
+}
+
+func expectedGraphIsolationWavesPreparation(s Snapshot, baseID string, implementations []engineeringplan.Task, demands []engineeringplan.TaskResourceDemand) (GraphIsolationPreparation, error) {
+	if len(implementations) == 0 || len(implementations) > 8 {
+		return GraphIsolationPreparation{}, errors.New("resource waves require one to eight ready implementations")
+	}
+	waves, err := engineeringplan.SelectResourceWaves(s.Graph.Graph, implementations, demands, *s.Creation.Execution.IsolationCapacity, s.Creation.Execution.EffectiveMaxParallel())
+	if err != nil {
+		return GraphIsolationPreparation{}, err
+	}
+	if len(waves) == 0 {
+		return GraphIsolationPreparation{}, errors.New("resource waves selected no implementation tasks")
+	}
+	ids := make([]string, 0, len(implementations))
+	for _, task := range implementations {
+		ids = append(ids, task.ID)
+	}
+	sortStrings(ids)
+	waveIDs := make([][]string, 0, len(waves))
+	waveEstimated := make([]engineeringplan.ResourceTotals, 0, len(waves))
+	waveBlocked := make([][]engineeringplan.ResourceBlockReason, 0, len(waves))
+	seen := map[string]bool{}
+	for _, wave := range waves {
+		if len(wave.Tasks) == 0 {
+			return GraphIsolationPreparation{}, errors.New("resource waves contain an empty wave")
+		}
+		waveIDList := make([]string, 0, len(wave.Tasks))
+		for _, task := range wave.Tasks {
+			if seen[task.ID] {
+				return GraphIsolationPreparation{}, errors.New("resource waves duplicated a task")
+			}
+			seen[task.ID] = true
+			waveIDList = append(waveIDList, task.ID)
+		}
+		waveIDs = append(waveIDs, waveIDList)
+		waveEstimated = append(waveEstimated, wave.Estimated)
+		blocked := append([]engineeringplan.ResourceBlockReason{}, wave.Blocked...)
+		waveBlocked = append(waveBlocked, blocked)
+	}
+	if len(seen) != len(implementations) {
+		return GraphIsolationPreparation{}, errors.New("resource waves do not cover all ready implementations")
+	}
+	total := engineeringplan.SumResourceDemands(demands)
+	prep := GraphIsolationPreparation{Version: 2, PlanID: s.Graph.PlanID, GraphDigest: s.Graph.Digest, Revision: s.Graph.Revision, BaseCandidateID: baseID, Capacity: *s.Creation.Execution.IsolationCapacity, Demands: demands, SelectedTaskIDs: ids, Estimated: total, Waves: waveIDs, WaveEstimated: waveEstimated, WaveBlocked: waveBlocked}
+	prep.PreparationID, err = canonical.Hash("harness.graph-isolation-preparation.v2", prep)
 	return prep, err
 }
 
@@ -317,6 +384,10 @@ func admitGraphIsolationPreparation(ctx context.Context, s Snapshot) (GraphIsola
 	return expectedGraphIsolationPreparation(s)
 }
 
+func sortStrings(values []string) {
+	sort.Strings(values)
+}
+
 func replayGraphIsolation(s *Snapshot, e journal.Event) error {
 	if !isolatedImplementationEnabled(*s) {
 		return errors.New("isolated implementation not enabled")
@@ -332,6 +403,24 @@ func replayGraphIsolation(s *Snapshot, e journal.Event) error {
 		}
 		if s.GraphIsolationPreparation != nil || len(s.GraphIsolations) != 0 {
 			return errors.New("graph isolation preparation already recorded")
+		}
+		if prep.Version != 1 && prep.Version != 2 {
+			return errors.New("invalid graph isolation preparation version")
+		}
+		if s.Creation.Execution == nil {
+			return errors.New("isolated implementation not enabled")
+		}
+		if s.Creation.Execution.IsolatedImplementationVersion == 1 && prep.Version != 1 {
+			return errors.New("graph isolation preparation version differs from isolated policy")
+		}
+		if s.Creation.Execution.IsolatedImplementationVersion == 2 && prep.Version != 2 {
+			return errors.New("graph isolation preparation version differs from isolated wave policy")
+		}
+		if prep.Version == 1 && (len(prep.Waves) != 0 || len(prep.WaveEstimated) != 0 || len(prep.WaveBlocked) != 0) {
+			return errors.New("legacy graph isolation preparation carries wave fields")
+		}
+		if prep.Version == 2 && (len(prep.Waves) == 0 || len(prep.WaveEstimated) != len(prep.Waves) || len(prep.WaveBlocked) != len(prep.Waves)) {
+			return errors.New("graph isolation waves are incomplete")
 		}
 		expected, err := expectedGraphIsolationPreparation(*s)
 		if err != nil || !sameCanonical(expected, prep) {

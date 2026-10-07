@@ -150,6 +150,9 @@ func inspectAutonomousPlan(ctx context.Context, root string, options autonomousC
 	}
 	if options.isolation != nil {
 		topology = "isolated_writers"
+		if options.isolationWaves {
+			topology = "isolated_writer_waves"
+		}
 		plan["isolation_capacity"] = options.isolation.Capacity
 		plan["writer_estimate"] = options.isolation.Estimate
 		resources := plan["resources"].(map[string]any)
@@ -166,7 +169,7 @@ func inspectAutonomousPlan(ctx context.Context, root string, options autonomousC
 		if err := control.ValidateEvidenceAutoPolicyTemplate(*options.evidence); err != nil {
 			return err
 		}
-		if options.parallel || options.isolation != nil {
+		if options.parallel || options.isolation != nil || options.isolationWaves {
 			return errors.New("evidence-policy requires serial graph writers; parallel-writers and isolated-writers are incompatible")
 		}
 		if len(options.fallbacks) != 0 {
@@ -188,10 +191,15 @@ func inspectAutonomousPlan(ctx context.Context, root string, options autonomousC
 	plan["dynamic_explorers"] = map[string]any{"enabled": options.dynamicExplorers, "runtime_execution": "NOT_RUN"}
 	plan["topology"] = topology
 	scopeVersion := 1
+	scopeEnabled := cfg.Writer != nil && cfg.Explorer != nil
 	if topology != "serial_writer" {
 		scopeVersion = 2
 	}
-	plan["scope_replan"] = map[string]any{"enabled": cfg.Writer != nil && cfg.Explorer != nil, "policy_version": scopeVersion, "max_replans": 2, "ownership_ceiling": "IMMUTABLE_SCOPE_PATHS", "design": "READ_ONLY_MODEL_DECISION", "runtime_execution": "NOT_RUN"}
+	if topology == "isolated_writer_waves" {
+		scopeVersion = 0
+		scopeEnabled = false
+	}
+	plan["scope_replan"] = map[string]any{"enabled": scopeEnabled, "policy_version": scopeVersion, "max_replans": 2, "ownership_ceiling": "IMMUTABLE_SCOPE_PATHS", "design": "READ_ONLY_MODEL_DECISION", "runtime_execution": "NOT_RUN"}
 	plan["max_parallel"] = maxParallel
 	plan["run_options"] = "SELECTED_NOT_DISPATCHED"
 	plan["cache"] = map[string]int{"parser_facts": options.parseCache, "candidate_facts": options.candidateCache}

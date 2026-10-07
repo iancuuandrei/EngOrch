@@ -314,3 +314,115 @@ func TestSelectResourceCohortRejectsMissingCapacityBadEstimateAndPartialReadyInp
 		t.Fatal("overflow-prone CPU capacity accepted")
 	}
 }
+
+func TestSelectResourceWavesRejectsGlobalConflictUpfront(t *testing.T) {
+	overlapping := resourceFixtureGraph(
+		resourceFixtureTask("impl-a", Implementation, []string{"research"}, []string{"shared/Api.go"}, 20),
+		resourceFixtureTask("impl-b", Implementation, []string{"research"}, []string{"shared/api.go"}, 10),
+	)
+	ready := readyImplementations(t, overlapping)
+	demands := []TaskResourceDemand{
+		resourceFixtureDemand("impl-a", 1, 1, 1, 1),
+		resourceFixtureDemand("impl-b", 1, 1, 1, 1),
+	}
+	if _, err := SelectResourceWaves(overlapping, ready, demands, resourceFixtureCapacity(2, 2, 2, 2), 1); err == nil || !strings.Contains(err.Error(), "conflicting") {
+		t.Fatalf("maxTasks=1 overlapping writes slipped across waves: %v", err)
+	}
+	if _, err := SelectResourceWaves(overlapping, ready, demands, resourceFixtureCapacity(2, 2, 2, 2), 2); err == nil || !strings.Contains(err.Error(), "conflicting") {
+		t.Fatalf("overlapping writes were deferred across waves: %v", err)
+	}
+	caseOverlapping := resourceFixtureGraph(
+		resourceFixtureTask("impl-upper", Implementation, []string{"research"}, []string{"pkg/Foo.go"}, 20),
+		resourceFixtureTask("impl-lower", Implementation, []string{"research"}, []string{"pkg/foo.go"}, 10),
+	)
+	caseReady := readyImplementations(t, caseOverlapping)
+	caseDemands := []TaskResourceDemand{
+		resourceFixtureDemand("impl-upper", 1, 1, 1, 1),
+		resourceFixtureDemand("impl-lower", 1, 1, 1, 1),
+	}
+	if _, err := SelectResourceWaves(caseOverlapping, caseReady, caseDemands, resourceFixtureCapacity(2, 2, 2, 2), 2); err == nil || !strings.Contains(err.Error(), "conflicting") {
+		t.Fatalf("casefolded prefix conflict was not rejected upfront: %v", err)
+	}
+	reversed := append([]Task(nil), ready...)
+	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
+		reversed[i], reversed[j] = reversed[j], reversed[i]
+	}
+	if _, err := SelectResourceWaves(overlapping, reversed, demands, resourceFixtureCapacity(2, 2, 2, 2), 1); err == nil || !strings.Contains(err.Error(), "conflicting") {
+		t.Fatalf("conflict rejection changed with input order: %v", err)
+	}
+}
+
+func TestSelectResourceCohortReportsConflictBeforeCohortLimit(t *testing.T) {
+	overlapping := resourceFixtureGraph(
+		resourceFixtureTask("impl-a", Implementation, []string{"research"}, []string{"shared/Api.go"}, 20),
+		resourceFixtureTask("impl-b", Implementation, []string{"research"}, []string{"shared/api.go"}, 10),
+	)
+	ready := readyImplementations(t, overlapping)
+	demands := []TaskResourceDemand{
+		resourceFixtureDemand("impl-a", 1, 1, 1, 1),
+		resourceFixtureDemand("impl-b", 1, 1, 1, 1),
+	}
+	cohort, err := SelectResourceCohort(overlapping, ready, demands, resourceFixtureCapacity(2, 2, 2, 2), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cohort.Tasks) != 1 || len(cohort.Blocked) != 1 || cohort.Blocked[0].Reason != "dependency_or_write_conflict" {
+		t.Fatalf("conflict did not precede cohort_limit: %+v", cohort)
+	}
+}
+
+func TestSelectResourceCohortSubsetRejectsNotReadyAndUnknown(t *testing.T) {
+	graph := resourceFixtureGraph(
+		resourceFixtureTask("impl-a", Implementation, []string{"research"}, []string{"a.go"}, 20),
+		resourceFixtureTask("impl-blocked", Implementation, []string{"impl-a"}, []string{"b.go"}, 10),
+	)
+	byID := map[string]Task{}
+	for _, task := range graph.Tasks {
+		byID[task.ID] = task
+	}
+	blockedTask := byID["impl-blocked"]
+	blockedDemands := []TaskResourceDemand{resourceFixtureDemand("impl-blocked", 1, 1, 1, 1)}
+	if _, err := SelectResourceCohortSubset(graph, []Task{blockedTask}, blockedDemands, resourceFixtureCapacity(2, 2, 2, 2), 2); err == nil || !strings.Contains(err.Error(), "exact ready") {
+		t.Fatalf("dependency-blocked candidate accepted: %v", err)
+	}
+	unknownGraph := resourceFixtureGraph(
+		resourceFixtureTask("impl-a", Implementation, []string{"research"}, []string{"a.go"}, 20),
+	)
+	unknownTask := resourceFixtureTask("impl-a", Implementation, []string{"research"}, []string{"a.go"}, 20)
+	unknownTask.Attempts = []Attempt{{ID: "attempt-1", Outcome: AttemptUnknown}}
+	unknownGraphWithAttempt := unknownGraph
+	for i := range unknownGraphWithAttempt.Tasks {
+		if unknownGraphWithAttempt.Tasks[i].ID == "impl-a" {
+			unknownGraphWithAttempt.Tasks[i].Attempts = []Attempt{{ID: "attempt-1", Outcome: AttemptUnknown}}
+		}
+	}
+	if _, err := SelectResourceCohortSubset(unknownGraphWithAttempt, []Task{unknownTask}, []TaskResourceDemand{resourceFixtureDemand("impl-a", 1, 1, 1, 1)}, resourceFixtureCapacity(2, 2, 2, 2), 1); err == nil {
+		t.Fatal("UNKNOWN candidate accepted")
+	}
+	readyGraph := resourceFixtureGraph(
+		resourceFixtureTask("impl-a", Implementation, []string{"research"}, []string{"a.go"}, 20),
+	)
+	ready := readyImplementations(t, readyGraph)
+	if _, err := SelectResourceWaves(readyGraph, ready, []TaskResourceDemand{resourceFixtureDemand("impl-a", 1, 1, 1, 1)}, resourceFixtureCapacity(1, 1, 1, 1), 1); err != nil {
+		t.Fatalf("exact ready waves rejected: %v", err)
+	}
+}
+
+func TestSumResourceDemandsMatchesCohortEstimated(t *testing.T) {
+	graph := resourceFixtureGraph(
+		resourceFixtureTask("impl-a", Implementation, []string{"research"}, []string{"a.go"}, 20),
+		resourceFixtureTask("impl-b", Implementation, []string{"research"}, []string{"b.go"}, 10),
+	)
+	ready := readyImplementations(t, graph)
+	demands := []TaskResourceDemand{
+		resourceFixtureDemand("impl-a", 2, 3, 1, 1),
+		resourceFixtureDemand("impl-b", 1, 1, 0, 1),
+	}
+	cohort, err := SelectResourceCohort(graph, ready, demands, resourceFixtureCapacity(5, 5, 2, 2), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := SumResourceDemands(demands); !reflect.DeepEqual(got, cohort.Estimated) {
+		t.Fatalf("shared totals differ: sum=%+v cohort=%+v", got, cohort.Estimated)
+	}
+}
