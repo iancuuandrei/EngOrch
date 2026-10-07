@@ -158,6 +158,7 @@ func inspectAutonomousPlan(ctx context.Context, root string, options autonomousC
 		}
 		plan["isolation_capacity"] = options.isolation.Capacity
 		plan["writer_estimate"] = options.isolation.Estimate
+		plan["cohort_selector"] = cohortSelectorName(options.cohortSelector)
 		resources := plan["resources"].(map[string]any)
 		observation := resources["memory_observation"].(memoryadmission.Observation)
 		decision, decisionErr := memoryadmission.Next(nil, observation, maxParallel, options.isolation.Estimate.MemoryMiB, memoryadmission.DefaultReserveMiB, memoryadmission.DefaultHysteresisMiB)
@@ -209,4 +210,14 @@ func inspectAutonomousPlan(ctx context.Context, root string, options autonomousC
 	plan["auto_compact_token_limit"] = options.autoCompact
 	plan["fallbacks"] = options.fallbacks
 	return output(out, map[string]any{"execution_plan": plan, "runtime_dispatch": "NOT_RUN", "verification": "NOT_RUN"})
+}
+
+// cohortSelectorName renders the staged wave selector for inspect-plan
+// display. Empty preserves the frozen greedy derivation; lexicographic-v1
+// is the exact finite optimum over the same hard gates.
+func cohortSelectorName(version int) string {
+	if version == 1 {
+		return autonomousCohortSelectorLexicographicV1
+	}
+	return ""
 }

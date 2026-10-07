@@ -56,6 +56,20 @@ Intermediate hubs MAY integrate without final READY; final native verification
 and review MUST bind the exact last candidate. This is an opt-in scheduling
 and isolation policy without measured benefit claims.
 
+Staged runs MAY freeze `isolation_cohort_selector_version: 1` for the exact
+finite lexicographic wave optimum; absent MUST preserve the greedy derivation
+byte-for-byte. Both selectors share the same hard gates (exact ready identity,
+pairwise dependency/write-overlap independence, every explicit resource
+ceiling, the 1..8 bound); objectives apply in strict order (admitted count,
+summed declared critical-path length, summed estimated CPU, memory,
+verification, then runtime slots, sorted task-ID tie-break) over declared
+estimates only, with no measured-makespan or coupling-optimality claim. The
+version 3 preparation MUST record `cohort_selector_version` when nonzero and
+omit it when zero; replay MUST recompute with the frozen policy selector and
+reject substitution or an out-of-range value. A nonzero selector on any
+non-staged policy MUST be rejected, and frozen policy MUST NOT change on
+resume.
+
 ## Runtime and provenance
 
 `RunWriter` creates a private host per invocation and records host intent, readiness and observation. A workspace lease spans dispatch and before/after candidate fingerprints. The adapter executes or resumes its durable runtime; source, candidate, thread configuration, requested/observed model and result must match before admission. Host closure precedes lease release.

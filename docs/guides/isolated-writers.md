@@ -120,6 +120,31 @@ redispatch. Intermediate hubs may integrate without final READY; final native
 verification and review bind the exact last candidate with no stale receipt.
 Cohort scope replanning is unsupported for version 3.
 
+### Staged lexicographic wave optimum (`lexicographic-v1`)
+
+`--isolated-writer-staged --isolation-policy PATH --cohort-selector lexicographic-v1 --max-parallel N`
+opts a staged run into the exact finite wave optimum over the same hard
+gates as the default greedy derivation. It freezes
+`isolation_cohort_selector_version: 1` in immutable run creation; absent
+preserves the greedy derivation byte-for-byte. Each wave maximizes admitted
+task count, then summed downstream critical-path length (declared
+`EstimatedSeconds` estimates, not measurements), then minimizes summed
+estimated CPU, memory, verification, and runtime slots, with sorted task-ID
+tie-breaks. These objectives do not establish measured wall-clock makespan,
+and coupling stays a hard independence gate rather than an optimized score.
+The version 3 preparation records `cohort_selector_version: 1` (omitted for
+greedy runs so legacy journals replay unchanged); journal replay recomputes
+with the frozen selector and rejects a substituted value. The flag is
+rejected for serial, parallel, version 1, and version 2 runs, and capability
+fallback cannot silently drop it.
+
+Limitation stated honestly: the frozen per-writer estimate template applies
+identical demands to every ready implementation, so on current runs the
+greedy and lexicographic wave derivations agree. Wave-order divergence is
+demonstrated at the selector unit level with unequal declared demands, not
+with invented per-writer estimates on a live run. No measured quality,
+latency, or cost benefit is claimed.
+
 This is an opt-in scheduling and isolation policy. It does not infer host
 capacity from environment data, measure actual CPU or memory use, qualify a
 provider route, authorize unrestricted operating-system sandboxing, or claim

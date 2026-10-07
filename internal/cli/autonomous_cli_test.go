@@ -993,6 +993,61 @@ func TestIsolatedWritersRequirePolicyAndRejectParallelWritersCombination(t *test
 	}
 }
 
+func TestCohortSelectorRequiresStagedIsolation(t *testing.T) {
+	if version, err := validateAutonomousCohortSelector("", false); err != nil || version != 0 {
+		t.Fatalf("empty selector rejected: %d %v", version, err)
+	}
+	if version, err := validateAutonomousCohortSelector("lexicographic-v1", true); err != nil || version != 1 {
+		t.Fatalf("staged lexicographic selector rejected: %d %v", version, err)
+	}
+	for _, tc := range []struct {
+		name   string
+		mode   string
+		staged bool
+	}{
+		{"unknown", "lexicographic-v2", true},
+		{"unversioned", "lexicographic", true},
+		{"greedy_name", "greedy-v1", true},
+		{"non_staged", "lexicographic-v1", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := validateAutonomousCohortSelector(tc.mode, tc.staged); err == nil {
+				t.Fatalf("invalid cohort selector %q admitted (staged=%v)", tc.mode, tc.staged)
+			}
+		})
+	}
+	if got := cohortSelectorFlag(1); got != "lexicographic-v1" {
+		t.Fatalf("selector version did not render its flag spelling: %q", got)
+	}
+	if got := cohortSelectorFlag(0); got != "" {
+		t.Fatalf("greedy selector changed legacy spelling: %q", got)
+	}
+	if _, err := validateAutonomousCohortSelector(cohortSelectorFlag(7), true); err == nil {
+		t.Fatal("out-of-range selector version admitted")
+	}
+
+	root := autonomousCLIFixture(t)
+	policyPath := filepath.Join(root, "isolation-policy.json")
+	if err := os.WriteFile(policyPath, []byte(isolatedWriterPolicyJSON()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"run", "--autonomous", "--cohort-selector", "lexicographic-v1", "objective"},
+		{"run", "--autonomous", "--isolated-writers", "--isolation-policy", policyPath, "--cohort-selector", "lexicographic-v1", "objective"},
+		{"run", "--autonomous", "--isolated-writer-waves", "--isolation-policy", policyPath, "--cohort-selector", "lexicographic-v1", "objective"},
+		{"run", "--autonomous", "--isolated-writer-staged", "--isolation-policy", policyPath, "--cohort-selector", "lexicographic-v2", "objective"},
+		{"run", "--autonomous", "--parallel-writers", "--cohort-selector", "lexicographic-v1", "objective"},
+	} {
+		var out bytes.Buffer
+		if err := Execute(context.Background(), args, root, &out); err == nil {
+			t.Errorf("accepted invalid cohort-selector invocation %q", strings.Join(args, " "))
+		}
+	}
+	if entries, err := filepath.Glob(filepath.Join(root, ".harness", "runs", "*.jsonl")); err != nil || len(entries) != 0 {
+		t.Fatalf("invalid cohort-selector arguments created runs: %v, %v", entries, err)
+	}
+}
+
 func TestAutonomousIsolatedWritersBindExplicitCapacityAndDerivedWriterRoute(t *testing.T) {
 	root := autonomousCLIFixture(t)
 	controllerStateRoot := filepath.Join(filepath.Dir(root), filepath.Base(root)+"-controller-state")

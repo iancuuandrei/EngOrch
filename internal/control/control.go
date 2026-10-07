@@ -121,6 +121,11 @@ type ExecutionPolicy struct {
 	IsolatedImplementationVersion int                               `json:"isolated_implementation_version,omitempty"`
 	IsolationCapacity             *engineeringplan.ResourceCapacity `json:"isolation_capacity,omitempty"`
 	IsolationEstimate             *IsolationEstimateTemplate        `json:"isolation_estimate,omitempty"`
+	// IsolationCohortSelectorVersion opts staged runs into the exact finite
+	// lexicographic cohort optimum. Zero preserves the frozen greedy
+	// derivation byte-for-byte; 1 selects the exhaustive optimum over the
+	// same hard gates. Only staged isolation admits a nonzero selector.
+	IsolationCohortSelectorVersion int `json:"isolation_cohort_selector_version,omitempty"`
 	// ScopeReplanVersion permits a confirmed writer proposal to request a
 	// bounded WritePaths refinement, only within its immutable ScopePaths.
 	ScopeReplanVersion       int                              `json:"scope_replan_version,omitempty"`
@@ -280,6 +285,12 @@ func (p ExecutionPolicy) Validate() error {
 	}
 	if p.IsolatedImplementationVersion == 0 && (p.IsolationCapacity != nil || p.IsolationEstimate != nil) {
 		return errors.New("isolation capacity requires isolated implementation")
+	}
+	if p.IsolationCohortSelectorVersion != 0 && p.IsolationCohortSelectorVersion != 1 {
+		return errors.New("invalid isolation cohort selector version")
+	}
+	if p.IsolationCohortSelectorVersion != 0 && p.IsolatedImplementationVersion != 3 {
+		return errors.New("isolation cohort selector requires staged isolation")
 	}
 	if (p.IsolatedImplementationVersion == 1 || p.IsolatedImplementationVersion == 2 || p.IsolatedImplementationVersion == 3) && p.ParallelImplementationVersion == 1 {
 		return errors.New("parallel aggregate and isolated implementation modes are exclusive")

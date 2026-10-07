@@ -61,7 +61,11 @@ type GraphIsolationState struct {
 // BaseCandidateID binding the exact parent candidate for that stage, and
 // Waves partitioning the current subset via the same resource-bounded
 // derivation. CohortIndex is omitted for versions 1 and 2 to preserve
-// absent-field legacy serialization.
+// absent-field legacy serialization. CohortSelectorVersion records the
+// frozen per-wave selector for version 3: absent (zero) preserves the
+// greedy derivation byte-for-byte, 1 records the exact finite
+// lexicographic optimum over the same hard gates. It is omitted for
+// versions 1 and 2 and for greedy version 3 runs.
 type GraphIsolationPreparation struct {
 	Version         int                                     `json:"version"`
 	PlanID          string                                  `json:"plan_id"`
@@ -76,7 +80,10 @@ type GraphIsolationPreparation struct {
 	WaveEstimated   []engineeringplan.ResourceTotals        `json:"wave_estimated,omitempty"`
 	WaveBlocked     [][]engineeringplan.ResourceBlockReason `json:"wave_blocked,omitempty"`
 	CohortIndex     int                                     `json:"cohort_index,omitempty"`
-	PreparationID   string                                  `json:"preparation_id"`
+	// CohortSelectorVersion is the frozen staged wave selector: 0 (absent)
+	// is the greedy derivation, 1 is the exact lexicographic optimum.
+	CohortSelectorVersion int    `json:"cohort_selector_version,omitempty"`
+	PreparationID         string `json:"preparation_id"`
 }
 
 // IsolationEstimateTemplate is immutable policy input. Exact task IDs and the

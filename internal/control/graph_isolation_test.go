@@ -192,6 +192,66 @@ func TestCreateTaskIsolationUsesDistinctPristineTaskWorktree(t *testing.T) {
 	}
 }
 
+func TestIsolationCohortSelectorPolicyValidation(t *testing.T) {
+	legacyJSON, err := json.Marshal(ExecutionPolicy{Mode: "autonomous-v1", MaxRepairs: 1})
+	if err != nil || string(legacyJSON) != `{"mode":"autonomous-v1","max_repairs":1}` {
+		t.Fatalf("legacy policy bytes changed: %s %v", legacyJSON, err)
+	}
+	base := ExecutionPolicy{Mode: "autonomous-v1", MaxRepairs: 1, GraphVersion: 1, MaxParallel: 1, Context: taskContextBoundedV1, RepairPlanningVersion: 1, IsolatedImplementationVersion: 3}
+	capacity := &engineeringplan.ResourceCapacity{CPUMilli: 1, MemoryMiB: 1, VerificationSlots: 1, TotalRuntimeSlots: 1, ProviderSlots: []engineeringplan.ProviderSlotLimit{{Provider: "p", Slots: 1}}, ModelSlots: []engineeringplan.ModelSlotLimit{{Model: engineeringplan.ProviderModelKey{Provider: "p", Model: "m"}, Slots: 1}}, RuntimeSlots: []engineeringplan.RuntimeSlotLimit{{Runtime: engineeringplan.RuntimeResourceKey{ProfileID: "x", Provider: "p", Model: "m"}, Slots: 1}}}
+	base.IsolationCapacity, base.IsolationEstimate = capacity, &IsolationEstimateTemplate{CPUMilli: 1, MemoryMiB: 1, VerificationSlots: 1, RuntimeSlots: 1}
+	if err := base.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	lexicographic := base
+	lexicographic.IsolationCohortSelectorVersion = 1
+	if err := lexicographic.Validate(); err != nil {
+		t.Fatalf("staged lexicographic selector rejected: %v", err)
+	}
+	raw, err := json.Marshal(lexicographic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roundTrip ExecutionPolicy
+	if err := json.Unmarshal(raw, &roundTrip); err != nil {
+		t.Fatal(err)
+	}
+	if roundTrip.IsolationCohortSelectorVersion != 1 {
+		t.Fatalf("selector did not survive serialization: %+v", roundTrip)
+	}
+	for name, change := range map[string]func(*ExecutionPolicy){
+		"selector_range": func(p *ExecutionPolicy) { p.IsolationCohortSelectorVersion = 2 },
+		"selector_serial": func(p *ExecutionPolicy) {
+			p.IsolatedImplementationVersion = 0
+			p.IsolationCapacity, p.IsolationEstimate = nil, nil
+			p.IsolationCohortSelectorVersion = 1
+		},
+		"selector_waves": func(p *ExecutionPolicy) {
+			p.IsolatedImplementationVersion = 2
+			p.IsolationCohortSelectorVersion = 1
+		},
+		"selector_single": func(p *ExecutionPolicy) {
+			p.IsolatedImplementationVersion = 1
+			p.IsolationCohortSelectorVersion = 1
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := lexicographic
+			change(&p)
+			if err := p.Validate(); err == nil {
+				t.Fatal("invalid cohort selector policy admitted")
+			}
+		})
+	}
+	absent, err := json.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(absent), "cohort_selector") {
+		t.Fatalf("absent selector changed legacy serialization: %s", absent)
+	}
+}
+
 func recordGraphFixtureForIsolation(path string) (Snapshot, error) {
 	s, err := Inspect(path)
 	if err != nil {

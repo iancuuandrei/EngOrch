@@ -102,6 +102,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	isolatedWriterWaves := fs.Bool("isolated-writer-waves", false, "run resource-bounded initial writer waves on one pristine parent, aggregating once after all proposals")
 	isolatedWriterStaged := fs.Bool("isolated-writer-staged", false, "run dependent hub-to-leaf staged isolated cohorts, each forked from its exact parent candidate with one aggregate per stage")
 	isolationPolicyPath := fs.String("isolation-policy", "", "strict versioned JSON resource capacity and per-writer estimate file (required with --isolated-writers, --isolated-writer-waves or --isolated-writer-staged)")
+	cohortSelector := fs.String("cohort-selector", "", "staged wave selector: empty (frozen greedy derivation) or lexicographic-v1 (exact finite optimum over the same hard gates; requires --isolated-writer-staged)")
 	plannerContext := fs.String("planner-context", "", "planner evidence mode: source-bounded-v1 or pinned go-source-context-v1/go-source-context-v2/go-contract-context-v1/go-contract-context-v2/go-contract-context-v3")
 	agentContext := fs.Bool("agent-context", true, "bind committed scope-aware AGENTS.md and role-aware skill workflows to the new run")
 	workingContext := fs.Bool("working-context", false, "experimentally enable bounded editable context for dynamic explorer follow-ups")
@@ -149,6 +150,17 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	}
 	if (*isolatedWriters || *isolatedWriterWaves || *isolatedWriterStaged) != (*isolationPolicyPath != "") {
 		return errors.New("isolated-writers requires exactly one --isolation-policy PATH")
+	}
+	cohortSelectorVersion := 0
+	switch *cohortSelector {
+	case "":
+	case autonomousCohortSelectorLexicographicV1:
+		cohortSelectorVersion = 1
+	default:
+		return errors.New("cohort-selector must be empty or lexicographic-v1")
+	}
+	if cohortSelectorVersion != 0 && !*isolatedWriterStaged {
+		return errors.New("cohort-selector lexicographic-v1 requires --isolated-writer-staged with --isolation-policy PATH")
 	}
 	var isolationPolicy *isolatedWriterPolicyFile
 	if *isolatedWriters || *isolatedWriterWaves || *isolatedWriterStaged {
@@ -210,7 +222,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 		if fs.NArg() != 0 || *goalFile != "" {
 			return errors.New("inspect-plan takes run options without an objective")
 		}
-		options := autonomousCapabilities{parallel: *parallelWriters, isolation: isolationPolicy, isolationWaves: *isolatedWriterWaves, isolationStaged: *isolatedWriterStaged, agentContext: *agentContext, workingContext: *workingContext, dynamicExplorers: *dynamicExplorers,
+		options := autonomousCapabilities{parallel: *parallelWriters, isolation: isolationPolicy, isolationWaves: *isolatedWriterWaves, isolationStaged: *isolatedWriterStaged, cohortSelector: cohortSelectorVersion, agentContext: *agentContext, workingContext: *workingContext, dynamicExplorers: *dynamicExplorers,
 			plannerContext: *plannerContext, parser: *plannerContextRIExecutable, parserHash: *plannerContextRIExecutableSHA256,
 			parseCache: plannerParseCacheVersion, plannerPPR: plannerPPRVersion, reviewImpact: reviewImpactContextVersion, candidateCache: candidateFactsCacheVersion, autoCompact: *autoCompactTokenLimit, evidence: evidencePolicy, contextSelector: *contextSelector}
 		return inspectAutonomousPlan(ctx, root, options, *maxParallel, out)
@@ -226,7 +238,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 		if err := validateAutonomousObjective(objective); err != nil {
 			return err
 		}
-		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *isolatedWriterWaves, *isolatedWriterStaged, *plannerContext, plannerParseCacheVersion, plannerPPRVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, *repairIntelligence, out, *agentContext, *workingContext, *dynamicExplorers, evidencePolicy, *contextSelector)
+		return createAndRunAutonomous(ctx, root, objective, *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *isolatedWriterWaves, *isolatedWriterStaged, cohortSelectorVersion, *plannerContext, plannerParseCacheVersion, plannerPPRVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, *repairIntelligence, out, *agentContext, *workingContext, *dynamicExplorers, evidencePolicy, *contextSelector)
 	}
 	if fs.NArg() != 1 || fs.Arg(0) == "" {
 		return errors.New("run --autonomous requires one objective or --file PATH")
@@ -234,7 +246,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	if err := validateAutonomousObjective(fs.Arg(0)); err != nil {
 		return err
 	}
-	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *isolatedWriterWaves, *isolatedWriterStaged, *plannerContext, plannerParseCacheVersion, plannerPPRVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, *repairIntelligence, out, *agentContext, *workingContext, *dynamicExplorers, evidencePolicy, *contextSelector)
+	return createAndRunAutonomous(ctx, root, fs.Arg(0), *maxRepairs, *maxParallel, *parallelWriters, isolationPolicy, *isolatedWriterWaves, *isolatedWriterStaged, cohortSelectorVersion, *plannerContext, plannerParseCacheVersion, plannerPPRVersion, reviewImpactContextVersion, candidateFactsCacheVersion, *plannerContextRIExecutable, *plannerContextRIExecutableSHA256, *promptRecipe, *autoCompactTokenLimit, *prepareOnly, *repairIntelligence, out, *agentContext, *workingContext, *dynamicExplorers, evidencePolicy, *contextSelector)
 }
 
 func validatePlannerParseCacheVersion(plannerContext string, version int) error {
@@ -333,6 +345,28 @@ func validateAutonomousPlannerContext(mode, executable, executableSHA256 string)
 
 const autonomousContextSelectorRRFCoverageV1 = "rrf-coverage-v1"
 
+// autonomousCohortSelectorLexicographicV1 opts staged runs into the exact
+// finite lexicographic wave optimum over the same hard gates. Empty
+// preserves the frozen greedy derivation byte-for-byte.
+const autonomousCohortSelectorLexicographicV1 = "lexicographic-v1"
+
+// validateAutonomousCohortSelector rejects unknown staged wave selectors
+// before any durable run is created. Empty preserves exact historical
+// behavior; only lexicographic-v1 is admitted.
+func validateAutonomousCohortSelector(mode string, staged bool) (int, error) {
+	switch mode {
+	case "":
+		return 0, nil
+	case autonomousCohortSelectorLexicographicV1:
+		if !staged {
+			return 0, errors.New("cohort-selector lexicographic-v1 requires --isolated-writer-staged with --isolation-policy PATH")
+		}
+		return 1, nil
+	default:
+		return 0, errors.New("cohort-selector must be empty or lexicographic-v1")
+	}
+}
+
 // validateAutonomousContextSelector rejects unknown selector modes before any
 // durable run is created. Empty preserves exact historical/default behavior;
 // only rrf-coverage-v1 is admitted. A malformed flag creates no run.
@@ -357,6 +391,18 @@ func isLowerSHA256(value string) bool {
 	return true
 }
 
+// cohortSelectorFlag renders a resolved selector version back to its flag
+// spelling for shared validation. Unknown versions fail closed.
+func cohortSelectorFlag(version int) string {
+	if version == 1 {
+		return autonomousCohortSelectorLexicographicV1
+	}
+	if version != 0 {
+		return "invalid"
+	}
+	return ""
+}
+
 // validateAutonomousObjective rejects whitespace-only, invalid UTF-8 and
 // oversized objectives before any durable run is created. The 256 KiB bound
 // and nonempty UTF-8 conventions match planObjective goal-file validation.
@@ -373,11 +419,14 @@ func validateAutonomousObjective(objective string) error {
 	return nil
 }
 
-func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, parallelWriters bool, isolationPolicy *isolatedWriterPolicyFile, isolationWaves bool, isolationStaged bool, plannerContext string, plannerParseCacheVersion, plannerPPRVersion, reviewImpactContextVersion, candidateFactsCacheVersion int, plannerContextRIExecutable, plannerContextRIExecutableSHA256, promptRecipe string, autoCompactTokenLimit int64, prepareOnly, repairIntelligence bool, out io.Writer, agentContextEnabled, workingContextEnabled, dynamicExplorersEnabled bool, evidencePolicy *control.EvidenceAutoPolicy, contextSelector string) error {
+func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepairs, maxParallel int, parallelWriters bool, isolationPolicy *isolatedWriterPolicyFile, isolationWaves bool, isolationStaged bool, cohortSelectorVersion int, plannerContext string, plannerParseCacheVersion, plannerPPRVersion, reviewImpactContextVersion, candidateFactsCacheVersion int, plannerContextRIExecutable, plannerContextRIExecutableSHA256, promptRecipe string, autoCompactTokenLimit int64, prepareOnly, repairIntelligence bool, out io.Writer, agentContextEnabled, workingContextEnabled, dynamicExplorersEnabled bool, evidencePolicy *control.EvidenceAutoPolicy, contextSelector string) error {
 	if err := validateAutonomousObjective(objective); err != nil {
 		return err
 	}
 	if err := validateAutonomousContextSelector(contextSelector); err != nil {
+		return err
+	}
+	if _, err := validateAutonomousCohortSelector(cohortSelectorFlag(cohortSelectorVersion), isolationStaged); err != nil {
 		return err
 	}
 	if parallelWriters && (isolationPolicy != nil || isolationWaves || isolationStaged) {
@@ -429,7 +478,7 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 	if err != nil {
 		return err
 	}
-	capabilities := autonomousCapabilities{parallel: parallelWriters, isolation: isolationPolicy, isolationWaves: isolationWaves, isolationStaged: isolationStaged, workingContext: workingContextEnabled, dynamicExplorers: dynamicExplorersEnabled,
+	capabilities := autonomousCapabilities{parallel: parallelWriters, isolation: isolationPolicy, isolationWaves: isolationWaves, isolationStaged: isolationStaged, cohortSelector: cohortSelectorVersion, workingContext: workingContextEnabled, dynamicExplorers: dynamicExplorersEnabled,
 		plannerContext: plannerContext, parser: plannerContextRIExecutable, parserHash: plannerContextRIExecutableSHA256,
 		parseCache: plannerParseCacheVersion, plannerPPR: plannerPPRVersion, reviewImpact: reviewImpactContextVersion, candidateCache: candidateFactsCacheVersion, autoCompact: autoCompactTokenLimit, evidence: evidencePolicy}
 	if err := capabilities.resolve(cfg); err != nil {
@@ -444,6 +493,10 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 		}
 	}
 	parallelWriters, isolationPolicy, isolationWaves, isolationStaged = capabilities.parallel, capabilities.isolation, capabilities.isolationWaves, capabilities.isolationStaged
+	cohortSelectorVersion = capabilities.cohortSelector
+	if cohortSelectorVersion != 0 && (!isolationStaged || isolationPolicy == nil) {
+		return errors.New("cohort-selector lexicographic-v1 requires --isolated-writer-staged with --isolation-policy PATH; capability fallback cannot silently drop this selector")
+	}
 	plannerContext, plannerContextRIExecutable, plannerContextRIExecutableSHA256 = capabilities.plannerContext, capabilities.parser, capabilities.parserHash
 	plannerParseCacheVersion, plannerPPRVersion, reviewImpactContextVersion, candidateFactsCacheVersion = capabilities.parseCache, capabilities.plannerPPR, capabilities.reviewImpact, capabilities.candidateCache
 	if err := validatePlannerPPRVersion(plannerContext, plannerPPRVersion); err != nil {
@@ -533,6 +586,9 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 		if isolationStaged {
 			isolatedImplementationVersion = 3
 		}
+		if cohortSelectorVersion != 0 && isolatedImplementationVersion != 3 {
+			return errors.New("cohort-selector lexicographic-v1 requires --isolated-writer-staged with --isolation-policy PATH")
+		}
 	}
 	if cfg.Reviewer != nil {
 		cfg.ReviewerContract = "json-v1"
@@ -557,7 +613,8 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 			GraphVersion:                     1, MaxParallel: maxParallel, RepairPlanningVersion: 1,
 			ParallelImplementationVersion: parallelImplementationVersion,
 			IsolatedImplementationVersion: isolatedImplementationVersion, IsolationCapacity: isolationCapacity, IsolationEstimate: isolationEstimate,
-			CodexAutoCompact: autoCompact, EvidencePolicy: capabilities.evidence,
+			IsolationCohortSelectorVersion: cohortSelectorVersion,
+			CodexAutoCompact:               autoCompact, EvidencePolicy: capabilities.evidence,
 		},
 	}
 	if workingContextEnabled {

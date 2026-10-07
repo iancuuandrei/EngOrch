@@ -1,6 +1,7 @@
 package engineeringplan
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -408,6 +409,282 @@ func TestSelectResourceCohortSubsetRejectsNotReadyAndUnknown(t *testing.T) {
 	}
 }
 
+func TestSelectResourceCohortLexicographicBeatsGreedyPacking(t *testing.T) {
+	// Adversarial declared estimates: the critical-path leader is heavy,
+	// while two lighter tasks fit together but not alongside it. Greedy
+	// takes the leader first and admits one task; the finite optimum
+	// admits two. Estimates only; no wall-clock claim.
+	graph := resourceFixtureGraph(
+		resourceFixtureTask("impl-a", Implementation, []string{"research"}, []string{"a.go"}, 60),
+		resourceFixtureTask("impl-b", Implementation, []string{"research"}, []string{"b.go"}, 10),
+		resourceFixtureTask("impl-c", Implementation, []string{"research"}, []string{"c.go"}, 10),
+	)
+	ready := readyImplementations(t, graph)
+	demands := []TaskResourceDemand{
+		resourceFixtureDemand("impl-a", 6, 1, 1, 1),
+		resourceFixtureDemand("impl-b", 5, 1, 1, 1),
+		resourceFixtureDemand("impl-c", 5, 1, 1, 1),
+	}
+	capacity := resourceFixtureCapacity(10, 10, 3, 3)
+	greedy, err := SelectResourceCohort(graph, ready, demands, capacity, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(greedy.Tasks) != 1 || greedy.Tasks[0].ID != "impl-a" {
+		t.Fatalf("greedy did not take the heavy leader alone: %+v", greedy.Tasks)
+	}
+	optimal, err := SelectResourceCohortLexicographic(graph, ready, demands, capacity, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := []string{optimal.Tasks[0].ID, optimal.Tasks[1].ID}; len(optimal.Tasks) != 2 || !reflect.DeepEqual(got, []string{"impl-b", "impl-c"}) {
+		t.Fatalf("lexicographic optimum is not the lighter pair: %+v", optimal.Tasks)
+	}
+	if len(optimal.Blocked) != 1 || optimal.Blocked[0].TaskID != "impl-a" || optimal.Blocked[0].Reason != "capacity" || optimal.Blocked[0].Resource != "cpu_milli" {
+		t.Fatalf("leader remainder misreported: %+v", optimal.Blocked)
+	}
+	if optimal.Estimated.EstimatedCPUMilli != 10 {
+		t.Fatalf("optimal estimate is not the declared pair sum: %+v", optimal.Estimated)
+	}
+}
+
+func TestSelectResourceCohortLexicographicIsPermutationDeterministic(t *testing.T) {
+	graph := resourceFixtureGraph(
+		resourceFixtureTask("impl-a", Implementation, []string{"research"}, []string{"a.go"}, 60),
+		resourceFixtureTask("impl-b", Implementation, []string{"research"}, []string{"b.go"}, 10),
+		resourceFixtureTask("impl-c", Implementation, []string{"research"}, []string{"c.go"}, 10),
+	)
+	ready := readyImplementations(t, graph)
+	demands := []TaskResourceDemand{
+		resourceFixtureDemand("impl-a", 6, 1, 1, 1),
+		resourceFixtureDemand("impl-b", 5, 1, 1, 1),
+		resourceFixtureDemand("impl-c", 5, 1, 1, 1),
+	}
+	capacity := resourceFixtureCapacity(10, 10, 3, 3)
+	want, err := SelectResourceCohortLexicographic(graph, ready, demands, capacity, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reversedGraph := graph
+	reversedGraph.Tasks = append([]Task(nil), graph.Tasks...)
+	for i, j := 0, len(reversedGraph.Tasks)-1; i < j; i, j = i+1, j-1 {
+		reversedGraph.Tasks[i], reversedGraph.Tasks[j] = reversedGraph.Tasks[j], reversedGraph.Tasks[i]
+	}
+	reversedReady := append([]Task(nil), ready...)
+	for i, j := 0, len(reversedReady)-1; i < j; i, j = i+1, j-1 {
+		reversedReady[i], reversedReady[j] = reversedReady[j], reversedReady[i]
+	}
+	reversedDemands := append([]TaskResourceDemand(nil), demands...)
+	for i, j := 0, len(reversedDemands)-1; i < j; i, j = i+1, j-1 {
+		reversedDemands[i], reversedDemands[j] = reversedDemands[j], reversedDemands[i]
+	}
+	got, err := SelectResourceCohortLexicographic(reversedGraph, reversedReady, reversedDemands, capacity, 3)
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("selection changed with input order: got=%+v want=%+v err=%v", got, want, err)
+	}
+	wantBytes, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotBytes, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(wantBytes) != string(gotBytes) {
+		t.Fatalf("serialized selection differs with input order:\n%s\n%s", wantBytes, gotBytes)
+	}
+	var roundTrip ResourceCohort
+	if err := json.Unmarshal(wantBytes, &roundTrip); err != nil || !reflect.DeepEqual(roundTrip, want) {
+		t.Fatalf("serialized selection did not round-trip: %v", err)
+	}
+}
+
+func TestSelectResourceCohortLexicographicEnforcesAllCeilings(t *testing.T) {
+	fixture := func() (Graph, []Task) {
+		graph := resourceFixtureGraph(
+			resourceFixtureTask("impl-alpha", Implementation, []string{"research"}, []string{"alpha/api.go"}, 60),
+			resourceFixtureTask("impl-beta", Implementation, []string{"research"}, []string{"beta/api.go"}, 50),
+			resourceFixtureTask("impl-gamma", Implementation, []string{"research"}, []string{"gamma/api.go"}, 40),
+		)
+		ready := []Task{}
+		for _, task := range graph.Tasks {
+			if task.Kind == Implementation {
+				ready = append(ready, task)
+			}
+		}
+		return graph, ready
+	}
+	cases := []struct {
+		name     string
+		demands  []TaskResourceDemand
+		capacity ResourceCapacity
+		resource string
+	}{
+		{"cpu", []TaskResourceDemand{resourceFixtureDemand("impl-alpha", 2, 1, 1, 1), resourceFixtureDemand("impl-beta", 2, 1, 1, 1), resourceFixtureDemand("impl-gamma", 2, 1, 1, 1)}, resourceFixtureCapacity(3, 10, 3, 3), "cpu_milli"},
+		{"memory", []TaskResourceDemand{resourceFixtureDemand("impl-alpha", 1, 2, 1, 1), resourceFixtureDemand("impl-beta", 1, 2, 1, 1), resourceFixtureDemand("impl-gamma", 1, 2, 1, 1)}, resourceFixtureCapacity(10, 3, 3, 3), "memory_mib"},
+		{"verification", []TaskResourceDemand{resourceFixtureDemand("impl-alpha", 1, 1, 1, 1), resourceFixtureDemand("impl-beta", 1, 1, 1, 1), resourceFixtureDemand("impl-gamma", 1, 1, 1, 1)}, resourceFixtureCapacity(10, 10, 1, 3), "verification_slots"},
+		{"total_runtime", []TaskResourceDemand{resourceFixtureDemand("impl-alpha", 1, 1, 1, 1), resourceFixtureDemand("impl-beta", 1, 1, 1, 1), resourceFixtureDemand("impl-gamma", 1, 1, 1, 1)}, func() ResourceCapacity {
+			capacity := resourceFixtureCapacity(10, 10, 3, 3)
+			capacity.TotalRuntimeSlots = 1
+			return capacity
+		}(), "total_runtime_slots"},
+		{"provider", []TaskResourceDemand{resourceFixtureDemand("impl-alpha", 1, 1, 1, 1), resourceFixtureDemand("impl-beta", 1, 1, 1, 1), resourceFixtureDemand("impl-gamma", 1, 1, 1, 1)}, func() ResourceCapacity {
+			capacity := resourceFixtureCapacity(10, 10, 3, 3)
+			capacity.ProviderSlots = []ProviderSlotLimit{{Provider: fixtureRuntime.Provider, Slots: 1}}
+			return capacity
+		}(), "provider_slots"},
+		{"model", []TaskResourceDemand{resourceFixtureDemand("impl-alpha", 1, 1, 1, 1), resourceFixtureDemand("impl-beta", 1, 1, 1, 1), resourceFixtureDemand("impl-gamma", 1, 1, 1, 1)}, func() ResourceCapacity {
+			capacity := resourceFixtureCapacity(10, 10, 3, 3)
+			capacity.ModelSlots = []ModelSlotLimit{{Model: providerModel(fixtureRuntime), Slots: 1}}
+			return capacity
+		}(), "model_slots"},
+		{"runtime_route", []TaskResourceDemand{resourceFixtureDemand("impl-alpha", 1, 1, 1, 1), resourceFixtureDemand("impl-beta", 1, 1, 1, 1), resourceFixtureDemand("impl-gamma", 1, 1, 1, 1)}, resourceFixtureCapacity(10, 10, 3, 1), "runtime_slots"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			graph, ready := fixture()
+			cohort, err := SelectResourceCohortLexicographic(graph, ready, tc.demands, tc.capacity, 3)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(cohort.Tasks) != 1 || cohort.Tasks[0].ID != "impl-alpha" {
+				t.Fatalf("ceiling %s did not bind to the critical-path singleton: %+v", tc.name, cohort.Tasks)
+			}
+			if len(cohort.Blocked) != 2 || cohort.Blocked[0].Resource != tc.resource || cohort.Blocked[1].Resource != tc.resource {
+				t.Fatalf("ceiling %s misreported: %+v", tc.name, cohort.Blocked)
+			}
+			if tc.resource == "runtime_slots" || tc.resource == "provider_slots" || tc.resource == "model_slots" {
+				if cohort.Blocked[0].Runtime == nil {
+					t.Fatalf("ceiling %s omitted the route binding: %+v", tc.name, cohort.Blocked[0])
+				}
+			}
+		})
+	}
+	t.Run("all_fit", func(t *testing.T) {
+		graph, ready := fixture()
+		demands := []TaskResourceDemand{
+			resourceFixtureDemand("impl-alpha", 1, 1, 1, 1),
+			resourceFixtureDemand("impl-beta", 1, 1, 1, 1),
+			resourceFixtureDemand("impl-gamma", 1, 1, 1, 1),
+		}
+		cohort, err := SelectResourceCohortLexicographic(graph, ready, demands, resourceFixtureCapacity(10, 10, 3, 3), 3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cohort.Tasks) != 3 || len(cohort.Blocked) != 0 {
+			t.Fatalf("fitting cohort was not fully admitted: %+v", cohort)
+		}
+	})
+}
+
+func TestSelectResourceCohortLexicographicRejectsOverlapDependencyUnknownAndBounds(t *testing.T) {
+	overlapping := resourceFixtureGraph(
+		resourceFixtureTask("impl-a", Implementation, []string{"research"}, []string{"shared/Api.go"}, 20),
+		resourceFixtureTask("impl-b", Implementation, []string{"research"}, []string{"shared/api.go"}, 10),
+	)
+	ready := readyImplementations(t, overlapping)
+	demands := []TaskResourceDemand{
+		resourceFixtureDemand("impl-a", 1, 1, 1, 1),
+		resourceFixtureDemand("impl-b", 1, 1, 1, 1),
+	}
+	cohort, err := SelectResourceCohortLexicographic(overlapping, ready, demands, resourceFixtureCapacity(2, 2, 2, 2), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cohort.Tasks) != 1 || cohort.Tasks[0].ID != "impl-a" || len(cohort.Blocked) != 1 || cohort.Blocked[0].Reason != "dependency_or_write_conflict" || cohort.Blocked[0].BlockingTaskID != "impl-a" {
+		t.Fatalf("casefolded overlap was not the blocking reason: %+v", cohort)
+	}
+
+	chained := resourceFixtureGraph(
+		resourceFixtureTask("impl-a", Implementation, []string{"research"}, []string{"a.go"}, 20),
+		resourceFixtureTask("impl-blocked", Implementation, []string{"impl-a"}, []string{"b.go"}, 10),
+	)
+	complete := readyImplementations(t, chained)
+	byID := map[string]Task{}
+	for _, task := range chained.Tasks {
+		byID[task.ID] = task
+	}
+	withBlocked := append(append([]Task(nil), complete...), byID["impl-blocked"])
+	withDemands := []TaskResourceDemand{resourceFixtureDemand("impl-a", 1, 1, 1, 1), resourceFixtureDemand("impl-blocked", 1, 1, 1, 1)}
+	if _, err := SelectResourceCohortLexicographic(chained, withBlocked, withDemands, resourceFixtureCapacity(2, 2, 2, 2), 2); err == nil || !strings.Contains(err.Error(), "exact ready implementation set") {
+		t.Fatalf("dependency-blocked input accepted: %v", err)
+	}
+
+	unknownGraph := resourceFixtureGraph(
+		resourceFixtureTask("impl-a", Implementation, []string{"research"}, []string{"a.go"}, 20),
+		resourceFixtureTask("impl-b", Implementation, []string{"research"}, []string{"b.go"}, 10),
+	)
+	for i := range unknownGraph.Tasks {
+		if unknownGraph.Tasks[i].ID == "impl-b" {
+			unknownGraph.Tasks[i].Attempts = []Attempt{{ID: "attempt-1", Outcome: AttemptUnknown}}
+		}
+	}
+	unknownByID := map[string]Task{}
+	for _, task := range unknownGraph.Tasks {
+		unknownByID[task.ID] = task
+	}
+	unknownReady := []Task{unknownByID["impl-a"], unknownByID["impl-b"]}
+	unknownDemands := []TaskResourceDemand{resourceFixtureDemand("impl-a", 1, 1, 1, 1), resourceFixtureDemand("impl-b", 1, 1, 1, 1)}
+	if _, err := SelectResourceCohortLexicographic(unknownGraph, unknownReady, unknownDemands, resourceFixtureCapacity(2, 2, 2, 2), 2); err == nil || !strings.Contains(err.Error(), "exact ready implementation set") {
+		t.Fatalf("UNKNOWN attempt input accepted: %v", err)
+	}
+	exactReady := []Task{unknownByID["impl-a"]}
+	exact, err := SelectResourceCohortLexicographic(unknownGraph, exactReady, []TaskResourceDemand{resourceFixtureDemand("impl-a", 1, 1, 1, 1)}, resourceFixtureCapacity(2, 2, 2, 2), 1)
+	if err != nil || len(exact.Tasks) != 1 || exact.Tasks[0].ID != "impl-a" {
+		t.Fatalf("resolved subset around UNKNOWN was not selected: %+v %v", exact, err)
+	}
+
+	graph := resourceFixtureGraph(resourceFixtureTask("impl-a", Implementation, []string{"research"}, []string{"a.go"}, 10))
+	single := readyImplementations(t, graph)
+	singleDemand := []TaskResourceDemand{resourceFixtureDemand("impl-a", 1, 1, 1, 1)}
+	singleCapacity := resourceFixtureCapacity(1, 1, 1, 1)
+	if _, err := SelectResourceCohortLexicographic(graph, single, singleDemand, singleCapacity, 0); err == nil || !strings.Contains(err.Error(), "resource cohort bound must be 1..8") {
+		t.Fatalf("zero cohort bound accepted: %v", err)
+	}
+	if _, err := SelectResourceCohortLexicographic(graph, single, singleDemand, singleCapacity, 9); err == nil || !strings.Contains(err.Error(), "resource cohort bound must be 1..8") {
+		t.Fatalf("oversized cohort bound accepted: %v", err)
+	}
+	missingRuntime := resourceFixtureCapacity(1, 1, 1, 1)
+	missingRuntime.RuntimeSlots = []RuntimeSlotLimit{{Runtime: RuntimeResourceKey{ProfileID: "other", Provider: "openai", Model: "gpt-6-luna"}, Slots: 1}}
+	if _, err := SelectResourceCohortLexicographic(graph, single, singleDemand, missingRuntime, 1); err == nil || !strings.Contains(err.Error(), "missing exact runtime capacity") {
+		t.Fatalf("missing exact runtime capacity accepted: %v", err)
+	}
+	missingProvider := resourceFixtureCapacity(1, 1, 1, 1)
+	missingProvider.ProviderSlots = []ProviderSlotLimit{{Provider: "other", Slots: 1}}
+	if _, err := SelectResourceCohortLexicographic(graph, single, singleDemand, missingProvider, 1); err == nil || !strings.Contains(err.Error(), "missing provider capacity") {
+		t.Fatalf("missing provider capacity accepted: %v", err)
+	}
+	zeroMemory := resourceFixtureCapacity(1, 1, 1, 1)
+	zeroMemory.MemoryMiB = 0
+	if _, err := SelectResourceCohortLexicographic(graph, single, singleDemand, zeroMemory, 1); err == nil {
+		t.Fatal("zero memory capacity treated as unlimited")
+	}
+	manyTasks := []Task{{ID: "research", Kind: Research, Title: "Shared research", ScopePaths: []string{"."}, ExpectedEvidence: []Evidence{{Kind: "fact", Description: "shared"}}, EstimatedSeconds: 5, Completed: true}}
+	manyDemands := []TaskResourceDemand{}
+	for i := 0; i < 9; i++ {
+		id := strings.Repeat("a", i+1)
+		manyTasks = append(manyTasks, resourceFixtureTask(id, Implementation, []string{"research"}, []string{id + ".go"}, 10))
+		manyDemands = append(manyDemands, resourceFixtureDemand(id, 1, 1, 1, 1))
+	}
+	manyTasks = append(manyTasks,
+		resourceFixtureTask("verify", Verification, []string{"a", "aa", "aaa", "aaaa", "aaaaa", "aaaaaa", "aaaaaaa", "aaaaaaaa", "aaaaaaaaa"}, nil, 10),
+		resourceFixtureTask("review", Review, []string{"verify"}, nil, 5),
+	)
+	many := Graph{Version: Version, Mode: ModeGraph, Summary: "nine ready implementations", Tasks: manyTasks}
+	manyReady := []Task{}
+	for _, task := range many.Tasks {
+		if task.Kind == Implementation {
+			manyReady = append(manyReady, task)
+		}
+	}
+	if len(manyReady) != 9 {
+		t.Fatalf("nine-ready fixture did not stay ready: %d", len(manyReady))
+	}
+	if _, err := SelectResourceCohortLexicographic(many, manyReady, manyDemands, resourceFixtureCapacity(64, 64, 64, 64), 8); err == nil || !strings.Contains(err.Error(), "one to eight ready implementations") {
+		t.Fatalf("nine-ready finite bound bypassed: %v", err)
+	}
+}
+
 func TestSumResourceDemandsMatchesCohortEstimated(t *testing.T) {
 	graph := resourceFixtureGraph(
 		resourceFixtureTask("impl-a", Implementation, []string{"research"}, []string{"a.go"}, 20),
@@ -424,5 +701,105 @@ func TestSumResourceDemandsMatchesCohortEstimated(t *testing.T) {
 	}
 	if got := SumResourceDemands(demands); !reflect.DeepEqual(got, cohort.Estimated) {
 		t.Fatalf("shared totals differ: sum=%+v cohort=%+v", got, cohort.Estimated)
+	}
+}
+
+func TestSelectResourceWavesLexicographicReordersAdversarialPacking(t *testing.T) {
+	// Same adversarial declared estimates as the single-cohort test: the
+	// critical-path leader is heavy while two lighter tasks fit together
+	// but not alongside it. Greedy waves open with the leader alone; the
+	// lexicographic optimum opens with the lighter pair. Estimates only;
+	// no wall-clock claim.
+	graph := resourceFixtureGraph(
+		resourceFixtureTask("impl-a", Implementation, []string{"research"}, []string{"a.go"}, 60),
+		resourceFixtureTask("impl-b", Implementation, []string{"research"}, []string{"b.go"}, 10),
+		resourceFixtureTask("impl-c", Implementation, []string{"research"}, []string{"c.go"}, 10),
+	)
+	ready := readyImplementations(t, graph)
+	demands := []TaskResourceDemand{
+		resourceFixtureDemand("impl-a", 6, 1, 1, 1),
+		resourceFixtureDemand("impl-b", 5, 1, 1, 1),
+		resourceFixtureDemand("impl-c", 5, 1, 1, 1),
+	}
+	capacity := resourceFixtureCapacity(10, 10, 3, 3)
+	greedy, err := SelectResourceWaves(graph, ready, demands, capacity, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(greedy) != 2 || len(greedy[0].Tasks) != 1 || greedy[0].Tasks[0].ID != "impl-a" {
+		t.Fatalf("greedy waves did not open with the heavy leader: %+v", greedy)
+	}
+	optimal, err := SelectResourceWavesLexicographic(graph, ready, demands, capacity, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(optimal) != 2 || len(optimal[0].Tasks) != 2 || optimal[0].Tasks[0].ID != "impl-b" || optimal[0].Tasks[1].ID != "impl-c" {
+		t.Fatalf("lexicographic waves did not open with the lighter pair: %+v", optimal)
+	}
+	if len(optimal[1].Tasks) != 1 || optimal[1].Tasks[0].ID != "impl-a" {
+		t.Fatalf("lexicographic remainder is not the leader alone: %+v", optimal[1])
+	}
+	if len(optimal[1].Blocked) != 0 {
+		t.Fatalf("final wave retains blocked tasks: %+v", optimal[1].Blocked)
+	}
+	// Coverage is identical; only the partition order differs.
+	greedyIDs, optimalIDs := map[string]bool{}, map[string]bool{}
+	for _, wave := range greedy {
+		for _, task := range wave.Tasks {
+			greedyIDs[task.ID] = true
+		}
+	}
+	for _, wave := range optimal {
+		for _, task := range wave.Tasks {
+			optimalIDs[task.ID] = true
+		}
+	}
+	if !reflect.DeepEqual(greedyIDs, optimalIDs) {
+		t.Fatalf("wave coverage differs: greedy=%v lexicographic=%v", greedyIDs, optimalIDs)
+	}
+}
+
+func TestSelectResourceCohortSubsetLexicographicUsesSubsetContract(t *testing.T) {
+	graph := resourceFixtureGraph(
+		resourceFixtureTask("impl-a", Implementation, []string{"research"}, []string{"a.go"}, 60),
+		resourceFixtureTask("impl-b", Implementation, []string{"research"}, []string{"b.go"}, 10),
+		resourceFixtureTask("impl-c", Implementation, []string{"research"}, []string{"c.go"}, 10),
+	)
+	ready := readyImplementations(t, graph)
+	byID := map[string]Task{}
+	for _, task := range ready {
+		byID[task.ID] = task
+	}
+	// An explicit remainder subset (after admitting impl-a elsewhere) still
+	// selects the exact optimum over that subset.
+	candidates := []Task{byID["impl-b"], byID["impl-c"]}
+	demands := []TaskResourceDemand{
+		resourceFixtureDemand("impl-b", 5, 1, 1, 1),
+		resourceFixtureDemand("impl-c", 5, 1, 1, 1),
+	}
+	cohort, err := SelectResourceCohortSubsetLexicographic(graph, candidates, demands, resourceFixtureCapacity(10, 10, 3, 3), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cohort.Tasks) != 2 || len(cohort.Blocked) != 0 {
+		t.Fatalf("subset optimum did not admit the fitting pair: %+v", cohort)
+	}
+	// A dependency-blocked candidate is rejected, never silently dropped.
+	chained := resourceFixtureGraph(
+		resourceFixtureTask("impl-a", Implementation, []string{"research"}, []string{"a.go"}, 20),
+		resourceFixtureTask("impl-blocked", Implementation, []string{"impl-a"}, []string{"b.go"}, 10),
+	)
+	complete := readyImplementations(t, chained)
+	chainedByID := map[string]Task{}
+	for _, task := range chained.Tasks {
+		chainedByID[task.ID] = task
+	}
+	withBlocked := append(append([]Task(nil), complete...), chainedByID["impl-blocked"])
+	withDemands := []TaskResourceDemand{resourceFixtureDemand("impl-a", 1, 1, 1, 1), resourceFixtureDemand("impl-blocked", 1, 1, 1, 1)}
+	if _, err := SelectResourceCohortSubsetLexicographic(chained, withBlocked, withDemands, resourceFixtureCapacity(2, 2, 2, 2), 2); err == nil || !strings.Contains(err.Error(), "not an exact ready implementation") {
+		t.Fatalf("dependency-blocked subset input accepted: %v", err)
+	}
+	if _, err := SelectResourceCohortSubsetLexicographic(graph, nil, nil, resourceFixtureCapacity(2, 2, 2, 2), 2); err == nil || !strings.Contains(err.Error(), "subset is empty") {
+		t.Fatalf("empty subset accepted: %v", err)
 	}
 }

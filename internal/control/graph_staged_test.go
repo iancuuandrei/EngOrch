@@ -679,3 +679,143 @@ func TestStagedForkCandidateVersionCompatibility(t *testing.T) {
 		t.Fatalf("fork intent parent version not preserved: %+v", intent.ParentCandidate)
 	}
 }
+
+func stagedLexicographicCreation(t *testing.T) Creation {
+	t.Helper()
+	c := stagedThreeTaskCreation(t)
+	c.Execution.IsolationCohortSelectorVersion = 1
+	if err := c.Execution.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestStagedLexicographicSelectorOptInPreparation(t *testing.T) {
+	c := stagedLexicographicCreation(t)
+	path, s := isolatedGraphAwaitingApprovalWithGraph(t, c, stagedHubLeavesGraphFixture())
+	machineAuthorizePlan(t, path, s)
+	if _, err := ensureGraphRecorded(path, s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StartWorkspace(context.Background(), path); err != nil {
+		t.Fatal(err)
+	}
+	prep, err := PrepareStagedCohort(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prep.Version != 3 || prep.CohortSelectorVersion != 1 {
+		t.Fatalf("lexicographic preparation did not freeze the selector: %+v", prep)
+	}
+	if prep.CohortIndex != 0 || len(prep.SelectedTaskIDs) != 1 || prep.SelectedTaskIDs[0] != "impl-alpha" {
+		t.Fatalf("hub preparation did not freeze hub only: %+v", prep)
+	}
+	current, err := Inspect(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.GraphIsolationPreparation == nil || current.GraphIsolationPreparation.CohortSelectorVersion != 1 {
+		t.Fatalf("journal replay dropped the frozen selector: %+v", current.GraphIsolationPreparation)
+	}
+	// Recomputation from the same frozen policy, graph source, and parent
+	// candidate must reproduce the recorded preparation exactly.
+	bare := current
+	bare.GraphIsolationPreparation = nil
+	recomputed, err := expectedStagedPreparation(bare)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameCanonical(recomputed, *current.GraphIsolationPreparation) {
+		t.Fatal("staged lexicographic preparation is not deterministic under replay")
+	}
+	// A substituted selector must fail closed rather than dispatch.
+	forged := current
+	tampered := *current.GraphIsolationPreparation
+	tampered.CohortSelectorVersion = 0
+	if err := replayStagedPreparation(&forged, journal.Event{Kind: "graph.staged-prepared", Payload: mustCanonical(t, tampered)}); err == nil {
+		t.Fatal("selector-substituted staged preparation accepted")
+	}
+	// An out-of-range selector must fail closed before any wave derivation.
+	invalid := current
+	invalid.Creation.Execution = &ExecutionPolicy{}
+	*invalid.Creation.Execution = *current.Creation.Execution
+	invalid.Creation.Execution.IsolationCohortSelectorVersion = 2
+	invalid.GraphIsolationPreparation = nil
+	if _, err := expectedStagedPreparation(invalid); err == nil || !strings.Contains(err.Error(), "invalid isolation cohort selector") {
+		t.Fatalf("out-of-range selector admitted: %v", err)
+	}
+}
+
+func TestStagedGreedyLegacyPreparationOmitsSelector(t *testing.T) {
+	c := stagedThreeTaskCreation(t)
+	if c.Execution.IsolationCohortSelectorVersion != 0 {
+		t.Fatalf("default staged creation carries a selector: %+v", c.Execution)
+	}
+	path, s := isolatedGraphAwaitingApprovalWithGraph(t, c, stagedHubLeavesGraphFixture())
+	machineAuthorizePlan(t, path, s)
+	if _, err := ensureGraphRecorded(path, s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StartWorkspace(context.Background(), path); err != nil {
+		t.Fatal(err)
+	}
+	prep, err := PrepareStagedCohort(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prep.CohortSelectorVersion != 0 {
+		t.Fatalf("greedy preparation carries a selector: %+v", prep)
+	}
+	raw, err := json.Marshal(prep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "cohort_selector_version") {
+		t.Fatalf("absent selector changed legacy preparation serialization: %s", raw)
+	}
+	// The frozen uniform per-writer estimate template applies identical
+	// demands to every ready implementation, so greedy and lexicographic
+	// wave derivations agree on this run. This is a stated template
+	// limitation, not an optimum claim: divergence is demonstrated at the
+	// selector unit level with unequal demands instead of invented
+	// per-writer estimates here.
+	current, err := Inspect(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready, err := graphReadyTasks(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var implementations []engineeringplan.Task
+	for _, task := range ready {
+		if task.Kind == engineeringplan.Implementation {
+			implementations = append(implementations, task)
+		}
+	}
+	demands, err := isolationResourceDemands(current, implementations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	greedy, err := engineeringplan.SelectResourceWaves(current.Graph.Graph, implementations, demands, *current.Creation.Execution.IsolationCapacity, current.Creation.Execution.EffectiveMaxParallel())
+	if err != nil {
+		t.Fatal(err)
+	}
+	optimal, err := engineeringplan.SelectResourceWavesLexicographic(current.Graph.Graph, implementations, demands, *current.Creation.Execution.IsolationCapacity, current.Creation.Execution.EffectiveMaxParallel())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(greedy) != len(optimal) {
+		t.Fatalf("uniform-template waves diverge unexpectedly: greedy=%d lexicographic=%d", len(greedy), len(optimal))
+	}
+	for i := range greedy {
+		if len(greedy[i].Tasks) != len(optimal[i].Tasks) {
+			t.Fatalf("uniform-template wave %d diverges unexpectedly", i)
+		}
+		for j := range greedy[i].Tasks {
+			if greedy[i].Tasks[j].ID != optimal[i].Tasks[j].ID {
+				t.Fatalf("uniform-template wave %d member %d diverges unexpectedly", i, j)
+			}
+		}
+	}
+}

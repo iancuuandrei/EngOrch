@@ -16,6 +16,7 @@ type autonomousCapabilities struct {
 	isolation                                            *isolatedWriterPolicyFile
 	isolationWaves                                       bool
 	isolationStaged                                      bool
+	cohortSelector                                       int
 	plannerContext, parser, parserHash                   string
 	parseCache, plannerPPR, reviewImpact, candidateCache int
 	autoCompact                                          int64
@@ -63,6 +64,7 @@ func (o *autonomousCapabilities) resolve(cfg config.Config) error {
 		if reason != "" {
 			add("parallel_writers", reason, "serial_writer")
 			o.parallel, o.isolation, o.isolationWaves, o.isolationStaged = false, nil, false, false
+			o.cohortSelector = 0
 		}
 	}
 	if o.autoCompact != 0 {

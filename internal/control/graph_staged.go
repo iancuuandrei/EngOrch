@@ -135,6 +135,38 @@ func stagedCohortIndex(s Snapshot) int {
 	return len(s.GraphStagedCohorts)
 }
 
+// stagedCohortSelector returns the frozen per-wave selector for staged
+// preparation: 0 preserves the greedy derivation byte-for-byte, 1 selects
+// the exact finite lexicographic optimum over the same hard gates. Any
+// other value is rejected rather than reinterpreted.
+func stagedCohortSelector(s Snapshot) (int, error) {
+	if s.Creation.Execution == nil {
+		return 0, errors.New("staged isolation not enabled")
+	}
+	switch s.Creation.Execution.IsolationCohortSelectorVersion {
+	case 0, 1:
+		return s.Creation.Execution.IsolationCohortSelectorVersion, nil
+	default:
+		return 0, errors.New("invalid isolation cohort selector version")
+	}
+}
+
+// selectStagedWaves derives the current-subset waves with the frozen
+// selector. Greedy remains the default; the lexicographic optimum only
+// applies when the immutable run policy opts in.
+func selectStagedWaves(s Snapshot, implementations []engineeringplan.Task, demands []engineeringplan.TaskResourceDemand) ([]engineeringplan.ResourceCohort, int, error) {
+	selector, err := stagedCohortSelector(s)
+	if err != nil {
+		return nil, 0, err
+	}
+	if selector == 1 {
+		waves, err := engineeringplan.SelectResourceWavesLexicographic(s.Graph.Graph, implementations, demands, *s.Creation.Execution.IsolationCapacity, s.Creation.Execution.EffectiveMaxParallel())
+		return waves, selector, err
+	}
+	waves, err := engineeringplan.SelectResourceWaves(s.Graph.Graph, implementations, demands, *s.Creation.Execution.IsolationCapacity, s.Creation.Execution.EffectiveMaxParallel())
+	return waves, selector, err
+}
+
 // expectedStagedPreparation freezes the exact CURRENT ready implementation
 // subset with its exact graph/candidate/head/resources. It uses the existing
 // exact-ready SelectResourceCohort scope with bounded W1 waves when more
@@ -221,8 +253,11 @@ func expectedStagedPreparation(s Snapshot) (GraphIsolationPreparation, error) {
 	if err != nil {
 		return GraphIsolationPreparation{}, err
 	}
-	// Exact-ready scope with bounded W1 waves on remainder.
-	waves, err := engineeringplan.SelectResourceWaves(s.Graph.Graph, implementations, demands, *s.Creation.Execution.IsolationCapacity, s.Creation.Execution.EffectiveMaxParallel())
+	// Exact-ready scope with bounded W1 waves on remainder, derived with the
+	// frozen cohort selector: greedy by default, lexicographic optimum only
+	// when the immutable run policy opts in. Objectives optimize declared
+	// estimates, not measured makespan; coupling stays a hard gate.
+	waves, selector, err := selectStagedWaves(s, implementations, demands)
 	if err != nil {
 		return GraphIsolationPreparation{}, err
 	}
@@ -246,7 +281,7 @@ func expectedStagedPreparation(s Snapshot) (GraphIsolationPreparation, error) {
 		return GraphIsolationPreparation{}, errors.New("staged waves do not cover all ready implementations")
 	}
 	total := engineeringplan.SumResourceDemands(demands)
-	prep := GraphIsolationPreparation{Version: 3, PlanID: s.Graph.PlanID, GraphDigest: s.Graph.Digest, Revision: s.Graph.Revision, BaseCandidateID: baseID, Capacity: *s.Creation.Execution.IsolationCapacity, Demands: demands, SelectedTaskIDs: ids, Estimated: total, Waves: waveIDs, WaveEstimated: waveEstimated, WaveBlocked: waveBlocked, CohortIndex: cohortIndex}
+	prep := GraphIsolationPreparation{Version: 3, PlanID: s.Graph.PlanID, GraphDigest: s.Graph.Digest, Revision: s.Graph.Revision, BaseCandidateID: baseID, Capacity: *s.Creation.Execution.IsolationCapacity, Demands: demands, SelectedTaskIDs: ids, Estimated: total, Waves: waveIDs, WaveEstimated: waveEstimated, WaveBlocked: waveBlocked, CohortIndex: cohortIndex, CohortSelectorVersion: selector}
 	prep.PreparationID, err = canonical.Hash("harness.graph-staged-preparation.v1", prep)
 	return prep, err
 }
@@ -412,6 +447,12 @@ func replayStagedPreparation(s *Snapshot, e journal.Event) error {
 	}
 	if prep.Version != 3 {
 		return errors.New("invalid staged preparation version")
+	}
+	if prep.CohortSelectorVersion != 0 && prep.CohortSelectorVersion != 1 {
+		return errors.New("invalid staged cohort selector version")
+	}
+	if s.Creation.Execution == nil || prep.CohortSelectorVersion != s.Creation.Execution.IsolationCohortSelectorVersion {
+		return errors.New("staged cohort selector differs from frozen policy")
 	}
 	if s.GraphIsolationPreparation != nil {
 		return errors.New("staged preparation already recorded")
