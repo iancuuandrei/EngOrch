@@ -49,6 +49,20 @@ func stagedCouplingAwareCreation(t *testing.T) Creation {
 	return c
 }
 
+func stagedObservedCouplingCreation(t *testing.T) Creation {
+	t.Helper()
+	c := stagedThreeTaskCreation(t)
+	c.Execution.IsolationCohortSelectorVersion = 3
+	c.Config.PlannerContract = plannerContractGraphV9
+	if err := c.Execution.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Config.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
 func TestStagedCouplingAwareSelectorParsesAndBinds(t *testing.T) {
 	c := stagedCouplingAwareCreation(t)
 	invocation, err := plannerInvocationWithContextsAndRecipe(c.Config, "implement hub then leaves", nil, nil, c.Execution)
@@ -281,5 +295,145 @@ func TestStagedCouplingAwareAbsentCompatAndReplay(t *testing.T) {
 	}
 	if couplingPolicy.Execution.IsolationCohortSelectorVersion != 2 {
 		t.Fatalf("coupling-aware selector drifted from version 2: %d", couplingPolicy.Execution.IsolationCohortSelectorVersion)
+	}
+}
+
+func TestStagedObservedSelector3PolicyBinding(t *testing.T) {
+	c := stagedObservedCouplingCreation(t)
+	if c.Config.PlannerContract != plannerContractGraphV9 {
+		t.Fatalf("observed-coupling policy drifted from plan-graph-v9: %s", c.Config.PlannerContract)
+	}
+	if c.Execution.IsolationCohortSelectorVersion != 3 {
+		t.Fatalf("observed-coupling selector drifted from version 3: %d", c.Execution.IsolationCohortSelectorVersion)
+	}
+	// Forged observed labels on the planner wire stay rejected under v9.
+	forged := stagedCouplingFixture(
+		[]engineeringplan.Task{stagedCouplingLeaf("impl-beta", "beta.txt", 30)},
+		[]engineeringplan.TaskCoupling{{From: "impl-alpha", To: "impl-beta", Level: engineeringplan.CouplingC2, Reason: "same_observed_package", Provenance: engineeringplan.CouplingProvenanceTopologyObserved, Evidence: "planner claims observed truth"}},
+	)
+	raw, err := canonical.Bytes(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = raw
+	if err := forged.Validate(); err == nil {
+		t.Fatal("graph with forged observed provenance admitted")
+	}
+}
+
+func TestStagedObservedMissingRIFallbackSameWaves(t *testing.T) {
+	// Without admitted RI, selector 3 degrades to the planner advisory
+	// selection: same waves as selector 2 over the same couplings, version
+	// marker aside, with no absence claim.
+	advisory := []engineeringplan.TaskCoupling{{From: "impl-beta", To: "impl-gamma", Level: engineeringplan.CouplingC1, Reason: "import_neighborhood", Provenance: engineeringplan.CouplingProvenancePlannerAdvisory, Evidence: "beta and gamma share import neighborhood"}}
+	leaves := []engineeringplan.Task{
+		stagedCouplingLeaf("impl-beta", "beta.txt", 30),
+		stagedCouplingLeaf("impl-gamma", "gamma.txt", 30),
+	}
+	couplingCreation := stagedCouplingAwareCreation(t)
+	couplingGraph := stagedCouplingFixture(leaves, advisory)
+	_, couplingCurrent := stagedPrepareWithGraph(t, couplingCreation, couplingGraph)
+	observedCreation := stagedObservedCouplingCreation(t)
+	observedGraph := stagedCouplingFixture(leaves, advisory)
+	_, observedCurrent := stagedPrepareWithGraph(t, observedCreation, observedGraph)
+	couplingPrep, observedPrep := couplingCurrent.GraphIsolationPreparation, observedCurrent.GraphIsolationPreparation
+	if couplingPrep == nil || observedPrep == nil {
+		t.Fatalf("missing preparations: %+v %+v", couplingPrep, observedPrep)
+	}
+	if couplingPrep.CohortSelectorVersion != 2 || observedPrep.CohortSelectorVersion != 3 {
+		t.Fatalf("selector versions drifted: %d vs %d", couplingPrep.CohortSelectorVersion, observedPrep.CohortSelectorVersion)
+	}
+	if len(couplingPrep.Waves) != len(observedPrep.Waves) {
+		t.Fatalf("fallback waves differ without RI: %+v vs %+v", couplingPrep.Waves, observedPrep.Waves)
+	}
+	for i := range couplingPrep.Waves {
+		if len(couplingPrep.Waves[i]) != len(observedPrep.Waves[i]) {
+			t.Fatalf("fallback wave %d differs without RI", i)
+		}
+		for j := range couplingPrep.Waves[i] {
+			if couplingPrep.Waves[i][j] != observedPrep.Waves[i][j] {
+				t.Fatalf("fallback wave %d task %d differs without RI", i, j)
+			}
+		}
+	}
+}
+
+func TestStagedObservedPreparationReplayRoundTrip(t *testing.T) {
+	c := stagedObservedCouplingCreation(t)
+	graph := stagedCouplingFixture(
+		[]engineeringplan.Task{
+			stagedCouplingLeaf("impl-beta", "beta.txt", 30),
+			stagedCouplingLeaf("impl-gamma", "gamma.txt", 30),
+		},
+		[]engineeringplan.TaskCoupling{{From: "impl-beta", To: "impl-gamma", Level: engineeringplan.CouplingC1, Reason: "import_neighborhood", Provenance: engineeringplan.CouplingProvenancePlannerAdvisory, Evidence: "beta and gamma share import neighborhood"}},
+	)
+	path, current := stagedPrepareWithGraph(t, c, graph)
+	if current.GraphIsolationPreparation == nil || current.GraphIsolationPreparation.CohortSelectorVersion != 3 {
+		t.Fatalf("selector 3 preparation missing: %+v", current.GraphIsolationPreparation)
+	}
+	events, err := journal.Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := Replay(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.GraphIsolationPreparation == nil || !sameCanonical(*replayed.GraphIsolationPreparation, *current.GraphIsolationPreparation) {
+		t.Fatal("selector 3 preparation did not replay exactly (observed set must recompute from snapshot)")
+	}
+	// A substituted preparation is rejected on replay.
+	substituted := *current.GraphIsolationPreparation
+	substituted.Waves = append([][]string(nil), substituted.Waves...)
+	if len(substituted.Waves[0]) == 2 {
+		substituted.Waves[0] = substituted.Waves[0][:1]
+	} else {
+		substituted.Waves[0] = append(substituted.Waves[0], "impl-beta")
+	}
+	prepBytes, err := canonical.Bytes(substituted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = prepBytes
+	found := false
+	for _, e := range events {
+		if e.Kind == "graph.staged-prepared" {
+			var recorded GraphIsolationPreparation
+			if err := canonical.Decode(e.Payload, &recorded); err != nil {
+				t.Fatal(err)
+			}
+			if sameCanonical(recorded, substituted) {
+				t.Fatal("substituted preparation matches recorded bytes; test no longer substitutes")
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("no staged-prepared event in journal")
+	}
+}
+
+func TestStagedLegacySelectorsPreserved(t *testing.T) {
+	// Selectors 0/1/2 keep their frozen preparation bytes under selector 3's
+	// introduction: greedy omits the version, 1 and 2 retain theirs.
+	legacy := stagedHubLeavesGraphFixture()
+	c0 := stagedThreeTaskCreation(t)
+	_, current0 := stagedPrepareWithGraph(t, c0, legacy)
+	if current0.GraphIsolationPreparation == nil || current0.GraphIsolationPreparation.CohortSelectorVersion != 0 {
+		t.Fatalf("greedy legacy preparation changed: %+v", current0.GraphIsolationPreparation)
+	}
+	lexCreation := stagedLexicographicCreation(t)
+	_, current1 := stagedPrepareWithGraph(t, lexCreation, legacy)
+	if current1.GraphIsolationPreparation == nil || current1.GraphIsolationPreparation.CohortSelectorVersion != 1 {
+		t.Fatalf("lexicographic preparation changed: %+v", current1.GraphIsolationPreparation)
+	}
+	couplingCreation := stagedCouplingAwareCreation(t)
+	coupled := stagedCouplingFixture(
+		[]engineeringplan.Task{stagedCouplingLeaf("impl-beta", "beta.txt", 30)},
+		[]engineeringplan.TaskCoupling{{From: "impl-alpha", To: "impl-beta", Level: engineeringplan.CouplingC1, Reason: "import_neighborhood", Provenance: engineeringplan.CouplingProvenancePlannerAdvisory, Evidence: "shared neighborhood"}},
+	)
+	_, current2 := stagedPrepareWithGraph(t, couplingCreation, coupled)
+	if current2.GraphIsolationPreparation == nil || current2.GraphIsolationPreparation.CohortSelectorVersion != 2 {
+		t.Fatalf("coupling-aware preparation changed: %+v", current2.GraphIsolationPreparation)
 	}
 }

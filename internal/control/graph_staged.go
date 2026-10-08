@@ -141,14 +141,16 @@ func stagedCohortIndex(s Snapshot) int {
 // v1.1.39: admitted count before critical/resource packing), 2 selects the
 // coupling-aware optimum, which shares those hard gates plus the C4
 // hard-coupling gate and minimizes C3 risk before admitted count, then C2,
-// then C1 co-scheduling before existing critical/resource packing. Any other value
-// is rejected rather than reinterpreted.
+// then C1 co-scheduling before existing critical/resource packing, 3 selects
+// the source-observed coupling optimum, which merges planner advisory
+// couplings with the controller-derived source-observed set at MAX severity.
+// Any other value is rejected rather than reinterpreted.
 func stagedCohortSelector(s Snapshot) (int, error) {
 	if s.Creation.Execution == nil {
 		return 0, errors.New("staged isolation not enabled")
 	}
 	switch s.Creation.Execution.IsolationCohortSelectorVersion {
-	case 0, 1, 2:
+	case 0, 1, 2, 3:
 		return s.Creation.Execution.IsolationCohortSelectorVersion, nil
 	default:
 		return 0, errors.New("invalid isolation cohort selector version")
@@ -158,11 +160,27 @@ func stagedCohortSelector(s Snapshot) (int, error) {
 // selectStagedWaves derives the current-subset waves with the frozen
 // selector. Greedy remains the default; the lexicographic optimum only
 // applies when the immutable run policy opts in; the coupling-aware optimum
-// additionally requires plan-graph-v9 and reads the graph's typed couplings.
+// additionally requires plan-graph-v9 and reads the graph's typed couplings;
+// the source-observed optimum (3) additionally merges the controller-derived
+// source-observed set recomputed entirely from the snapshot. Missing or
+// unavailable RI degrades to the planner advisory selection with no
+// absence claim; invalid or forged bindings fail closed.
 func selectStagedWaves(s Snapshot, implementations []engineeringplan.Task, demands []engineeringplan.TaskResourceDemand) ([]engineeringplan.ResourceCohort, int, error) {
 	selector, err := stagedCohortSelector(s)
 	if err != nil {
 		return nil, 0, err
+	}
+	if selector == 3 {
+		observed, haveRI, err := deriveObservedCouplings(s, implementations)
+		if err != nil {
+			return nil, 0, err
+		}
+		if !haveRI {
+			waves, err := engineeringplan.SelectResourceWavesCouplingAware(s.Graph.Graph, implementations, demands, *s.Creation.Execution.IsolationCapacity, s.Creation.Execution.EffectiveMaxParallel(), s.Graph.Graph.Couplings)
+			return waves, selector, err
+		}
+		waves, err := engineeringplan.SelectResourceWavesWithObservedCouplings(s.Graph.Graph, implementations, demands, *s.Creation.Execution.IsolationCapacity, s.Creation.Execution.EffectiveMaxParallel(), s.Graph.Graph.Couplings, observed)
+		return waves, selector, err
 	}
 	if selector == 2 {
 		waves, err := engineeringplan.SelectResourceWavesCouplingAware(s.Graph.Graph, implementations, demands, *s.Creation.Execution.IsolationCapacity, s.Creation.Execution.EffectiveMaxParallel(), s.Graph.Graph.Couplings)
@@ -457,7 +475,7 @@ func replayStagedPreparation(s *Snapshot, e journal.Event) error {
 	if prep.Version != 3 {
 		return errors.New("invalid staged preparation version")
 	}
-	if prep.CohortSelectorVersion != 0 && prep.CohortSelectorVersion != 1 && prep.CohortSelectorVersion != 2 {
+	if prep.CohortSelectorVersion != 0 && prep.CohortSelectorVersion != 1 && prep.CohortSelectorVersion != 2 && prep.CohortSelectorVersion != 3 {
 		return errors.New("invalid staged cohort selector version")
 	}
 	if s.Creation.Execution == nil || prep.CohortSelectorVersion != s.Creation.Execution.IsolationCohortSelectorVersion {
