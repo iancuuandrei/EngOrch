@@ -162,11 +162,11 @@ func (d CalibrationDecision) Validate() error {
 		return errors.New("invalid calibration decision identity")
 	}
 	switch d.SelectionReason {
-	case "candidate_quality_improved_train_and_holdout", "fallback_insufficient_quality_evidence", "fallback_unmatched_task_policy", "fallback_unknown_outcome", "fallback_fixer_not_exercised", "fallback_fixer_route_drift", "fallback_no_quality_improvement", "fallback_objective_out_of_scope":
+	case "candidate_quality_improved_train_and_holdout", "candidate_cheaper_reliable_train_and_holdout", "fallback_insufficient_quality_evidence", "fallback_unmatched_task_policy", "fallback_unknown_outcome", "fallback_fixer_not_exercised", "fallback_fixer_route_drift", "fallback_no_quality_improvement", "fallback_missing_cost", "fallback_cost_overflow", "fallback_cost_not_lower", "fallback_quality_below_required", "fallback_quality_below_floor", "fallback_objective_out_of_scope":
 	default:
 		return errors.New("invalid calibration selection reason")
 	}
-	selectedByReason := d.SelectionReason == "candidate_quality_improved_train_and_holdout"
+	selectedByReason := d.SelectionReason == "candidate_quality_improved_train_and_holdout" || d.SelectionReason == "candidate_cheaper_reliable_train_and_holdout"
 	objectiveOutOfScope := d.SelectionReason == "fallback_objective_out_of_scope"
 	if d.CandidateSelected != selectedByReason || d.CandidateApplied && (!d.CandidateSelected || !d.ScopeMatched) || objectiveOutOfScope == d.ScopeMatched {
 		return errors.New("inconsistent calibration selection flags")

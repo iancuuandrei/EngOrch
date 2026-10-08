@@ -12,6 +12,12 @@ import (
 const (
 	// CalibrationVersion is the persisted calibration format.
 	CalibrationVersion = 1
+	// CalibrationVersion2 is the explicitly opted-in reliability-constrained
+	// cheaper-fixer format. It reuses the exact v1 row domain and adds frozen
+	// epsilon/floor parameters. See economics.go for semantics.
+	CalibrationVersion2 = 2
+	// MaxQualityPPM bounds integer parts-per-million quality parameters.
+	MaxQualityPPM = 1000000
 	// MaxCalibrationRows bounds retained task-policy observations.
 	MaxCalibrationRows = 64
 	// MaxCalibrationFixerInvocations bounds routes retained for one task.
@@ -63,16 +69,22 @@ type TaskPolicyOutcome struct {
 
 // Calibration separates predeclared training and holdout task outcomes. Its
 // minimum is an operator threshold, not a confidence or generalization claim.
+// Version 1 carries no economics parameters. Version 2 adds explicit frozen
+// epsilon/floor parts-per-million parameters for reliability-constrained
+// cheaper-fixer selection; both must be present for version 2, including an
+// explicit zero epsilon.
 type Calibration struct {
-	Version       int                 `json:"version"`
-	FamilyID      string              `json:"family_id"`
-	Role          string              `json:"role"`
-	Objectives    []string            `json:"objective_hashes"`
-	Baseline      Profile             `json:"baseline_profile"`
-	Candidate     Profile             `json:"candidate_profile"`
-	MinimumPerArm int                 `json:"minimum_per_arm"`
-	Training      []TaskPolicyOutcome `json:"training"`
-	Holdout       []TaskPolicyOutcome `json:"holdout"`
+	Version         int                 `json:"version"`
+	FamilyID        string              `json:"family_id"`
+	Role            string              `json:"role"`
+	Objectives      []string            `json:"objective_hashes"`
+	Baseline        Profile             `json:"baseline_profile"`
+	Candidate       Profile             `json:"candidate_profile"`
+	MinimumPerArm   int                 `json:"minimum_per_arm"`
+	Training        []TaskPolicyOutcome `json:"training"`
+	Holdout         []TaskPolicyOutcome `json:"holdout"`
+	EpsilonPPM      *int                `json:"epsilon_ppm,omitempty"`
+	QualityFloorPPM *int                `json:"quality_floor_ppm,omitempty"`
 }
 
 // ObjectiveDigest returns the exact objective binding used by calibration rows.
@@ -97,17 +109,20 @@ type CalibrationCounts struct {
 }
 
 // CalibrationSelection is a pure conservative recommendation. Profile remains
-// the baseline whenever Selected is false.
+// the baseline whenever Selected is false. Economics carries optional version 2
+// posterior/quality/cost diagnostics; it is never authority beyond the frozen
+// policy decision.
 type CalibrationSelection struct {
-	Version  int                          `json:"version"`
-	Digest   string                       `json:"digest"`
-	FamilyID string                       `json:"family_id"`
-	Role     string                       `json:"role"`
-	Profile  Profile                      `json:"profile"`
-	Selected bool                         `json:"selected"`
-	Reason   string                       `json:"reason"`
-	Training map[string]CalibrationCounts `json:"training"`
-	Holdout  map[string]CalibrationCounts `json:"holdout"`
+	Version   int                          `json:"version"`
+	Digest    string                       `json:"digest"`
+	FamilyID  string                       `json:"family_id"`
+	Role      string                       `json:"role"`
+	Profile   Profile                      `json:"profile"`
+	Selected  bool                         `json:"selected"`
+	Reason    string                       `json:"reason"`
+	Training  map[string]CalibrationCounts `json:"training"`
+	Holdout   map[string]CalibrationCounts `json:"holdout"`
+	Economics *EconomicsDiagnostics        `json:"economics,omitempty"`
 }
 
 // Digest returns the stable identity of a validated calibration artifact.
@@ -121,8 +136,17 @@ func (c Calibration) Digest() (string, error) {
 // Validate checks bounded task-policy evidence. UNKNOWN and NOT_EXERCISED are
 // retained as disqualifying observations rather than discarded.
 func (c Calibration) Validate() error {
-	if c.Version != CalibrationVersion || !validIdentifier(c.FamilyID) || c.Role != "fixer" || c.MinimumPerArm < 1 || c.MinimumPerArm > MaxCalibrationMinimumPerArm {
+	if (c.Version != CalibrationVersion && c.Version != CalibrationVersion2) || !validIdentifier(c.FamilyID) || c.Role != "fixer" || c.MinimumPerArm < 1 || c.MinimumPerArm > MaxCalibrationMinimumPerArm {
 		return errors.New("invalid model policy calibration")
+	}
+	if c.Version == CalibrationVersion {
+		if c.EpsilonPPM != nil || c.QualityFloorPPM != nil {
+			return errors.New("version 1 calibration carries no economics parameters")
+		}
+	} else {
+		if c.EpsilonPPM == nil || c.QualityFloorPPM == nil || *c.EpsilonPPM < 0 || *c.EpsilonPPM > MaxQualityPPM || *c.QualityFloorPPM < 0 || *c.QualityFloorPPM > MaxQualityPPM {
+			return errors.New("version 2 calibration requires bounded epsilon and floor")
+		}
 	}
 	if err := c.Baseline.validate(); err != nil {
 		return fmt.Errorf("invalid calibration baseline: %w", err)
@@ -236,14 +260,22 @@ func validateEmpiricalUsage(usage *EmpiricalUsage) error {
 	return nil
 }
 
-// EvaluateCalibration selects the candidate only after strict observed
-// whole-task quality improvement in both cohorts. Cost never affects selection.
+// EvaluateCalibration selects a fixer profile from bounded matched whole-task
+// evidence. Version 1 selects the candidate only after strict observed
+// whole-task quality improvement in both cohorts; cost never affects its
+// selection. Version 2 delegates to the reliability-constrained cheaper-fixer
+// rule in economics.go. Both versions share the exact row domain, disjoint
+// matched task-policy bindings, and conservative UNKNOWN/no-exercise/drift
+// fallbacks.
 func EvaluateCalibration(c Calibration) (CalibrationSelection, error) {
 	digest, err := c.Digest()
 	if err != nil {
 		return CalibrationSelection{}, err
 	}
-	result := CalibrationSelection{Version: CalibrationVersion, Digest: digest, FamilyID: c.FamilyID, Role: c.Role, Profile: copyProfile(c.Baseline), Reason: "fallback_insufficient_quality_evidence", Training: countsFor(c.Training, c), Holdout: countsFor(c.Holdout, c)}
+	result := CalibrationSelection{Version: c.Version, Digest: digest, FamilyID: c.FamilyID, Role: c.Role, Profile: copyProfile(c.Baseline), Reason: "fallback_insufficient_quality_evidence", Training: countsFor(c.Training, c), Holdout: countsFor(c.Holdout, c)}
+	if c.Version == CalibrationVersion2 {
+		return evaluateCheaperFixer(c, result), nil
+	}
 	if !matchedTaskPolicies(c.Training, c) || !matchedTaskPolicies(c.Holdout, c) {
 		result.Reason = "fallback_unmatched_task_policy"
 		return result, nil
