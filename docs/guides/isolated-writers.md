@@ -9,6 +9,40 @@ planning, an explicit writer route, an anchored-edits writer contract, and a
 JSON v2 explorer contract. The CLI binds the plan-graph-v7 contract for this
 mode.
 
+Configured `opencode-http` writers are admitted for the opt-in isolated
+(v1/v2) and staged (v3) cohorts only. Each turn executes against its exact
+confirmed child workspace/candidate with per-invocation OpenCode
+runtime/gateway journals, immutable policy/scopes, scheduler reservations and
+source ownership; the parent candidate is never bound as the tool candidate.
+The journal namespace is exactly `<role>.invocation-<invocationID>` (for
+example `writer.invocation-<64-hex-ID>`), derived from the
+controller-admitted task/invocation binding before any journal read or write,
+so two distinct task invocations derive distinct journals even when neither
+journal exists yet. Execution, usage verification and resumed observation
+resolve the same namespace. Legacy serial, scheduled turn-bound and Codex
+paths keep their historical stems byte-for-byte, and old journals are never
+renamed. Codex behavior and serialization are unchanged, and
+shared-workspace parallel writers remain Codex-only: the isolation flag alone
+never routes a shared-workspace opencode task through the scheduler.
+Dispatch rechecks current host admission immediately before runtime dispatch
+and re-confirms the child workspace/candidate binding and parent identity
+after dispatch before observing successful receipt; a stale or mutating
+binding fails safely with the effect identity retained and no resend. UNKNOWN
+stops with no resend, and old active uncertain effects are never probed.
+
+Measured qualification is offline only. The sealed-fixture chain covers a
+two-task deterministic-namespace regression (distinct stems before either
+journal exists, legacy bare `writer` stem preserved), a true UNKNOWN
+dispatch/resume test through the actual wrapper (durable admission, UNKNOWN
+observation, one runtime intent, zero gateway calls, frozen counts on legal
+resume), and full offline `RunWriter` chains for an isolated task and a
+staged hub task (dispatch to exact runtime/provider receipt to proposal
+record/replay to inspectable usage validation with genuine sealed journals).
+Scope, swapped-receipt, legacy Codex and shared-fallback regressions remain
+strict. Full staged READY with a real Muse route requires live provider
+qualification; offline fixtures do not claim live acceptance, latency, cost,
+or per-invocation performance.
+
 Before creating an isolated run, `harness.toml` must set `controller_state_root`
 to an absolute external directory separate from the repository and its Git
 control paths. The CLI validates it with the repository-bound controller-state

@@ -488,102 +488,31 @@ func buildPlannerPositiveFixture(t *testing.T, nonce string, inputTokens, cached
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := t.TempDir()
-	contextBinding, err := contextbroker.NewBinding(invocation.ID, created.Repository, nil, contextbroker.Limits{MaxCalls: 1, MaxRequestBytes: 4096, MaxResponseBytes: 64 << 10, MaxTotalResponseBytes: 64 << 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sessionBinding := opencode.ToolSessionBinding{Session: opencode.SessionBinding{IntentID: invocation.ID, ProjectID: "global", Directory: root, Agent: "plan", Provider: invocation.Profile.Provider, Model: invocation.Profile.Model, Variant: invocation.Profile.Effort}, ToolNames: []string{"source_list"}, CatalogSHA256: strings.Repeat("a", 64)}
-	intent := opencoderuntime.Intent{Version: 1, Invocation: invocation, Directory: root, Project: opencode.ProjectExpectation{Directory: root, Mode: opencode.ProjectModeGlobal}, Context: contextBinding, Session: sessionBinding}
-	bindingID, err := routing.Gateway.ID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	intent.ProviderGatewayBindingID = bindingID
-	intent.IntentID, err = intent.ID()
-	if err != nil {
-		t.Fatal(err)
-	}
 	runtimePath, gatewayPath := controllerPath+".planner.opencode-runtime.jsonl", controllerPath+".planner.provider-gateway.jsonl"
-	if err := opencoderuntime.RecordIntent(runtimePath, intent); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := journal.Append(gatewayPath, "provider.bound", routing.Gateway, func([]journal.Event) error { return nil }); err != nil {
-		t.Fatal(err)
-	}
-	sessionPath := runtimePath + ".session"
-	if _, err := journal.Append(sessionPath, "opencode.tool-session-intent", sessionBinding, func([]journal.Event) error { return nil }); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := journal.Append(sessionPath, "opencode.tool-session-observed", struct {
-		Binding opencode.ToolSessionBinding `json:"binding"`
-		ID      string                      `json:"id"`
-	}{sessionBinding, "ses_fixture"}, func([]journal.Event) error { return nil }); err != nil {
-		t.Fatal(err)
-	}
-	brokerPath := runtimePath + ".broker"
-	broker, err := contextbroker.Open(brokerPath, contextBinding)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = broker.Close() })
-	contextID, _ := contextBinding.ID()
-	dispatch, err := opencode.DispatchForInvocation(invocation, "ses_fixture", "msg_user", "plan", root, root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	syncIntent := opencode.SynchronousToolDispatchIntent{Invocation: invocation, Dispatch: dispatch, BrokerBindingID: contextID, BrokerCatalogID: contextBinding.CatalogID}
-	tools := opencode.ToolsConfigurationReceipt{SHA256: strings.Repeat("b", 64), MCPServer: opencode.ToolsMCPServerName, Endpoint: "http://127.0.0.1:43123/mcp", ToolIDs: []string{"engorch_source_list"}, TimeoutMillis: 5000}
-	sealExpected := opencode.SynchronousToolTurnSealExpected{Dispatch: syncIntent, Session: sessionBinding, Tools: tools, ExecutableSHA256: strings.Repeat("c", 64), HostRoot: root, MaxOutputTokens: 128, RuntimeOutputTokens: 8}
-	sealExpected.Provider = plannerProviderSealForBinding(t, invocation, routing.Gateway, tools)
-	paths := opencoderuntime.Paths{Version: 1, Session: sessionPath, Dispatch: runtimePath + ".dispatch", Broker: brokerPath, Seal: runtimePath + ".seal", Gateway: gatewayPath}
-	project := opencode.ProjectReceipt{SHA256: strings.Repeat("e", 64), ID: "global", Directory: root, Mode: opencode.ProjectModeGlobal, Worktree: "/"}
-	if _, err := opencoderuntime.RecordBound(runtimePath, intent, project, paths, sealExpected); err != nil {
-		t.Fatal(err)
-	}
-	observation := writeSealedPlannerTurn(t, broker, paths, sealExpected, intent)
-	// Distribute totals across the two sealed generations so the normalized
-	// aggregate carries the requested cached/reasoning subsets on every call.
-	halfInput, halfCached := inputTokens/2, cachedTokens/2
-	halfOutput, halfReasoning := outputTokens/2, reasoningTokens/2
-	appendGatewayCallForGeneration(t, gatewayPath, routing.Gateway, 1, observation.Generations[0], halfInput, halfOutput, halfCached, halfReasoning)
-	appendGatewayCallForGeneration(t, gatewayPath, routing.Gateway, 2, observation.Generations[1], inputTokens-halfInput, outputTokens-halfOutput, cachedTokens-halfCached, reasoningTokens-halfReasoning)
-	record, err := opencoderuntime.Complete(runtimePath, intent)
-	if err != nil {
-		t.Fatal(err)
-	}
+	result, receipt, intent := sealOpenCodeOfflineTurnForTest(t, runtimePath, gatewayPath, invocation, routing, created.Repository, "plan", "tool result accepted", "harness.planner-result.v1", "planner", inputTokens, cachedTokens, outputTokens, reasoningTokens)
 	state, err := opencoderuntime.Inspect(runtimePath, intent)
 	if err != nil || state.Result == nil {
 		t.Fatal("sealed runtime did not replay", err)
 	}
-	gatewayState, err := providergateway.Inspect(gatewayPath)
-	if err != nil || !gatewayState.Finished {
-		t.Fatal("gateway did not finish", gatewayState, err)
-	}
-	runtimeEvents, err := journal.Read(runtimePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gatewayEvents, err := journal.Read(gatewayPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resultHash, err := canonical.Hash("harness.planner-result.v1", record.Result)
-	if err != nil {
-		t.Fatal(err)
-	}
-	last := gatewayState.Calls[len(gatewayState.Calls)-1].Receipt
-	receipt := providerDispatchReceipt{Version: 1, Role: "planner", InvocationID: invocation.ID, AccessInvocationID: routing.Intent.Reservation.InvocationID, RoutingDecision: routing.Intent.RoutingDecision, RuntimeJournalHead: runtimeEvents[len(runtimeEvents)-1].Hash, GatewayJournalHead: gatewayEvents[len(gatewayEvents)-1].Hash, ResultHash: resultHash, ObservedModel: last.ObservedModel, ObservedProvider: routing.ProviderRole.Model.Provider, Result: record.Result}
 	if err := Append(controllerPath, "planning.provider-observed", receipt); err != nil {
 		t.Fatal(err)
 	}
-	if err := Append(controllerPath, "plan.recorded", record.Result); err != nil {
+	if err := Append(controllerPath, "plan.recorded", result); err != nil {
 		t.Fatal(err)
 	}
-	return plannerPositiveFixture{controllerPath: controllerPath, invocation: invocation, result: record.Result, receipt: receipt, inputTokens: inputTokens, cachedTokens: cachedTokens, outputTokens: outputTokens, reasoning: reasoningTokens}
+	return plannerPositiveFixture{controllerPath: controllerPath, invocation: invocation, result: result, receipt: receipt, inputTokens: inputTokens, cachedTokens: cachedTokens, outputTokens: outputTokens, reasoning: reasoningTokens}
 }
 
 func writeSealedPlannerTurn(t *testing.T, broker *contextbroker.Broker, paths opencoderuntime.Paths, sealExpected opencode.SynchronousToolTurnSealExpected, intent opencoderuntime.Intent) opencode.ToolTurnObservation {
+	t.Helper()
+	return writeSealedToolTurn(t, broker, paths, sealExpected, intent, "plan", "tool result accepted")
+}
+
+// writeSealedToolTurn seals one synchronous tool turn offline with a caller
+// chosen agent and final text. The planner wrapper above preserves the exact
+// historical transcript; writer fixtures reuse the same sealed machinery with
+// the build agent and a proposal payload as the final text.
+func writeSealedToolTurn(t *testing.T, broker *contextbroker.Broker, paths opencoderuntime.Paths, sealExpected opencode.SynchronousToolTurnSealExpected, intent opencoderuntime.Intent, agent, finalText string) opencode.ToolTurnObservation {
 	t.Helper()
 	response, err := broker.Call(context.Background(), "broker-list-1", "source_list", json.RawMessage(`{"after":"","limit":1}`))
 	if err != nil || !response.Success {
@@ -596,10 +525,10 @@ func writeSealedPlannerTurn(t *testing.T, broker *contextbroker.Broker, paths op
 	binding := sealExpected.Dispatch.Dispatch.Binding
 	quotedRoot := strconv.Quote(binding.Root)
 	quotedDirectory := strconv.Quote(binding.Directory)
-	user := `{"info":{"id":"msg_user","sessionID":"ses_fixture","role":"user","time":{"created":1},"agent":"plan","model":{"providerID":"` + intent.Invocation.Profile.Provider + `","modelID":"` + intent.Invocation.Profile.Model + `","variant":"` + intent.Invocation.Profile.Effort + `"}},"parts":[{"id":"prt_user","messageID":"msg_user","sessionID":"ses_fixture","type":"text","text":` + strconv.Quote(intent.Invocation.Input) + `}]}`
-	intermediate := `{"info":{"id":"msg_tool","sessionID":"ses_fixture","parentID":"msg_user","providerID":"` + intent.Invocation.Profile.Provider + `","modelID":"` + intent.Invocation.Profile.Model + `","agent":"plan","role":"assistant","finish":"tool-calls","variant":"` + intent.Invocation.Profile.Effort + `","cost":0.0123,"time":{"created":10,"completed":20},"path":{"cwd":` + quotedDirectory + `,"root":` + quotedRoot + `},"tokens":{"total":13,"input":9,"output":4,"reasoning":0,"cache":{"read":0,"write":0}}},"parts":[{"id":"prt_step_1","messageID":"msg_tool","sessionID":"ses_fixture","type":"step-start"},{"id":"prt_tool","messageID":"msg_tool","sessionID":"ses_fixture","type":"tool","callID":"provider-call-1","tool":"engorch_source_list","state":{"status":"completed","input":{"after":"","limit":1},"output":` + strconv.Quote(string(responseBytes)) + `,"title":"","metadata":{"truncated":false},"time":{"start":12,"end":18},"attachments":[]}},{"id":"prt_step_2","messageID":"msg_tool","sessionID":"ses_fixture","type":"step-finish","reason":"tool-calls","tokens":{"total":13,"input":9,"output":4,"reasoning":0,"cache":{"read":0,"write":0}}}]}`
-	finalParts := `[{"id":"prt_step_3","messageID":"msg_final","sessionID":"ses_fixture","type":"step-start"},{"id":"prt_text","messageID":"msg_final","sessionID":"ses_fixture","type":"text","text":"tool result accepted","time":{"start":22,"end":29}},{"id":"prt_step_4","messageID":"msg_final","sessionID":"ses_fixture","type":"step-finish","reason":"stop","tokens":{"total":21,"input":18,"output":3,"reasoning":0,"cache":{"read":0,"write":0}}}]`
-	final := `{"info":{"id":"msg_final","sessionID":"ses_fixture","parentID":"msg_user","providerID":"` + intent.Invocation.Profile.Provider + `","modelID":"` + intent.Invocation.Profile.Model + `","agent":"plan","role":"assistant","finish":"stop","variant":"` + intent.Invocation.Profile.Effort + `","cost":0.0345,"time":{"created":21,"completed":30},"path":{"cwd":` + quotedDirectory + `,"root":` + quotedRoot + `},"tokens":{"total":21,"input":18,"output":3,"reasoning":0,"cache":{"read":0,"write":0}}},"parts":` + finalParts + `}`
+	user := `{"info":{"id":"msg_user","sessionID":"ses_fixture","role":"user","time":{"created":1},"agent":"` + agent + `","model":{"providerID":"` + intent.Invocation.Profile.Provider + `","modelID":"` + intent.Invocation.Profile.Model + `","variant":"` + intent.Invocation.Profile.Effort + `"}},"parts":[{"id":"prt_user","messageID":"msg_user","sessionID":"ses_fixture","type":"text","text":` + strconv.Quote(intent.Invocation.Input) + `}]}`
+	intermediate := `{"info":{"id":"msg_tool","sessionID":"ses_fixture","parentID":"msg_user","providerID":"` + intent.Invocation.Profile.Provider + `","modelID":"` + intent.Invocation.Profile.Model + `","agent":"` + agent + `","role":"assistant","finish":"tool-calls","variant":"` + intent.Invocation.Profile.Effort + `","cost":0.0123,"time":{"created":10,"completed":20},"path":{"cwd":` + quotedDirectory + `,"root":` + quotedRoot + `},"tokens":{"total":13,"input":9,"output":4,"reasoning":0,"cache":{"read":0,"write":0}}},"parts":[{"id":"prt_step_1","messageID":"msg_tool","sessionID":"ses_fixture","type":"step-start"},{"id":"prt_tool","messageID":"msg_tool","sessionID":"ses_fixture","type":"tool","callID":"provider-call-1","tool":"engorch_source_list","state":{"status":"completed","input":{"after":"","limit":1},"output":` + strconv.Quote(string(responseBytes)) + `,"title":"","metadata":{"truncated":false},"time":{"start":12,"end":18},"attachments":[]}},{"id":"prt_step_2","messageID":"msg_tool","sessionID":"ses_fixture","type":"step-finish","reason":"tool-calls","tokens":{"total":13,"input":9,"output":4,"reasoning":0,"cache":{"read":0,"write":0}}}]}`
+	finalParts := `[{"id":"prt_step_3","messageID":"msg_final","sessionID":"ses_fixture","type":"step-start"},{"id":"prt_text","messageID":"msg_final","sessionID":"ses_fixture","type":"text","text":` + strconv.Quote(finalText) + `,"time":{"start":22,"end":29}},{"id":"prt_step_4","messageID":"msg_final","sessionID":"ses_fixture","type":"step-finish","reason":"stop","tokens":{"total":21,"input":18,"output":3,"reasoning":0,"cache":{"read":0,"write":0}}}]`
+	final := `{"info":{"id":"msg_final","sessionID":"ses_fixture","parentID":"msg_user","providerID":"` + intent.Invocation.Profile.Provider + `","modelID":"` + intent.Invocation.Profile.Model + `","agent":"` + agent + `","role":"assistant","finish":"stop","variant":"` + intent.Invocation.Profile.Effort + `","cost":0.0345,"time":{"created":21,"completed":30},"path":{"cwd":` + quotedDirectory + `,"root":` + quotedRoot + `},"tokens":{"total":21,"input":18,"output":3,"reasoning":0,"cache":{"read":0,"write":0}}},"parts":` + finalParts + `}`
 	responseFinal := final
 	transcript := "[" + user + "," + intermediate + "," + final + "]"
 	open, err := contextbroker.Inspect(paths.Broker)
@@ -1217,85 +1146,8 @@ func sealPlannerTurnForCorrection(t *testing.T, controllerPath string, cfg confi
 		t.Fatal(err)
 	}
 	runtimePath, gatewayPath := controllerPath+"."+stem+".opencode-runtime.jsonl", controllerPath+"."+stem+".provider-gateway.jsonl"
-	root := t.TempDir()
-	contextBinding, err := contextbroker.NewBinding(invocation.ID, repo, nil, contextbroker.Limits{MaxCalls: 1, MaxRequestBytes: 4096, MaxResponseBytes: 64 << 10, MaxTotalResponseBytes: 64 << 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sessionBinding := opencode.ToolSessionBinding{Session: opencode.SessionBinding{IntentID: invocation.ID, ProjectID: "global", Directory: root, Agent: "plan", Provider: invocation.Profile.Provider, Model: invocation.Profile.Model, Variant: invocation.Profile.Effort}, ToolNames: []string{"source_list"}, CatalogSHA256: strings.Repeat("a", 64)}
-	intent := opencoderuntime.Intent{Version: 1, Invocation: invocation, Directory: root, Project: opencode.ProjectExpectation{Directory: root, Mode: opencode.ProjectModeGlobal}, Context: contextBinding, Session: sessionBinding}
-	bindingID, err := routing.Gateway.ID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	intent.ProviderGatewayBindingID = bindingID
-	intent.IntentID, err = intent.ID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := opencoderuntime.RecordIntent(runtimePath, intent); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := journal.Append(gatewayPath, "provider.bound", routing.Gateway, func([]journal.Event) error { return nil }); err != nil {
-		t.Fatal(err)
-	}
-	sessionPath := runtimePath + ".session"
-	if _, err := journal.Append(sessionPath, "opencode.tool-session-intent", sessionBinding, func([]journal.Event) error { return nil }); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := journal.Append(sessionPath, "opencode.tool-session-observed", struct {
-		Binding opencode.ToolSessionBinding `json:"binding"`
-		ID      string                      `json:"id"`
-	}{sessionBinding, "ses_fixture"}, func([]journal.Event) error { return nil }); err != nil {
-		t.Fatal(err)
-	}
-	brokerPath := runtimePath + ".broker"
-	broker, err := contextbroker.Open(brokerPath, contextBinding)
-	if err != nil {
-		t.Fatal(err)
-	}
-	contextID, _ := contextBinding.ID()
-	dispatch, err := opencode.DispatchForInvocation(invocation, "ses_fixture", "msg_user", "plan", root, root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	syncIntent := opencode.SynchronousToolDispatchIntent{Invocation: invocation, Dispatch: dispatch, BrokerBindingID: contextID, BrokerCatalogID: contextBinding.CatalogID}
-	tools := opencode.ToolsConfigurationReceipt{SHA256: strings.Repeat("b", 64), MCPServer: opencode.ToolsMCPServerName, Endpoint: "http://127.0.0.1:43123/mcp", ToolIDs: []string{"engorch_source_list"}, TimeoutMillis: 5000}
-	sealExpected := opencode.SynchronousToolTurnSealExpected{Dispatch: syncIntent, Session: sessionBinding, Tools: tools, ExecutableSHA256: strings.Repeat("c", 64), HostRoot: root, MaxOutputTokens: 128, RuntimeOutputTokens: 8}
-	sealExpected.Provider = plannerProviderSealForBinding(t, invocation, routing.Gateway, tools)
-	paths := opencoderuntime.Paths{Version: 1, Session: sessionPath, Dispatch: runtimePath + ".dispatch", Broker: brokerPath, Seal: runtimePath + ".seal", Gateway: gatewayPath}
-	project := opencode.ProjectReceipt{SHA256: strings.Repeat("e", 64), ID: "global", Directory: root, Mode: opencode.ProjectModeGlobal, Worktree: "/"}
-	if _, err := opencoderuntime.RecordBound(runtimePath, intent, project, paths, sealExpected); err != nil {
-		t.Fatal(err)
-	}
-	observation := writeSealedPlannerTurn(t, broker, paths, sealExpected, intent)
-	halfInput, halfCached := inputTokens/2, cachedTokens/2
-	halfOutput, halfReasoning := outputTokens/2, reasoningTokens/2
-	appendGatewayCallForGeneration(t, gatewayPath, routing.Gateway, 1, observation.Generations[0], halfInput, halfOutput, halfCached, halfReasoning)
-	appendGatewayCallForGeneration(t, gatewayPath, routing.Gateway, 2, observation.Generations[1], inputTokens-halfInput, outputTokens-halfOutput, cachedTokens-halfCached, reasoningTokens-halfReasoning)
-	record, err := opencoderuntime.Complete(runtimePath, intent)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gatewayState, err := providergateway.Inspect(gatewayPath)
-	if err != nil || !gatewayState.Finished {
-		t.Fatal("gateway did not finish", gatewayState, err)
-	}
-	runtimeEvents, err := journal.Read(runtimePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gatewayEvents, err := journal.Read(gatewayPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resultHash, err := canonical.Hash("harness.planner-result.v1", record.Result)
-	if err != nil {
-		t.Fatal(err)
-	}
-	last := gatewayState.Calls[len(gatewayState.Calls)-1].Receipt
-	receipt := providerDispatchReceipt{Version: 1, Role: "planner", InvocationID: invocation.ID, AccessInvocationID: routing.Intent.Reservation.InvocationID, RoutingDecision: routing.Intent.RoutingDecision, RuntimeJournalHead: runtimeEvents[len(runtimeEvents)-1].Hash, GatewayJournalHead: gatewayEvents[len(gatewayEvents)-1].Hash, ResultHash: resultHash, ObservedModel: last.ObservedModel, ObservedProvider: routing.ProviderRole.Model.Provider, Result: record.Result}
-	return record.Result, receipt
+	result, receipt, _ := sealOpenCodeOfflineTurnForTest(t, runtimePath, gatewayPath, invocation, routing, repo, "plan", "tool result accepted", "harness.planner-result.v1", "planner", inputTokens, cachedTokens, outputTokens, reasoningTokens)
+	return result, receipt
 }
 
 // correctionControllerFixture builds a replay-validated controller through a

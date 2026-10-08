@@ -103,16 +103,47 @@ func RunWriter(ctx context.Context, path string) (WriterRecord, error) {
 		if _, exists := s.GraphWriterResults[taskID]; exists {
 			return WriterRecord{}, errors.New("graph writer proposal already recorded; inspect its provenance rather than dispatch again")
 		}
-		if invocation.Profile.Runtime != "codex-app-server" {
+		if isolatedInitial {
+			if invocation.Profile.Runtime != "codex-app-server" && invocation.Profile.Runtime != "opencode-http" {
+				return WriterRecord{}, errors.New("isolated graph writers require the Codex app-server or OpenCode runtime")
+			}
+		} else if invocation.Profile.Runtime != "codex-app-server" {
 			return WriterRecord{}, errors.New("parallel graph writers currently require the Codex app-server runtime")
 		}
 	}
 	if invocation.Profile.Runtime == "opencode-http" {
-		result, err := executeOpenCodeRole(ctx, path, s, invocation, "")
+		if taskID == "" {
+			result, err := executeOpenCodeRole(ctx, path, s, invocation, "")
+			if err != nil {
+				return WriterRecord{}, err
+			}
+			return RecordWriterProposal(ctx, path, invocation, result)
+		}
+		if !isolatedInitial {
+			return WriterRecord{}, errors.New("parallel graph writers currently require the Codex app-server runtime")
+		}
+		question, err := graphWriterTaskQuestion(s, taskID)
 		if err != nil {
 			return WriterRecord{}, err
 		}
-		return RecordWriterProposal(ctx, path, invocation, result)
+		binding, err := isolatedWriterBindingForSnapshot(s, taskID)
+		if err != nil {
+			return WriterRecord{}, err
+		}
+		startedAt := time.Now().UTC()
+		result, err := executeIsolatedOpenCodeWriter(ctx, path, taskID, invocation, binding, question)
+		if err != nil {
+			return WriterRecord{}, err
+		}
+		endedAt := time.Now().UTC()
+		proposal, err := prepareIsolatedGraphWriterProposal(ctx, path, taskID, invocation, result)
+		if err != nil {
+			return WriterRecord{}, err
+		}
+		if err := recordIsolatedGraphWriterProposal(path, proposal, observedGraphWriterDispatchTiming(startedAt, endedAt)); err != nil {
+			return WriterRecord{}, err
+		}
+		return WriterRecord{Invocation: invocation, Result: result}, nil
 	}
 	hostTaskID := taskID
 	if correction, ok := scheduledRoleCorrectionFromContext(ctx); ok && correction.TaskID == taskID && correction.ScheduledTaskID != "" {
@@ -173,13 +204,7 @@ func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected
 		return result, err
 	}
 	if useIsolated {
-		var binding isolatedWriterBinding
-		var bindingErr error
-		if stagedIsolationEnabled(s) {
-			binding, bindingErr = stagedForkBindingForTask(s, taskID)
-		} else {
-			binding, bindingErr = isolatedWriterBindingForTask(s, taskID)
-		}
+		binding, bindingErr := isolatedWriterBindingForSnapshot(s, taskID)
 		if bindingErr != nil {
 			return result, bindingErr
 		}
@@ -212,13 +237,7 @@ func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected
 		return result, errors.Join(errors.New("writer isolation mode changed before dispatch"), modeErr)
 	}
 	if isolated != nil {
-		var currentBinding isolatedWriterBinding
-		var bindingErr error
-		if stagedIsolationEnabled(s) {
-			currentBinding, bindingErr = stagedForkBindingForTask(s, taskID)
-		} else {
-			currentBinding, bindingErr = isolatedWriterBindingForTask(s, taskID)
-		}
+		currentBinding, bindingErr := isolatedWriterBindingForSnapshot(s, taskID)
 		if bindingErr != nil || !sameCanonical(currentBinding, *isolated) {
 			return result, errors.Join(errors.New("isolated writer binding changed before dispatch"), bindingErr)
 		}
@@ -477,13 +496,7 @@ func executeWriterForTask(ctx context.Context, path string, s Snapshot, expected
 		if err != nil || after != before {
 			return result, errors.Join(errors.New("isolated writer child changed during execution"), err)
 		} else {
-			var latestBinding isolatedWriterBinding
-			var bindingErr error
-			if stagedIsolationEnabled(latest) {
-				latestBinding, bindingErr = stagedForkBindingForTask(latest, taskID)
-			} else {
-				latestBinding, bindingErr = isolatedWriterBindingForTask(latest, taskID)
-			}
+			latestBinding, bindingErr := isolatedWriterBindingForSnapshot(latest, taskID)
 			if bindingErr != nil || !sameCanonical(latestBinding, *isolated) {
 				return result, errors.Join(errors.New("isolated writer receipt changed during execution"), bindingErr)
 			}

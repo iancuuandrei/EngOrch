@@ -144,6 +144,19 @@ func checkWaveMembership(waveTasks []engineeringplan.Task, frozen []string, read
 	return nil
 }
 
+// staticGraphWriterRuntimeAdmitted reports whether a task-bound writer
+// invocation runtime may enter the static graph-writer cohort. Codex is the
+// shared-workspace route; opencode-http is admitted only for the opt-in
+// isolated/staged cohorts, where every task invocation is child-bound and
+// taskID-scoped, so no shared-workspace opencode task can route through the
+// scheduler on the isolation flag alone.
+func staticGraphWriterRuntimeAdmitted(s Snapshot, writerRuntime string) bool {
+	if writerRuntime == "codex-app-server" {
+		return true
+	}
+	return writerRuntime == "opencode-http" && isolatedImplementationEnabled(s)
+}
+
 // buildWriterTaskSpecs derives deterministic invocation-bound scheduler specs.
 func buildWriterTaskSpecs(s Snapshot, controllerPath string, tasks []engineeringplan.Task) ([]taskscheduler.TaskSpec, error) {
 	specs := make([]taskscheduler.TaskSpec, 0, len(tasks))
@@ -155,7 +168,7 @@ func buildWriterTaskSpecs(s Snapshot, controllerPath string, tasks []engineering
 		if err != nil {
 			return nil, err
 		}
-		if invocation.Profile.Runtime != "codex-app-server" {
+		if !staticGraphWriterRuntimeAdmitted(s, invocation.Profile.Runtime) {
 			return nil, errors.New("parallel graph writer runtime unsupported")
 		}
 		specs = append(specs, taskscheduler.TaskSpec{ID: task.ID, RunID: s.RunID, ControllerPath: controllerPath, Operation: taskscheduler.OperationWriter, InvocationID: invocation.ID})

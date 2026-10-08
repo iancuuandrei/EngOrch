@@ -488,13 +488,33 @@ func replayIsolatedGraphWriterProposal(s *Snapshot, record GraphWriterRecord, se
 	if err != nil || resolved != record.Isolated.Invocation {
 		return errors.Join(errors.New("isolated graph writer proposal invocation differs from schedule"), err)
 	}
-	host, ok := s.GraphWriterHosts[roleReceiptTaskID(*s, record.Isolated.Invocation, record.TaskID)]
-	if !ok || host.Intent.Invocation != invocation || host.RuntimeReceipt == nil || invocation.Profile.Runtime != "codex-app-server" {
-		return errors.New("isolated graph writer proposal requires exact runtime receipt")
-	}
-	resultHash, err := canonical.Hash("harness.writer-result.v1", record.Isolated.Result)
-	if err != nil || resultHash != host.RuntimeReceipt.ResultHash {
-		return errors.Join(errors.New("isolated graph writer result differs from runtime receipt"), err)
+	if invocation.Profile.Runtime == "opencode-http" {
+		if _, taskID, taskErr := isolatedWriterInvocationForReceiptID(*s, record.Isolated.Invocation.ID); taskErr != nil || taskID != record.TaskID {
+			return errors.Join(errors.New("isolated OpenCode writer proposal task binding mismatch"), taskErr)
+		}
+		if err := requireOpenCodeRoleReceipt(*s, record.Isolated.Invocation, record.Isolated.Result); err != nil {
+			return err
+		}
+		receipt, ok := s.ProviderRuntime[record.Isolated.Invocation.ID]
+		if !ok || receipt.InvocationID != record.Isolated.Invocation.ID || receipt.Role != record.Isolated.Invocation.Profile.Role {
+			return errors.New("isolated OpenCode writer proposal requires exact provider receipt")
+		}
+		if host, exists := s.GraphWriterHosts[roleReceiptTaskID(*s, record.Isolated.Invocation, record.TaskID)]; exists && host.RuntimeReceipt != nil {
+			return errors.New("isolated OpenCode writer proposal cannot reuse a Codex runtime receipt")
+		}
+		resultHash, err := canonical.Hash("harness.writer-result.v1", record.Isolated.Result)
+		if err != nil || resultHash != receipt.ResultHash {
+			return errors.Join(errors.New("isolated OpenCode writer result differs from provider receipt"), err)
+		}
+	} else {
+		host, ok := s.GraphWriterHosts[roleReceiptTaskID(*s, record.Isolated.Invocation, record.TaskID)]
+		if !ok || host.Intent.Invocation != invocation || host.RuntimeReceipt == nil || invocation.Profile.Runtime != "codex-app-server" {
+			return errors.New("isolated graph writer proposal requires exact runtime receipt")
+		}
+		resultHash, err := canonical.Hash("harness.writer-result.v1", record.Isolated.Result)
+		if err != nil || resultHash != host.RuntimeReceipt.ResultHash {
+			return errors.Join(errors.New("isolated graph writer result differs from runtime receipt"), err)
+		}
 	}
 	key := "graph-writer-proposal:" + invocation.ID
 	if seen[key] {
@@ -1137,7 +1157,10 @@ func isStaticGraphWriterCohort(s Snapshot, claim taskscheduler.Claim) bool {
 			continue
 		}
 		invocation, err := writerInvocationForTask(s, task.ID)
-		return err == nil && invocation.Profile.Runtime == "codex-app-server" && invocation.ID == claim.Task.InvocationID
+		if err != nil || invocation.ID != claim.Task.InvocationID {
+			return false
+		}
+		return staticGraphWriterRuntimeAdmitted(s, invocation.Profile.Runtime)
 	}
 	return false
 }
@@ -1184,7 +1207,7 @@ func verifyGraphWriterCohortDelta(controllerPath string, claim taskscheduler.Cla
 		if err != nil {
 			return err
 		}
-		if invocation.Profile.Runtime != "codex-app-server" {
+		if !staticGraphWriterRuntimeAdmitted(bound, invocation.Profile.Runtime) {
 			return errors.New("writer cohort runtime unsupported")
 		}
 		cohort[task.ID] = task

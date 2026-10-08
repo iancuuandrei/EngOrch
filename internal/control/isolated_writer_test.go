@@ -1,17 +1,12 @@
 package control
 
 import (
-	"context"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"testing"
 
 	"harness.local/engorch/internal/canonical"
-	"harness.local/engorch/internal/controllerstate"
 	"harness.local/engorch/internal/engineeringplan"
-	"harness.local/engorch/internal/repository"
-	"harness.local/engorch/internal/runtime"
 )
 
 func isolatedWriterCreation(t *testing.T) Creation {
@@ -44,34 +39,8 @@ func isolatedWriterCreation(t *testing.T) Creation {
 func TestIsolatedWriterInvocationUsesConfirmedChildBindings(t *testing.T) {
 	c := isolatedWriterCreation(t)
 	path, s := isolatedWriterGraphFixture(t, c)
-	machineAuthorizePlan(t, path, s)
-	if _, err := ensureGraphRecorded(path, s); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := StartWorkspace(context.Background(), path); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := PrepareGraphIsolationCohort(context.Background(), path); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := CreateTaskIsolation(context.Background(), path, "one"); err != nil {
-		t.Fatal(err)
-	}
-	s, err := Inspect(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	question, err := graphWriterTaskQuestion(s, "one")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := maybeAdmitIsolatedWriterTaskContext(context.Background(), path, "one", question); err != nil {
-		t.Fatal(err)
-	}
-	s, err = Inspect(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	authorizeIsolatedGraphCohortForTest(t, path, s)
+	s, _ = isolateAndAdmitWriterTaskForTest(t, path, "one")
 	invocation, err := writerInvocationForTask(s, "one")
 	if err != nil {
 		t.Fatal(err)
@@ -128,52 +97,9 @@ func TestIsolatedWriterInvocationUsesConfirmedChildBindings(t *testing.T) {
 
 func isolatedWriterGraphFixture(t *testing.T, c Creation) (string, Snapshot) {
 	t.Helper()
-	autonomousGitInit(t, c.Repository.Root)
-	repo, err := repository.Discover(context.Background(), c.Repository.Root, c.Config.Repository)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.Repository = repo
-	runID, err := canonical.Hash("harness.run.v1", c)
-	if err != nil {
-		t.Fatal(err)
-	}
-	paths, err := controllerstate.Resolve(c.Config.ControllerStateRoot, c.Repository)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := controllerstate.Initialize(paths, c.Repository); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(paths.Runs, 0700); err != nil {
-		t.Fatal(err)
-	}
-	path, err := paths.Run(runID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := Append(path, "run.created", c); err != nil {
-		t.Fatal(err)
-	}
-	if err := Append(path, "planning.started", struct{}{}); err != nil {
-		t.Fatal(err)
-	}
-	graph := directGraphFixture()
-	raw, err := json.Marshal(graph)
-	if err != nil {
-		t.Fatal(err)
-	}
-	invocation, err := plannerInvocationWithContextAndRecipe(c.Config, c.Objective, nil, c.Execution)
-	if err != nil {
-		t.Fatal(err)
-	}
-	model := invocation.Profile.Model
-	if err := Append(path, "plan.recorded", runtime.Result{Version: 1, InvocationID: invocation.ID, Requested: invocation.Profile, ObservedModel: &model, Output: string(raw)}); err != nil {
-		t.Fatal(err)
-	}
-	s, err := Inspect(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return path, s
+	// Both the isolated writer and the isolated/staged OpenCode fixtures share
+	// one replay-validated controller bootstrap; only their graphs differ.
+	// For the v1 writer creation the shared planning access-intent branch is
+	// inert, preserving the exact fixture bytes.
+	return isolatedWriterControllerFixture(t, c, directGraphFixture())
 }

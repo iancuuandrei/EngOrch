@@ -131,34 +131,8 @@ func TestAnchoredContentFailureCannotMaskLaterIdentityOrUnusedPreimage(t *testin
 func TestAnchoredContentCaptureLeasesExactIsolatedChild(t *testing.T) {
 	c := isolatedWriterCreation(t)
 	path, s := isolatedWriterGraphFixture(t, c)
-	machineAuthorizePlan(t, path, s)
-	if _, err := ensureGraphRecorded(path, s); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := StartWorkspace(context.Background(), path); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := PrepareGraphIsolationCohort(context.Background(), path); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := CreateTaskIsolation(context.Background(), path, "one"); err != nil {
-		t.Fatal(err)
-	}
-	s, err := Inspect(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	question, err := graphWriterTaskQuestion(s, "one")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := maybeAdmitIsolatedWriterTaskContext(context.Background(), path, "one", question); err != nil {
-		t.Fatal(err)
-	}
-	s, err = Inspect(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	authorizeIsolatedGraphCohortForTest(t, path, s)
+	s, _ = isolateAndAdmitWriterTaskForTest(t, path, "one")
 	invocation, err := writerInvocationForTask(s, "one")
 	if err != nil {
 		t.Fatal(err)

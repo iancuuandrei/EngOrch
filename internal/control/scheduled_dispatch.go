@@ -468,7 +468,7 @@ func scheduledRuntimeJournal(s Snapshot, invocation runtime.Invocation, task tas
 		return task.ControllerPath + "." + stem + ".provider-runtime.jsonl", nil
 	case "opencode-http":
 		var err error
-		stem, err = providerInvocationJournalStem(task.ControllerPath, invocation, turn)
+		stem, err = providerInvocationJournalStemForSnapshot(task.ControllerPath, s, invocation, turn)
 		if err != nil {
 			return "", err
 		}
