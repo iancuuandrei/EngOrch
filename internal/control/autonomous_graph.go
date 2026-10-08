@@ -108,6 +108,11 @@ func parseAcceptedGraph(s Snapshot) (engineeringplan.Graph, error) {
 	if err != nil {
 		return engineeringplan.Graph{}, rejectedSemanticOutput(err)
 	}
+	if len(g.Couplings) != 0 {
+		if s.Creation.Execution == nil || s.Creation.Execution.IsolatedImplementationVersion != 3 || s.Creation.Execution.IsolationCohortSelectorVersion != 2 || s.Creation.Config.PlannerContract != plannerContractGraphV9 {
+			return engineeringplan.Graph{}, rejectedSemanticOutput(errors.New("typed couplings require plan-graph-v9 with the coupling-aware staged selector"))
+		}
+	}
 	if err := validateAgentContextGraph(s, g); err != nil {
 		return engineeringplan.Graph{}, rejectedSemanticOutput(err)
 	}

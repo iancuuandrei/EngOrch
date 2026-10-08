@@ -145,6 +145,36 @@ demonstrated at the selector unit level with unequal declared demands, not
 with invented per-writer estimates on a live run. No measured quality,
 latency, or cost benefit is claimed.
 
+### Staged coupling-aware wave optimum (`coupling-aware-v1`)
+
+`--isolated-writer-staged --isolation-policy PATH --cohort-selector coupling-aware-v1 --max-parallel N`
+opts a staged run into the typed coupling-aware optimum under
+`plan-graph-v9`. It freezes `isolation_cohort_selector_version: 2` in
+immutable run creation; absent preserves the greedy derivation byte-for-byte
+and version 1 keeps its frozen count-first order unchanged. Hard gates match
+the frozen selectors plus the C4 hard-coupling gate: exact ready identity,
+pairwise dependency/write-overlap independence, every explicit resource
+ceiling, the 1..8 bound, and no C4 pair co-selected in one wave. Objectives
+minimize C3 concurrency risk before admitted count, then admitted count, then
+C2, then C1 co-scheduling, then summed downstream critical-path length
+(declared `EstimatedSeconds`, not a measurement), then summed estimated CPU,
+memory, verification, and runtime slots, with sorted task-ID tie-breaks.
+A remainder that fits capacity but was excluded to avoid a C3/C2/C1 pair
+renders the explicit bounded reason `coupling_risk` with the smallest coupled
+partner; anything else that fits still fails closed.
+
+Couplings are planner-declared advisory only (`planner_declared_advisory`).
+Observed generator/topology labels are rejected as forged until a future
+source-bound admission validates the exact source/candidate/path binding
+against an existing admitted generator or topology record; that broader Phase
+E admission is pending. Graph, source, candidate, and journal hashing binds
+the declared risk inputs; it does not prove a cited fact. C4 requires one
+owner or an explicit implementation dependency and rejects an unsafe split
+before writer effects; serial waves forked from the same parent base do not
+make it safe. C3/C2/C1 never grant readiness, ownership, or write authority,
+and absent coupling (C0) never proves independence. Different files do not
+prove independence, and partial evidence never proves absence.
+
 This is an opt-in scheduling and isolation policy. It does not infer host
 capacity from environment data, measure actual CPU or memory use, qualify a
 provider route, authorize unrestricted operating-system sandboxing, or claim

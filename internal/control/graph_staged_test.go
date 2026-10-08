@@ -739,7 +739,7 @@ func TestStagedLexicographicSelectorOptInPreparation(t *testing.T) {
 	invalid := current
 	invalid.Creation.Execution = &ExecutionPolicy{}
 	*invalid.Creation.Execution = *current.Creation.Execution
-	invalid.Creation.Execution.IsolationCohortSelectorVersion = 2
+	invalid.Creation.Execution.IsolationCohortSelectorVersion = 9
 	invalid.GraphIsolationPreparation = nil
 	if _, err := expectedStagedPreparation(invalid); err == nil || !strings.Contains(err.Error(), "invalid isolation cohort selector") {
 		t.Fatalf("out-of-range selector admitted: %v", err)

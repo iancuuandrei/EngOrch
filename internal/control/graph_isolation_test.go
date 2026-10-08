@@ -208,6 +208,11 @@ func TestIsolationCohortSelectorPolicyValidation(t *testing.T) {
 	if err := lexicographic.Validate(); err != nil {
 		t.Fatalf("staged lexicographic selector rejected: %v", err)
 	}
+	couplingAware := base
+	couplingAware.IsolationCohortSelectorVersion = 2
+	if err := couplingAware.Validate(); err != nil {
+		t.Fatalf("staged coupling-aware selector rejected: %v", err)
+	}
 	raw, err := json.Marshal(lexicographic)
 	if err != nil {
 		t.Fatal(err)
@@ -220,7 +225,7 @@ func TestIsolationCohortSelectorPolicyValidation(t *testing.T) {
 		t.Fatalf("selector did not survive serialization: %+v", roundTrip)
 	}
 	for name, change := range map[string]func(*ExecutionPolicy){
-		"selector_range": func(p *ExecutionPolicy) { p.IsolationCohortSelectorVersion = 2 },
+		"selector_range": func(p *ExecutionPolicy) { p.IsolationCohortSelectorVersion = 9 },
 		"selector_serial": func(p *ExecutionPolicy) {
 			p.IsolatedImplementationVersion = 0
 			p.IsolationCapacity, p.IsolationEstimate = nil, nil

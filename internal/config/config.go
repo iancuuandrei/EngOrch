@@ -145,10 +145,10 @@ func (c Config) Validate() error {
 			return errors.New("validated anchored edits require a Codex fixer runtime")
 		}
 	}
-	if c.PlannerContract != "" && c.PlannerContract != "plan-v1" && c.PlannerContract != plannerContractGraphV1 && c.PlannerContract != "plan-graph-v2" && c.PlannerContract != "plan-graph-v3" && c.PlannerContract != "plan-graph-v4" && c.PlannerContract != "plan-graph-v5" && c.PlannerContract != "plan-graph-v6" && c.PlannerContract != "plan-graph-v7" && c.PlannerContract != "plan-graph-v8" {
+	if c.PlannerContract != "" && c.PlannerContract != "plan-v1" && c.PlannerContract != plannerContractGraphV1 && c.PlannerContract != "plan-graph-v2" && c.PlannerContract != "plan-graph-v3" && c.PlannerContract != "plan-graph-v4" && c.PlannerContract != "plan-graph-v5" && c.PlannerContract != "plan-graph-v6" && c.PlannerContract != "plan-graph-v7" && c.PlannerContract != "plan-graph-v8" && c.PlannerContract != "plan-graph-v9" {
 		return errors.New("unsupported planner contract")
 	}
-	if c.PlannerContract == "plan-graph-v4" || c.PlannerContract == "plan-graph-v6" || c.PlannerContract == "plan-graph-v7" || c.PlannerContract == "plan-graph-v8" {
+	if c.PlannerContract == "plan-graph-v4" || c.PlannerContract == "plan-graph-v6" || c.PlannerContract == "plan-graph-v7" || c.PlannerContract == "plan-graph-v8" || c.PlannerContract == "plan-graph-v9" {
 		if !writercontract.IsAnchoredEdits(c.WriterContract) || c.ExplorerContract != "json-v2" || c.Writer == nil || c.Explorer == nil {
 			return errors.New("parallel graph contracts require anchored-edits writer and json-v2 explorer contracts")
 		}

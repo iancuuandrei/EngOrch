@@ -137,14 +137,18 @@ func stagedCohortIndex(s Snapshot) int {
 
 // stagedCohortSelector returns the frozen per-wave selector for staged
 // preparation: 0 preserves the greedy derivation byte-for-byte, 1 selects
-// the exact finite lexicographic optimum over the same hard gates. Any
-// other value is rejected rather than reinterpreted.
+// the exact finite lexicographic optimum over the same hard gates (frozen
+// v1.1.39: admitted count before critical/resource packing), 2 selects the
+// coupling-aware optimum, which shares those hard gates plus the C4
+// hard-coupling gate and minimizes C3 risk before admitted count, then C2,
+// then C1 co-scheduling before existing critical/resource packing. Any other value
+// is rejected rather than reinterpreted.
 func stagedCohortSelector(s Snapshot) (int, error) {
 	if s.Creation.Execution == nil {
 		return 0, errors.New("staged isolation not enabled")
 	}
 	switch s.Creation.Execution.IsolationCohortSelectorVersion {
-	case 0, 1:
+	case 0, 1, 2:
 		return s.Creation.Execution.IsolationCohortSelectorVersion, nil
 	default:
 		return 0, errors.New("invalid isolation cohort selector version")
@@ -153,11 +157,16 @@ func stagedCohortSelector(s Snapshot) (int, error) {
 
 // selectStagedWaves derives the current-subset waves with the frozen
 // selector. Greedy remains the default; the lexicographic optimum only
-// applies when the immutable run policy opts in.
+// applies when the immutable run policy opts in; the coupling-aware optimum
+// additionally requires plan-graph-v9 and reads the graph's typed couplings.
 func selectStagedWaves(s Snapshot, implementations []engineeringplan.Task, demands []engineeringplan.TaskResourceDemand) ([]engineeringplan.ResourceCohort, int, error) {
 	selector, err := stagedCohortSelector(s)
 	if err != nil {
 		return nil, 0, err
+	}
+	if selector == 2 {
+		waves, err := engineeringplan.SelectResourceWavesCouplingAware(s.Graph.Graph, implementations, demands, *s.Creation.Execution.IsolationCapacity, s.Creation.Execution.EffectiveMaxParallel(), s.Graph.Graph.Couplings)
+		return waves, selector, err
 	}
 	if selector == 1 {
 		waves, err := engineeringplan.SelectResourceWavesLexicographic(s.Graph.Graph, implementations, demands, *s.Creation.Execution.IsolationCapacity, s.Creation.Execution.EffectiveMaxParallel())
@@ -448,7 +457,7 @@ func replayStagedPreparation(s *Snapshot, e journal.Event) error {
 	if prep.Version != 3 {
 		return errors.New("invalid staged preparation version")
 	}
-	if prep.CohortSelectorVersion != 0 && prep.CohortSelectorVersion != 1 {
+	if prep.CohortSelectorVersion != 0 && prep.CohortSelectorVersion != 1 && prep.CohortSelectorVersion != 2 {
 		return errors.New("invalid staged cohort selector version")
 	}
 	if s.Creation.Execution == nil || prep.CohortSelectorVersion != s.Creation.Execution.IsolationCohortSelectorVersion {
