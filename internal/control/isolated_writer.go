@@ -158,11 +158,9 @@ func prepareIsolatedGraphWriterProposal(ctx context.Context, path, taskID string
 		return IsolatedGraphWriterProposal{}, err
 	}
 	expected, err := writerInvocationForIsolatedTask(s, binding)
-	if err != nil || expected != invocation {
-		return IsolatedGraphWriterProposal{}, errors.Join(errors.New("isolated writer invocation is stale or substituted"), err)
-	}
-	if _, err := resolveScheduledRecordedInvocation(s, expected, invocation); err != nil {
-		return IsolatedGraphWriterProposal{}, err
+	resolved, resolveErr := resolveScheduledRecordedInvocation(s, expected, invocation)
+	if err != nil || resolveErr != nil || resolved != invocation {
+		return IsolatedGraphWriterProposal{}, errors.Join(errors.New("isolated writer invocation is stale or substituted"), err, resolveErr)
 	}
 	if err := runtime.ValidateResult(invocation, result, false); err != nil {
 		return IsolatedGraphWriterProposal{}, err

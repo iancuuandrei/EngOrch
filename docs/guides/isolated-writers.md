@@ -39,7 +39,14 @@ resume), and full offline `RunWriter` chains for an isolated task and a
 staged hub task (dispatch to exact runtime/provider receipt to proposal
 record/replay to inspectable usage validation with genuine sealed journals).
 Scope, swapped-receipt, legacy Codex and shared-fallback regressions remain
-strict. Full staged READY with a real Muse route requires live provider
+strict. A two-worker offline scheduled-correction regression covers one
+malformed legacy-text writer (initial scheduler task stays Failed) plus its
+admitted dynamic correction (succeeds through the recorded-correction
+resolver with exact task/child/source/scope checks), sibling preservation,
+no UNKNOWN or nonterminal observation, and an isolated v2 parent aggregate
+built from the two integrated proposals; substituted, unrecorded and
+wrong-task correction identities are rejected with no added effect. All
+receipts are sealed offline journals. Full staged READY with a real Muse route requires live provider
 qualification; offline fixtures do not claim live acceptance, latency, cost,
 or per-invocation performance.
 

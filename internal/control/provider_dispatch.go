@@ -132,6 +132,14 @@ func isolatedTaskBaseForReceipt(s Snapshot, receipt providerDispatchReceipt) (ru
 // task-bound writer invocation by exact invocation ID. Serial writer receipts
 // keep their existing identity; this helper only admits task-bound invocations
 // whose exact child binding is still current. It performs no effects.
+//
+// In addition to the frozen initial cohort identities, it admits recorded
+// scoped semantic corrections: a journal-recorded
+// RoleSemanticCorrection whose TaskID and BaseInvocationID bind the frozen
+// original task invocation and whose scheduledTurnInvocation identity equals
+// the receipt ID. The frozen child binding must still be current and the
+// parent candidate must still match the recorded correction; no admission-only
+// lookup is performed.
 func isolatedWriterInvocationForReceiptID(s Snapshot, receiptInvocationID string) (runtime.Invocation, string, error) {
 	if !isolatedImplementationEnabled(s) || s.GraphIsolationPreparation == nil {
 		return runtime.Invocation{}, "", errors.New("isolated writer receipt requires a frozen child cohort")
@@ -148,6 +156,47 @@ func isolatedWriterInvocationForReceiptID(s Snapshot, receiptInvocationID string
 			continue
 		}
 		return invocation, taskID, nil
+	}
+	var parentCandidateID string
+	if s.Candidate != nil {
+		if id, err := s.Candidate.ID(); err == nil {
+			parentCandidateID = id
+		}
+	}
+	for _, taskID := range s.GraphIsolationPreparation.SelectedTaskIDs {
+		base, err := writerInvocationForTask(s, taskID)
+		if err != nil {
+			continue
+		}
+		for _, correction := range s.RoleCorrections {
+			if correction.ScheduledTaskID == "" {
+				continue
+			}
+			if correction.TaskID != taskID {
+				continue
+			}
+			if correction.BaseInvocationID != base.ID {
+				continue
+			}
+			if correction.Invocation.Profile.Role != base.Profile.Role {
+				continue
+			}
+			if parentCandidateID != "" && correction.CandidateID != "" && correction.CandidateID != parentCandidateID {
+				continue
+			}
+			operation, err := scheduledOperationForRole(correction.Invocation.Profile.Role)
+			if err != nil {
+				continue
+			}
+			scoped, err := scheduledTurnInvocation(correction.Invocation, operation, correction.ScheduledTaskID)
+			if err != nil || scoped.ID != receiptInvocationID {
+				continue
+			}
+			if scoped.Profile.Runtime != "opencode-http" && scoped.Profile.Runtime != "codex-app-server" {
+				continue
+			}
+			return scoped, taskID, nil
+		}
 	}
 	return runtime.Invocation{}, "", errors.New("isolated writer receipt task binding unavailable")
 }
@@ -635,11 +684,9 @@ func executeIsolatedOpenCodeWriter(ctx context.Context, controllerPath string, t
 		return result, errors.Join(errors.New("isolated OpenCode writer binding changed before dispatch"), err)
 	}
 	expected, err := writerInvocationForIsolatedTask(s, binding)
-	if err != nil || expected != invocation {
-		return result, errors.Join(errors.New("isolated OpenCode writer invocation is stale or substituted"), err)
-	}
-	if _, err := resolveScheduledRecordedInvocation(s, expected, invocation); err != nil {
-		return result, err
+	resolved, resolveErr := resolveScheduledRecordedInvocation(s, expected, invocation)
+	if err != nil || resolveErr != nil || resolved != invocation {
+		return result, errors.Join(errors.New("isolated OpenCode writer invocation is stale or substituted"), err, resolveErr)
 	}
 	var lease controllerCandidateLease
 	lease, err = worktree.AcquireRead(binding.Workspace.Request)
@@ -657,8 +704,9 @@ func executeIsolatedOpenCodeWriter(ctx context.Context, controllerPath string, t
 		return result, errors.Join(errors.New("isolated OpenCode writer binding changed before dispatch"), err)
 	}
 	freshInvocation, err := writerInvocationForIsolatedTask(latest, binding)
-	if err != nil || freshInvocation != invocation {
-		return result, errors.Join(errors.New("isolated OpenCode writer invocation changed before dispatch"), err)
+	resolvedFresh, resolveFreshErr := resolveScheduledRecordedInvocation(latest, freshInvocation, invocation)
+	if err != nil || resolveFreshErr != nil || resolvedFresh != invocation {
+		return result, errors.Join(errors.New("isolated OpenCode writer invocation changed before dispatch"), err, resolveFreshErr)
 	}
 	childCurrent, _, err := worktree.Capture(ctx, binding.Workspace)
 	if err != nil || childCurrent != binding.Candidate {
@@ -711,8 +759,9 @@ func executeIsolatedOpenCodeWriter(ctx context.Context, controllerPath string, t
 		return result, errors.Join(errors.New("isolated OpenCode writer binding changed before dispatch"), err, finishAgentDispatchUnknown(dispatchBinding))
 	}
 	preInvocation, err := writerInvocationForIsolatedTask(preDispatch, binding)
-	if err != nil || preInvocation != invocation {
-		return result, errors.Join(errors.New("isolated OpenCode writer invocation changed before dispatch"), err, finishAgentDispatchUnknown(dispatchBinding))
+	resolvedPre, resolvePreErr := resolveScheduledRecordedInvocation(preDispatch, preInvocation, invocation)
+	if err != nil || resolvePreErr != nil || resolvedPre != invocation {
+		return result, errors.Join(errors.New("isolated OpenCode writer invocation changed before dispatch"), err, resolvePreErr, finishAgentDispatchUnknown(dispatchBinding))
 	}
 	journalStem, err := providerInvocationJournalStemForSnapshot(controllerPath, preDispatch, invocation, scheduledAgentTurn(ctx))
 	if err != nil {
@@ -743,8 +792,9 @@ func executeIsolatedOpenCodeWriter(ctx context.Context, controllerPath string, t
 		return result, errors.Join(errors.New("isolated OpenCode writer binding changed during dispatch"), err, finishAgentDispatchUnknown(dispatchBinding))
 	}
 	postInvocation, err := writerInvocationForIsolatedTask(post, binding)
-	if err != nil || postInvocation != invocation {
-		return result, errors.Join(errors.New("isolated OpenCode writer invocation changed during dispatch"), err, finishAgentDispatchUnknown(dispatchBinding))
+	resolvedPost, resolvePostErr := resolveScheduledRecordedInvocation(post, postInvocation, invocation)
+	if err != nil || resolvePostErr != nil || resolvedPost != invocation {
+		return result, errors.Join(errors.New("isolated OpenCode writer invocation changed during dispatch"), err, resolvePostErr, finishAgentDispatchUnknown(dispatchBinding))
 	}
 	if err := requireCurrentHostAdmission(ctx, post); err != nil {
 		return result, errors.Join(err, finishAgentDispatchUnknown(dispatchBinding))

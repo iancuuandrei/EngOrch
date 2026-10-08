@@ -880,6 +880,19 @@ func scheduledEvidence(s Snapshot, head string, invocation runtime.Invocation, t
 	if task.Operation == taskscheduler.OperationWriter && graphWriterCohortEnabled(s) {
 		if record, ok := s.GraphWriterResults[task.ID]; ok && graphWriterRecordInvocation(record).ID == invocation.ID {
 			complete = true
+		} else if correction, ok := scheduledCorrectionForTask(s, task.ID); ok &&
+			(correction.Invocation.Profile.Role == "writer" || correction.Invocation.Profile.Role == "fixer") &&
+			correction.TaskID != "" && correction.ScheduledTaskID == task.ID {
+			// Dynamic correction turns are keyed by their scheduled turn ID
+			// while the integrated proposal remains keyed by the original
+			// graph task. Resolve only through the recorded correction and
+			// require the exact scoped invocation plus the exact recorded
+			// proposal invocation. No scan, no completion-only success.
+			if scoped, err := scheduledTurnInvocation(correction.Invocation, taskscheduler.OperationWriter, correction.ScheduledTaskID); err == nil && scoped == invocation {
+				if record, ok := s.GraphWriterResults[correction.TaskID]; ok && graphWriterRecordInvocation(record).ID == invocation.ID {
+					complete = true
+				}
+			}
 		}
 	}
 	complete = complete || task.Operation == taskscheduler.OperationReviewer && s.Review != nil && s.Review.Invocation.ID == invocation.ID
