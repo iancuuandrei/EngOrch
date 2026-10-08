@@ -121,7 +121,19 @@ func baseInvocationForReceipt(prefix Snapshot, receipt providerDispatchReceipt) 
 	case "explorer":
 		return explorerInvocation(prefix, receipt.Question)
 	case "writer", "fixer":
-		return writerInvocation(prefix)
+		base, err := writerInvocation(prefix)
+		if err == nil {
+			if base.ID == receipt.InvocationID {
+				return base, nil
+			}
+			if _, resolveErr := resolveScheduledInvocationID(prefix, base, receipt.InvocationID); resolveErr == nil {
+				return base, nil
+			}
+		}
+		if taskBase, _, ok := isolatedTaskBaseForReceipt(prefix, receipt); ok {
+			return taskBase, nil
+		}
+		return base, err
 	case "reviewer":
 		return reviewInvocation(prefix)
 	default:
@@ -200,7 +212,7 @@ func verifyOpenCodeCompositeWithScheduler(controllerPath, schedulerPath string, 
 	if err != nil {
 		return OpenCodeUsageEntry{}, errors.New("opencode admission missing for receipt")
 	}
-	stem, err := providerInvocationJournalStem(controllerPath, invocation, turn)
+	stem, err := providerInvocationJournalStemForSnapshot(controllerPath, s, invocation, turn)
 	if err != nil {
 		return OpenCodeUsageEntry{}, errors.New("opencode journal identity unavailable")
 	}
@@ -332,7 +344,7 @@ func verifyOpenCodeReceiptWithScheduler(controllerPath, schedulerPath string, s 
 	if safepath.RequireDigest(receipt.InvocationID) != nil || safepath.RequireDigest(receipt.AccessInvocationID) != nil || safepath.RequireDigest(receipt.RuntimeJournalHead) != nil || safepath.RequireDigest(receipt.GatewayJournalHead) != nil || safepath.RequireDigest(receipt.ResultHash) != nil {
 		return OpenCodeUsageEntry{}, errors.New("opencode receipt identity changed")
 	}
-	invocation, turn, _, err := authoritativeInvocationForReceipt(events, receiptIndex, receipt)
+	invocation, turn, receiptPrefix, err := authoritativeInvocationForReceipt(events, receiptIndex, receipt)
 	if err != nil {
 		return OpenCodeUsageEntry{}, err
 	}
@@ -342,7 +354,14 @@ func verifyOpenCodeReceiptWithScheduler(controllerPath, schedulerPath string, s 
 	if receipt.Result.InvocationID != receipt.InvocationID || receipt.Result.Requested != invocation.Profile {
 		return OpenCodeUsageEntry{}, errors.New("opencode result identity changed")
 	}
-	stem, err := providerInvocationJournalStem(controllerPath, invocation, turn)
+	// Resolve through the historical receipt prefix first so the deterministic
+	// isolated namespace matches the execution-time derivation exactly; fall
+	// back to the final snapshot only when the prefix no longer admits the
+	// frozen child binding (e.g. post-integration prefixes).
+	stem, err := providerInvocationJournalStemForSnapshot(controllerPath, receiptPrefix, invocation, turn)
+	if err != nil {
+		stem, err = providerInvocationJournalStemForSnapshot(controllerPath, s, invocation, turn)
+	}
 	if err != nil {
 		return OpenCodeUsageEntry{}, errors.New("opencode journal identity unavailable")
 	}
@@ -520,7 +539,7 @@ func pendingOpenCodeEntry(controllerPath string, s Snapshot, admission AgentDisp
 	if admission.AgentTurn != nil {
 		entry.TurnID = admission.AgentTurn.TurnID
 	}
-	stem, err := providerInvocationJournalStem(controllerPath, admission.Invocation, admission.AgentTurn)
+	stem, err := providerInvocationJournalStemForSnapshot(controllerPath, s, admission.Invocation, admission.AgentTurn)
 	if err != nil {
 		return entry, true
 	}

@@ -172,6 +172,54 @@ func providerInvocationJournalStem(controllerPath string, invocation runtime.Inv
 	return stem + ".invocation-" + invocation.ID, nil
 }
 
+// isolatedWriterJournalStem returns the collision-free deterministic journal
+// namespace for one controller-admitted static isolated/staged OpenCode task
+// writer turn: `<role>.invocation-<invocationID>`. It is derived from the
+// admitted task/invocation binding before any journal read or write, so two
+// distinct valid task invocations derive distinct journals even when neither
+// journal exists yet; concurrent writers never share a journal by racing the
+// legacy claimant read below. Serial, scheduled (turn-bound) and Codex paths
+// are untouched: this applies only to turn-free writer/fixer invocations with
+// the opencode-http runtime admitted by the frozen isolated cohort. Legacy
+// absent-field serialization is unchanged and old journals are never renamed.
+// The second return value reports whether the deterministic namespace applies;
+// callers fall back to providerInvocationJournalStem when it does not.
+func isolatedWriterJournalStem(s Snapshot, invocation runtime.Invocation, turn *taskscheduler.AgentTurnBinding) (string, bool) {
+	if turn != nil {
+		return "", false
+	}
+	if invocation.Profile.Role != "writer" && invocation.Profile.Role != "fixer" {
+		return "", false
+	}
+	if invocation.Profile.Runtime != "opencode-http" {
+		return "", false
+	}
+	if !isolatedImplementationEnabled(s) {
+		return "", false
+	}
+	// Controller-admitted binding only: the exact frozen child invocation must
+	// equal the candidate invocation. Model prose, scheduler hints and
+	// journal contents never grant this namespace.
+	admitted, _, err := isolatedWriterInvocationForReceiptID(s, invocation.ID)
+	if err != nil || admitted != invocation {
+		return "", false
+	}
+	return invocation.Profile.Role + ".invocation-" + invocation.ID, true
+}
+
+// providerInvocationJournalStemForSnapshot resolves the same journal stem as
+// providerInvocationJournalStem for serial and scheduled turns, but consults
+// the controller-admitted isolated task/invocation binding first. Execution,
+// usage verification, scheduler reconciliation and resumed observation must all
+// resolve through this snapshot-aware helper with their own current snapshot
+// so every path derives the identical deterministic namespace.
+func providerInvocationJournalStemForSnapshot(controllerPath string, s Snapshot, invocation runtime.Invocation, turn *taskscheduler.AgentTurnBinding) (string, error) {
+	if stem, ok := isolatedWriterJournalStem(s, invocation, turn); ok {
+		return stem, nil
+	}
+	return providerInvocationJournalStem(controllerPath, invocation, turn)
+}
+
 func beginAgentDispatchForTurn(controllerPath string, snapshot Snapshot, invocation runtime.Invocation, turn *taskscheduler.AgentTurnBinding) (agentDispatchBinding, error) {
 	contextHash, err := access.InputID(invocation.Input)
 	if err != nil {

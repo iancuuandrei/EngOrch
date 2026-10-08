@@ -110,6 +110,48 @@ func providerTransportClient(ctx context.Context) (*providertransport.Client, er
 	return providertransport.NewClient(providertransport.ClientOptions{})
 }
 
+// isolatedTaskBaseForReceipt resolves the exact frozen child invocation bound
+// to a writer/fixer receipt ID through the controller-admitted cohort. It
+// performs no effects and admits only task-bound invocations whose exact child
+// binding is still current.
+func isolatedTaskBaseForReceipt(s Snapshot, receipt providerDispatchReceipt) (runtime.Invocation, string, bool) {
+	if receipt.Role != "writer" && receipt.Role != "fixer" {
+		return runtime.Invocation{}, "", false
+	}
+	if !isolatedImplementationEnabled(s) {
+		return runtime.Invocation{}, "", false
+	}
+	base, taskID, err := isolatedWriterInvocationForReceiptID(s, receipt.InvocationID)
+	if err != nil {
+		return runtime.Invocation{}, "", false
+	}
+	return base, taskID, true
+}
+
+// isolatedWriterInvocationForReceiptID resolves one opt-in isolated/staged
+// task-bound writer invocation by exact invocation ID. Serial writer receipts
+// keep their existing identity; this helper only admits task-bound invocations
+// whose exact child binding is still current. It performs no effects.
+func isolatedWriterInvocationForReceiptID(s Snapshot, receiptInvocationID string) (runtime.Invocation, string, error) {
+	if !isolatedImplementationEnabled(s) || s.GraphIsolationPreparation == nil {
+		return runtime.Invocation{}, "", errors.New("isolated writer receipt requires a frozen child cohort")
+	}
+	for _, taskID := range s.GraphIsolationPreparation.SelectedTaskIDs {
+		invocation, err := writerInvocationForTask(s, taskID)
+		if err != nil {
+			continue
+		}
+		if invocation.ID != receiptInvocationID {
+			continue
+		}
+		if invocation.Profile.Runtime != "opencode-http" && invocation.Profile.Runtime != "codex-app-server" {
+			continue
+		}
+		return invocation, taskID, nil
+	}
+	return runtime.Invocation{}, "", errors.New("isolated writer receipt task binding unavailable")
+}
+
 func replayRoleProvider(s *Snapshot, event journal.Event) error {
 	var receipt providerDispatchReceipt
 	if err := canonical.Decode(event.Payload, &receipt); err != nil {
@@ -122,17 +164,43 @@ func replayRoleProvider(s *Snapshot, event journal.Event) error {
 		base, err = explorerInvocation(*s, receipt.Question)
 	case "writer", "fixer":
 		base, err = writerInvocation(*s)
+		if err != nil {
+			if taskBase, _, ok := isolatedTaskBaseForReceipt(*s, receipt); ok {
+				base, err = taskBase, nil
+			}
+		}
 	case "reviewer":
 		base, err = reviewInvocation(*s)
 	default:
 		return errors.New("unknown provider role receipt")
 	}
 	if err != nil {
-		return err
+		// Serial writer derivation fails once an isolated cohort is frozen
+		// because the parent-bound writer invocation is no longer the
+		// task-bound child invocation. Fall back to the exact frozen child
+		// binding before rejecting, preserving serial behavior otherwise.
+		if taskBase, _, ok := isolatedTaskBaseForReceipt(*s, receipt); ok {
+			base, err = taskBase, nil
+		}
+		if err != nil {
+			return err
+		}
 	}
 	invocation, err := resolveScheduledInvocationID(*s, base, receipt.InvocationID)
+	if err != nil {
+		if taskBase, _, ok := isolatedTaskBaseForReceipt(*s, receipt); ok {
+			base = taskBase
+			invocation, err = resolveScheduledInvocationID(*s, base, receipt.InvocationID)
+		}
+	}
 	if err != nil || invocation.Profile.Role != receipt.Role || invocation.Profile.Runtime != "opencode-http" || receipt.InvocationID != invocation.ID || receipt.Version != 1 || safepath.RequireDigest(receipt.AccessInvocationID) != nil || safepath.RequireDigest(receipt.RuntimeJournalHead) != nil || safepath.RequireDigest(receipt.GatewayJournalHead) != nil {
 		return errors.New("provider role receipt identity mismatch")
+	}
+	if _, taskID, ok := isolatedTaskBaseForReceipt(*s, receipt); ok {
+		expectedQuestion, questionErr := graphWriterTaskQuestion(*s, taskID)
+		if questionErr != nil || receipt.Question != expectedQuestion {
+			return errors.New("isolated writer receipt task binding mismatch")
+		}
 	}
 	if err := validateRoutingDecisionForSnapshot(*s, invocation, receipt.RoutingDecision); err != nil {
 		return err
@@ -167,6 +235,20 @@ func replayRoleProvider(s *Snapshot, event journal.Event) error {
 }
 
 func executeOpenCodeProviderRuntime(ctx context.Context, controllerPath string, s Snapshot, invocation runtime.Invocation, candidateLease opencoderuntime.CandidateLease) (runtime.Result, providerDispatchReceipt, error) {
+	journalStem, err := providerInvocationJournalStemForSnapshot(controllerPath, s, invocation, scheduledAgentTurn(ctx))
+	if err != nil {
+		return runtime.Result{}, providerDispatchReceipt{}, err
+	}
+	return executeOpenCodeProviderRuntimeWithStem(ctx, controllerPath, s, invocation, candidateLease, journalStem)
+}
+
+// executeOpenCodeProviderRuntimeWithStem runs one OpenCode provider turn
+// against caller-resolved journal paths. Serial callers resolve through
+// executeOpenCodeProviderRuntime; isolated writers resolve their
+// collision-free per-invocation namespace from the parent snapshot before the
+// child snapshot replaces the candidate, so execution, usage verification and
+// resumed observation share identical paths.
+func executeOpenCodeProviderRuntimeWithStem(ctx context.Context, controllerPath string, s Snapshot, invocation runtime.Invocation, candidateLease opencoderuntime.CandidateLease, journalStem string) (runtime.Result, providerDispatchReceipt, error) {
 	if invocation.Profile.Runtime != "opencode-http" || s.Creation.Config.OpenCode == nil {
 		return runtime.Result{}, providerDispatchReceipt{}, errors.New("OpenCode provider runtime required")
 	}
@@ -184,9 +266,8 @@ func executeOpenCodeProviderRuntime(ctx context.Context, controllerPath string, 
 		return runtime.Result{}, providerDispatchReceipt{}, err
 	}
 	accessPath := controllerPath + ".model-access.jsonl"
-	journalStem, err := providerInvocationJournalStem(controllerPath, invocation, scheduledAgentTurn(ctx))
-	if err != nil {
-		return runtime.Result{}, providerDispatchReceipt{}, err
+	if journalStem == "" {
+		return runtime.Result{}, providerDispatchReceipt{}, errors.New("OpenCode journal namespace required")
 	}
 	gatewayPath := controllerPath + "." + journalStem + ".provider-gateway.jsonl"
 	runtimePath := controllerPath + "." + journalStem + ".opencode-runtime.jsonl"
@@ -504,6 +585,192 @@ func executeOpenCodeRole(ctx context.Context, controllerPath string, s Snapshot,
 		return result, err
 	}
 	return result, nil
+}
+
+// isolatedOpenCodeRuntimeForTest substitutes the provider-effect execution for
+// one isolated writer turn in tests only. It receives the caller-resolved
+// deterministic journal namespace and must honor it exactly so the sealed
+// fixture journals it writes verify through the same usage path as production
+// execution. Production code leaves it nil; no external model is involved.
+var isolatedOpenCodeRuntimeForTest func(ctx context.Context, controllerPath string, s Snapshot, invocation runtime.Invocation, lease opencoderuntime.CandidateLease, journalStem string) (runtime.Result, providerDispatchReceipt, error)
+
+// isolatedWriterBindingForSnapshot resolves the confirmed child binding for
+// the active isolation mode: staged fork bindings for v3 cohorts, plain child
+// bindings otherwise.
+func isolatedWriterBindingForSnapshot(s Snapshot, taskID string) (isolatedWriterBinding, error) {
+	if stagedIsolationEnabled(s) {
+		return stagedForkBindingForTask(s, taskID)
+	}
+	return isolatedWriterBindingForTask(s, taskID)
+}
+
+// executeIsolatedOpenCodeWriter runs one opt-in isolated/staged writer turn
+// against its exact confirmed child workspace/candidate. It reuses the
+// existing OpenCode runtime/provider/gateway machinery with per-invocation
+// journals, immutable policy/scopes, scheduler reservations and source
+// ownership. The parent candidate is never bound as the tool candidate; the
+// child candidate/task/workspace binding is enforced before and after
+// dispatch. UNKNOWN stops with no resend via the shared agent-dispatch
+// observation; old active uncertain effects are never probed here.
+func executeIsolatedOpenCodeWriter(ctx context.Context, controllerPath string, taskID string, invocation runtime.Invocation, binding isolatedWriterBinding, question string) (result runtime.Result, err error) {
+	if invocation.Profile.Runtime != "opencode-http" {
+		return result, errors.New("isolated OpenCode writer requires the opencode-http runtime")
+	}
+	if taskID == "" || binding.TaskID != taskID {
+		return result, errors.New("isolated OpenCode writer task binding required")
+	}
+	s, err := Inspect(controllerPath)
+	if err != nil {
+		return result, err
+	}
+	if !isolatedImplementationEnabled(s) {
+		return result, errors.New("isolated OpenCode writer requires the opt-in isolated implementation policy")
+	}
+	if s.Workspace == nil || s.Candidate == nil {
+		return result, errors.New("isolated OpenCode writer requires an admitted parent candidate")
+	}
+	var currentBinding isolatedWriterBinding
+	currentBinding, err = isolatedWriterBindingForSnapshot(s, taskID)
+	if err != nil || !sameCanonical(currentBinding, binding) {
+		return result, errors.Join(errors.New("isolated OpenCode writer binding changed before dispatch"), err)
+	}
+	expected, err := writerInvocationForIsolatedTask(s, binding)
+	if err != nil || expected != invocation {
+		return result, errors.Join(errors.New("isolated OpenCode writer invocation is stale or substituted"), err)
+	}
+	if _, err := resolveScheduledRecordedInvocation(s, expected, invocation); err != nil {
+		return result, err
+	}
+	var lease controllerCandidateLease
+	lease, err = worktree.AcquireRead(binding.Workspace.Request)
+	if err != nil {
+		return result, err
+	}
+	defer func() { err = errors.Join(err, lease.Close()) }()
+	latest, err := Inspect(controllerPath)
+	if err != nil {
+		return result, err
+	}
+	var freshBinding isolatedWriterBinding
+	freshBinding, err = isolatedWriterBindingForSnapshot(latest, taskID)
+	if err != nil || !sameCanonical(freshBinding, binding) {
+		return result, errors.Join(errors.New("isolated OpenCode writer binding changed before dispatch"), err)
+	}
+	freshInvocation, err := writerInvocationForIsolatedTask(latest, binding)
+	if err != nil || freshInvocation != invocation {
+		return result, errors.Join(errors.New("isolated OpenCode writer invocation changed before dispatch"), err)
+	}
+	childCurrent, _, err := worktree.Capture(ctx, binding.Workspace)
+	if err != nil || childCurrent != binding.Candidate {
+		return result, errors.Join(errors.New("isolated OpenCode child candidate changed before dispatch"), err)
+	}
+	if latest.Candidate == nil || latest.Workspace == nil {
+		return result, errors.New("isolated OpenCode parent candidate unavailable")
+	}
+	parentCurrent, err := worktree.Fingerprint(ctx, *latest.Workspace)
+	if err != nil || parentCurrent != *latest.Candidate {
+		return result, errors.Join(errors.New("isolated OpenCode parent candidate changed before dispatch"), err)
+	}
+	if receipt, ok := latest.ProviderRuntime[invocation.ID]; ok {
+		if receipt.Question != question || receipt.Role != invocation.Profile.Role || receipt.InvocationID != invocation.ID {
+			return result, errors.New("recorded isolated OpenCode role receipt changed")
+		}
+		if err := requireOpenCodeRoleReceipt(latest, invocation, receipt.Result); err != nil {
+			return result, err
+		}
+		if err := settleProviderDispatchTaskPool(controllerPath, latest.Creation.Config, latest.RunID, invocation, receipt); err != nil {
+			return result, err
+		}
+		return receipt.Result, nil
+	}
+	dispatchBinding, err := beginAgentDispatchForTurn(controllerPath, latest, invocation, scheduledAgentTurn(ctx))
+	if err != nil {
+		return result, err
+	}
+	if err := ensureOpenCodeDispatchCapacity(latest, invocation); err != nil {
+		return result, err
+	}
+	if err := markAgentDispatchRunning(&dispatchBinding); err != nil {
+		return result, err
+	}
+	// Recheck host admission immediately before runtime dispatch: the lease,
+	// fingerprint and capacity checks above leave a TOCTOU window, and the
+	// serial path re-inspects plus requires current host admission at the same
+	// point. A stale or mutating binding fails here with the admitted effect
+	// identity retained and no provider effect started below.
+	preDispatch, err := Inspect(controllerPath)
+	if err != nil {
+		return result, errors.Join(err, finishAgentDispatchUnknown(dispatchBinding))
+	}
+	if err := requireCurrentHostAdmission(ctx, preDispatch); err != nil {
+		return result, errors.Join(err, finishAgentDispatchUnknown(dispatchBinding))
+	}
+	var preBinding isolatedWriterBinding
+	preBinding, err = isolatedWriterBindingForSnapshot(preDispatch, taskID)
+	if err != nil || !sameCanonical(preBinding, binding) {
+		return result, errors.Join(errors.New("isolated OpenCode writer binding changed before dispatch"), err, finishAgentDispatchUnknown(dispatchBinding))
+	}
+	preInvocation, err := writerInvocationForIsolatedTask(preDispatch, binding)
+	if err != nil || preInvocation != invocation {
+		return result, errors.Join(errors.New("isolated OpenCode writer invocation changed before dispatch"), err, finishAgentDispatchUnknown(dispatchBinding))
+	}
+	journalStem, err := providerInvocationJournalStemForSnapshot(controllerPath, preDispatch, invocation, scheduledAgentTurn(ctx))
+	if err != nil {
+		return result, errors.Join(err, finishAgentDispatchUnknown(dispatchBinding))
+	}
+	childSnapshot := preDispatch
+	childSnapshot.Workspace = &binding.Workspace
+	childSnapshot.Candidate = &binding.Candidate
+	runtimeHook := executeOpenCodeProviderRuntimeWithStem
+	if isolatedOpenCodeRuntimeForTest != nil {
+		runtimeHook = isolatedOpenCodeRuntimeForTest
+	}
+	dispatched, receipt, dispatchErr := runtimeHook(ctx, controllerPath, childSnapshot, invocation, lease, journalStem)
+	if dispatchErr != nil {
+		return result, errors.Join(dispatchErr, finishAgentDispatchUnknown(dispatchBinding))
+	}
+	// Confirm the child, workspace and parent binding after dispatch before
+	// observing successful receipt: a mutating provider turn or a host
+	// admission change fails safely here with the effect identity retained in
+	// the runtime journals and no success observation or retry.
+	post, err := Inspect(controllerPath)
+	if err != nil {
+		return result, errors.Join(err, finishAgentDispatchUnknown(dispatchBinding))
+	}
+	var postBinding isolatedWriterBinding
+	postBinding, err = isolatedWriterBindingForSnapshot(post, taskID)
+	if err != nil || !sameCanonical(postBinding, binding) {
+		return result, errors.Join(errors.New("isolated OpenCode writer binding changed during dispatch"), err, finishAgentDispatchUnknown(dispatchBinding))
+	}
+	postInvocation, err := writerInvocationForIsolatedTask(post, binding)
+	if err != nil || postInvocation != invocation {
+		return result, errors.Join(errors.New("isolated OpenCode writer invocation changed during dispatch"), err, finishAgentDispatchUnknown(dispatchBinding))
+	}
+	if err := requireCurrentHostAdmission(ctx, post); err != nil {
+		return result, errors.Join(err, finishAgentDispatchUnknown(dispatchBinding))
+	}
+	postChild, _, err := worktree.Capture(ctx, binding.Workspace)
+	if err != nil || postChild != binding.Candidate {
+		return result, errors.Join(errors.New("isolated OpenCode child candidate changed during dispatch"), err, finishAgentDispatchUnknown(dispatchBinding))
+	}
+	if post.Candidate == nil || post.Workspace == nil {
+		return result, errors.Join(errors.New("isolated OpenCode parent candidate unavailable after dispatch"), finishAgentDispatchUnknown(dispatchBinding))
+	}
+	postParent, err := worktree.Fingerprint(ctx, *post.Workspace)
+	if err != nil || postParent != *post.Candidate {
+		return result, errors.Join(errors.New("isolated OpenCode parent candidate changed during dispatch"), err, finishAgentDispatchUnknown(dispatchBinding))
+	}
+	receipt.Question = question
+	if err := Append(controllerPath, "role.provider-observed", receipt); err != nil {
+		return result, err
+	}
+	if err := settleProviderDispatchTaskPool(controllerPath, post.Creation.Config, post.RunID, invocation, receipt); err != nil {
+		return result, err
+	}
+	if err := finishAgentDispatch(dispatchBinding, receipt.ResultHash); err != nil {
+		return runtime.Result{}, err
+	}
+	return dispatched, nil
 }
 
 func requireOpenCodeRoleReceipt(s Snapshot, invocation runtime.Invocation, result runtime.Result) error {

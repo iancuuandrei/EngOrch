@@ -6,6 +6,7 @@ import (
 	"harness.local/engorch/internal/runtime"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -67,5 +68,33 @@ func TestAutonomousCompactionFallsBackForMixedRuntimes(t *testing.T) {
 	}
 	if o.autoCompact != 0 || len(o.fallbacks) != 1 || o.fallbacks[0].Capability != "auto_compaction" {
 		t.Fatal("mixed runtimes retained an unsupported global compaction option")
+	}
+}
+
+func TestAutonomousIsolationAdmitsOpenCodeWriter(t *testing.T) {
+	cfg := config.Config{
+		Writer:              &runtime.Profile{Runtime: "opencode-http"},
+		ControllerStateRoot: t.TempDir(),
+		OpenCode:            &config.OpenCodeHost{Version: 1, Executable: `D:\tools\opencode.exe`, ExecutableHash: strings.Repeat("e", 64), StateRoot: t.TempDir()},
+		Provider:            &config.Provider{Version: 1},
+		Access:              &config.Access{},
+	}
+	o := autonomousCapabilities{isolation: &isolatedWriterPolicyFile{Capacity: isolatedWriterLimits{CPUMilli: 4000, MemoryMiB: 8192, TotalRuntimeSlots: 4, RuntimeSlots: 2}, Estimate: control.IsolationEstimateTemplate{CPUMilli: 1000, MemoryMiB: 2048, RuntimeSlots: 1}}}
+	if err := o.resolve(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if o.isolation == nil {
+		t.Fatalf("opt-in isolated opencode-http writer was not admitted: fallbacks=%+v", o.fallbacks)
+	}
+	bad := cfg
+	bad.OpenCode = nil
+	bad.Provider = nil
+	bad.Access = nil
+	o = autonomousCapabilities{isolation: &isolatedWriterPolicyFile{Capacity: isolatedWriterLimits{CPUMilli: 4000, MemoryMiB: 8192, TotalRuntimeSlots: 4, RuntimeSlots: 2}, Estimate: control.IsolationEstimateTemplate{CPUMilli: 1000, MemoryMiB: 2048, RuntimeSlots: 1}}}
+	if err := o.resolve(bad); err != nil {
+		t.Fatal(err)
+	}
+	if o.isolation != nil || len(o.fallbacks) != 1 {
+		t.Fatal("isolated opencode-http without provider state was not degraded to serial")
 	}
 }

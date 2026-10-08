@@ -156,8 +156,13 @@ func (c Config) Validate() error {
 		// pinned Codex runtime. The deterministic fake route remains available
 		// for local contract tests; provider-backed routes need separate
 		// qualification before they can receive parallel writer dispatches.
+		// Opt-in isolated (v7) and staged (v8/v9) cohorts additionally admit
+		// the configured OpenCode writer runtime for child-bound execution;
+		// shared-workspace parallel cohorts (v4/v6) remain Codex-only.
 		if c.Writer.Runtime != "codex-app-server" && c.Writer.Runtime != "fake" {
-			return errors.New("parallel graph contracts require a Codex writer runtime")
+			if c.Writer.Runtime != "opencode-http" || (c.PlannerContract != "plan-graph-v7" && c.PlannerContract != "plan-graph-v8" && c.PlannerContract != "plan-graph-v9") {
+				return errors.New("parallel graph contracts require a Codex writer runtime")
+			}
 		}
 	}
 	if c.ExplorerContract != "" && c.ExplorerContract != "json-v1" && c.ExplorerContract != "json-v2" {

@@ -25,6 +25,13 @@ type autonomousCapabilities struct {
 	fallbacks                                            []control.CapabilityFallback
 }
 
+// isolatedOpenCodeWriterConfigured reports whether the configured writer is
+// the opt-in isolated/staged OpenCode route. Shared-workspace parallel
+// writers stay Codex-only; isolation admission here never widens them.
+func isolatedOpenCodeWriterConfigured(cfg config.Config) bool {
+	return cfg.Writer != nil && cfg.Writer.Runtime == "opencode-http"
+}
+
 // Resolve preferences only before run creation. Invalid policies, mismatched
 // binary hashes, unsafe state paths and all existing-run inputs stay strict.
 func (o *autonomousCapabilities) resolve(cfg config.Config) error {
@@ -45,10 +52,22 @@ func (o *autonomousCapabilities) resolve(cfg config.Config) error {
 	}
 	if o.parallel || o.isolation != nil || o.isolationWaves || o.isolationStaged {
 		reason := ""
-		if cfg.Writer != nil && cfg.Writer.Runtime != "codex-app-server" && cfg.Writer.Runtime != "fake" {
-			reason = "runtime_unsupported"
+		isolationRequested := o.isolation != nil || o.isolationWaves || o.isolationStaged
+		if cfg.Writer != nil {
+			switch writerRuntime := cfg.Writer.Runtime; {
+			case writerRuntime == "codex-app-server" || writerRuntime == "fake":
+			case writerRuntime == "opencode-http" && isolationRequested:
+				// Opt-in isolated/staged cohorts may use the configured
+				// OpenCode writer; shared-workspace parallel writers remain
+				// Codex-only and are still rejected at RunWriter dispatch.
+			default:
+				reason = "runtime_unsupported"
+			}
 		}
-		if o.isolation != nil || o.isolationWaves || o.isolationStaged {
+		if isolationRequested {
+			if isolatedOpenCodeWriterConfigured(cfg) && (cfg.OpenCode == nil || cfg.Provider == nil || cfg.Access == nil) {
+				reason = "external_state_unavailable"
+			}
 			if o.isolation == nil {
 				reason = "external_state_unavailable"
 			} else {
