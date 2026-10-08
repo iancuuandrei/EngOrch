@@ -226,6 +226,44 @@ This is an opt-in scheduling and isolation policy. It does not infer host
 capacity from environment data, measure actual CPU or memory use, qualify a
 provider route, or authorize unrestricted operating-system sandboxing.
 
+## Writer cohort lifetime
+
+Each scheduled writer cohort and each isolated or staged wave has its own
+finite lifetime derived from existing frozen limits. For `opencode-http`
+writer cohorts under isolated or staged isolation, the bound is the frozen
+per-invocation runtime already enforced by `openCodeProviderRuntimeContext`
+(the 15-minute default or the validated host `InvocationTimeoutSeconds`
+1..7200) multiplied by the conservative serial worst case: every task's three
+legal invocations (one initial plus at most two admitted semantic
+corrections), executed one after another. The bound deliberately ignores the
+advertised scheduler worker count: the memory admission gate parks future
+claims once active grants reach `Decision.EffectiveWorkers`, and that
+decision can fall to one worker under pressure while scheduler slots remain,
+so guaranteed parallelism cannot be assumed and legal work must not be
+cancelled for exceeding a parallelism-discounted wait. Claim and resource
+contention park the same way. A 2-task leaves wave with a 600-second host
+therefore waits 60 minutes, not five. Indefinite parking under sustained
+pressure may still hit this bounded deadline; the bound covers only the
+finite admitted serial work and promises nothing under infinite pressure.
+Non-OpenCode cohorts (Codex, fake, serial legacy) keep the historical
+five-minute wait because no comparable frozen per-invocation total exists for
+those runtimes. The cohort loop reads the authoritative controller state
+before starting any pump and fails closed on a read error with no silent
+fallback limit. An earlier caller deadline or cancellation still wins,
+`UNKNOWN` remains `UNKNOWN` with no resend, and retry, admission, role, and
+budget semantics are unchanged. The unrelated five-minute research-cohort
+wait in `autonomous_graph.go` is unchanged. Offline deterministic fixtures
+cover the configured-versus-legacy mismatch, worker-independent serial
+bounding, the configured-pair serializing to one effective worker under
+pressure, corrections, fail-closed reads, and caller cancellation on the
+cohort path; they do not claim live provider acceptance, latency, or cost. The motivating independent trial at
+source `72a1343` configured a 600-second invocation timeout for a staged hub
+plus two-leaf cohort at `--max-parallel 2`; the process exited `1` at
+352.901 seconds with hub and sink proposals complete and one leaf writer
+pending `UNKNOWN`, the public boundary canceled at controller sequence 39.
+That pending effect was not retried and remains `UNKNOWN`; no live success is
+claimed for the derived bound.
+
 ## Fresh-run failure note
 
 A frozen v5 isolated-writer evaluation ended `BLOCKED` before any writer

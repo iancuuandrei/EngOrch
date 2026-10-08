@@ -1696,11 +1696,84 @@ func runIsolatedGraphWriterWaves(ctx context.Context, controllerPath string, ini
 	return nil
 }
 
+// legacyGraphWriterCohortTimeout preserves the historical writer-cohort wait
+// for runtimes without a frozen per-invocation total deadline (Codex, fake,
+// serial legacy). It is not an OpenCode admission bound.
+const legacyGraphWriterCohortTimeout = 5 * time.Minute
+
+// graphWriterMaxCorrectionsPerTask is the finite admitted semantic-correction
+// allowance per writer task. It mirrors buildSemanticCorrectionInvocation's
+// allowance of two (attempt 1..2); a third correction is rejected with
+// ErrSemanticCorrectionBudget and never becomes a scheduler claim.
+const graphWriterMaxCorrectionsPerTask = 2
+
+// effectiveGraphWriterPerInvocationTimeout returns the frozen finite
+// per-invocation runtime already enforced by openCodeProviderRuntimeContext:
+// the 15-minute default or the validated host InvocationTimeoutSeconds
+// 1..7200. It reports false for non-OpenCode cohorts, where no such frozen
+// limit exists and the legacy cohort timeout is preserved byte-for-byte in
+// behavior. A zero or out-of-range host value falls back to the default,
+// matching the provider runtime helper.
+func effectiveGraphWriterPerInvocationTimeout(s Snapshot) (time.Duration, bool) {
+	if s.Creation.Config.Writer == nil || s.Creation.Config.Writer.Runtime != "opencode-http" {
+		return legacyGraphWriterCohortTimeout, false
+	}
+	if !isolatedImplementationEnabled(s) {
+		return legacyGraphWriterCohortTimeout, false
+	}
+	limit := openCodeProviderRuntimeTimeout
+	if host := s.Creation.Config.OpenCode; host != nil && host.InvocationTimeoutSeconds > 0 && host.InvocationTimeoutSeconds <= 7200 {
+		limit = time.Duration(host.InvocationTimeoutSeconds) * time.Second
+	}
+	return limit, true
+}
+
+// graphWriterCohortTimeout derives one cohort/wave lifetime from the frozen
+// per-invocation limit and the finite number of legal invocations. With N
+// tasks and at most two admitted corrections per task, the worst legal shape
+// is N sequential invocations times three (one initial plus two correction
+// generations). The bound is deliberately independent of the advertised
+// scheduler worker count: the memory admission gate parks future claims
+// whenever len(active) reaches Decision.EffectiveWorkers, and that decision
+// can reduce to one worker under pressure while scheduler slots remain, so
+// guaranteed parallelism of ceil(N/W) slots is not valid and legal work could
+// again be cancelled under memory pressure. Resource and claim contention
+// park the same way. Indefinite parking under sustained pressure may still hit
+// this bounded deadline; the bound covers only the finite admitted serial
+// work, with no guarantee under infinite pressure. The workers argument is
+// accepted for call-site compatibility and ignored. The result is a duration
+// only; an earlier caller deadline or cancellation still wins through the
+// cohort loop's ctx.Done() branch, UNKNOWN remains UNKNOWN, and no retry,
+// admission, role or budget semantics change. Each staged/isolated wave
+// computes its own bound from its own specs; sequential waves do not share
+// one deadline. The legal cohort is bounded (at most eight tasks, at most
+// three invocations each, at most 7200 seconds per invocation), so the product
+// cannot overflow and no artificial cap is applied.
+func graphWriterCohortTimeout(s Snapshot, numTasks, workers int) time.Duration {
+	perInvocation, ok := effectiveGraphWriterPerInvocationTimeout(s)
+	if !ok {
+		return legacyGraphWriterCohortTimeout
+	}
+	if numTasks < 1 {
+		return perInvocation
+	}
+	return perInvocation * time.Duration(numTasks*(1+graphWriterMaxCorrectionsPerTask))
+}
+
 // runScheduledGraphWriterCohort keeps every initial member alive until the
 // complete current schedule is settled. A known semantic rejection may then
 // receive a new dynamic claim; no correction is admitted while any sibling or
 // predecessor claim is pending or UNKNOWN.
 func runScheduledGraphWriterCohort(ctx context.Context, controllerPath, schedulePath string, specs []taskscheduler.TaskSpec, workers int, isolated bool) error {
+	// Authoritative source-bound read before any pump starts: the cohort
+	// lifetime derives from the frozen controller state, and a read failure
+	// fails closed with the read error returned directly. No silent legacy
+	// fallback limit applies here.
+	ctrl0, err := Inspect(controllerPath)
+	if err != nil {
+		return err
+	}
+	cohortTimeout := graphWriterCohortTimeout(ctrl0, len(specs), workers)
 	pumpCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	pumpResult := make(chan error, 1)
@@ -1711,7 +1784,7 @@ func runScheduledGraphWriterCohort(ctx context.Context, controllerPath, schedule
 		}
 		pumpResult <- taskscheduler.Pump(pumpCtx, schedulePath, adapter, taskscheduler.PumpOptions{Workers: workers, PollInterval: 10 * time.Millisecond})
 	}()
-	deadline := time.Now().Add(5 * time.Minute)
+	deadline := time.Now().Add(cohortTimeout)
 	handledClaims := map[string]bool{}
 	for {
 		schedule, err := taskscheduler.Inspect(schedulePath)
