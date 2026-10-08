@@ -60,7 +60,7 @@ func (c Client) Import(ctx context.Context, request ImportRequest, identity repo
 	if err != nil {
 		return ImportReceipt{}, err
 	}
-	if request.Source != source || request.Manifest.Source != source || !filepath.IsAbs(request.IndexPath) || !filepath.IsAbs(output) || filepath.Clean(output) != output || (request.Policy != "strict" && request.Policy != "scip_go027") {
+	if request.Source != source || request.Manifest.Source != source || !filepath.IsAbs(request.IndexPath) || !filepath.IsAbs(output) || filepath.Clean(output) != output || (request.Policy != "strict" && request.Policy != "scip_go027" && request.Policy != "scip_typescript040") {
 		return ImportReceipt{}, errors.New("invalid import authority, paths or policy")
 	}
 	for _, path := range request.Sources {

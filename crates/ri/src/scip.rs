@@ -9,12 +9,33 @@ pub struct Admitted {
     index: wire::Index,
     manifest: crate::manifest::Manifest,
     producer: String,
+    pinned: PinnedEncoding,
 }
 
 /// Explicit, versioned compatibility rule for scip-go's omitted position field.
 /// Captured v0.2.7 source uses go/token byte columns in visitors.scipRange.
 pub const SCIP_GO_027_POSITION_POLICY: &str =
     "engorch.scip-go.0.2.7.positions.v1:utf8-byte-columns";
+
+/// Explicit, versioned compatibility rule for scip-typescript's omitted
+/// position field and its synthetic file-module enclosing marker. Observed
+/// @sourcegraph/scip-typescript 0.4.0 output omits `Document.position_encoding`
+/// while emitting UTF-16 code-unit columns, and its `FileIndexer` source-file
+/// occurrence emits a zero-length `[0,0,0]` definition whose enclosing range is
+/// derived from the whole source file and therefore need not contain that
+/// anchor when a leading comment shifts the file start. Only that pinned
+/// marker drops its advisory enclosing in the derived projection; the raw
+/// index bytes and hash are retained and all other enclosing checks are
+/// unchanged.
+pub const SCIP_TYPESCRIPT_040_POSITION_POLICY: &str = "engorch.scip-typescript.0.4.0.positions.v2:utf16-code-units+omit-invalid-synthetic-file-enclosing";
+
+/// Shared pinned-profile selector; compatibility is never inferred.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PinnedEncoding {
+    None,
+    Utf8,
+    Utf16,
+}
 
 /// Admit scip-go 0.2.7 with its source-verified UTF-8 byte-column convention.
 /// The manifest must include `scip:position-policy` hashing the exact policy
@@ -52,7 +73,54 @@ pub fn admit_scip_go_027(
         producer_id,
         project_root,
         sources,
-        true,
+        PinnedEncoding::Utf8,
+    )
+}
+
+/// Admit scip-typescript 0.4.0 with its observed UTF-16 code-unit convention.
+/// The manifest must include `scip:position-policy` hashing the exact TypeScript
+/// policy constant above. Only unspecified encodings become UTF-16; explicit
+/// UTF-8 or UTF-32 encodings conflict with this profile. The pinned profile
+/// additionally drops the advisory enclosing of exactly one synthetic
+/// file-module marker (zero `[0,0,0]` definition with matching file descriptor
+/// and `SymbolInformation` provenance) when its well-formed enclosing does not
+/// contain the zero anchor; malformed enclosing bounds still fail and all other
+/// occurrences keep strict containment. Original index bytes remain bound by
+/// `scip:index`.
+///
+/// # Errors
+/// Rejects missing policy provenance, other producers/versions, explicit
+/// incompatible position encodings, and all ordinary admission failures.
+pub fn admit_scip_typescript_040(
+    bytes: &[u8],
+    manifest: crate::manifest::Manifest,
+    expected: &crate::manifest::Source,
+    producer_id: &str,
+    project_root: &str,
+    sources: &BTreeMap<String, Vec<u8>>,
+) -> Result<Admitted, String> {
+    let producer = manifest
+        .producers
+        .iter()
+        .find(|p| p.id == producer_id)
+        .ok_or("SCIP producer absent")?;
+    if producer.name != "scip-typescript"
+        || producer.version != "0.4.0"
+        || !producer.inputs.iter().any(|input| {
+            input.name == "scip:position-policy"
+                && input.sha256 == raw_hash(SCIP_TYPESCRIPT_040_POSITION_POLICY.as_bytes())
+        })
+    {
+        return Err("SCIP compatibility policy missing or producer mismatch".into());
+    }
+    admit_inner(
+        bytes,
+        manifest,
+        expected,
+        producer_id,
+        project_root,
+        sources,
+        PinnedEncoding::Utf16,
     )
 }
 
@@ -136,7 +204,7 @@ impl Admitted {
                 kind: NodeKind::File,
                 path: Some(path.clone()),
             });
-            for located in locate_document(document, source)? {
+            for located in locate_document_pinned(document, source, self.pinned)? {
                 let symbol = if located.symbol.is_empty() {
                     None
                 } else {
@@ -368,7 +436,7 @@ pub fn admit(
         producer_id,
         project_root,
         sources,
-        false,
+        PinnedEncoding::None,
     )
 }
 
@@ -379,7 +447,7 @@ fn admit_inner(
     producer_id: &str,
     project_root: &str,
     sources: &BTreeMap<String, Vec<u8>>,
-    scip_go_027: bool,
+    pinned: PinnedEncoding,
 ) -> Result<Admitted, String> {
     if bytes.is_empty() || bytes.len() > 64 << 20 {
         return Err("SCIP artifact size outside bounds".into());
@@ -399,12 +467,33 @@ fn admit_inner(
         return Err("SCIP artifact input hash mismatch".into());
     }
     let mut index = decode(bytes)?;
-    if scip_go_027 {
-        for document in &mut index.documents {
-            match document.position_encoding {
-                0 => document.position_encoding = 1,
-                1 => {}
-                _ => return Err("scip-go position policy conflicts with explicit encoding".into()),
+    match pinned {
+        PinnedEncoding::None => {}
+        PinnedEncoding::Utf8 => {
+            for document in &mut index.documents {
+                match document.position_encoding {
+                    0 => document.position_encoding = 1,
+                    1 => {}
+                    _ => {
+                        return Err(
+                            "scip-go position policy conflicts with explicit encoding".into()
+                        );
+                    }
+                }
+            }
+        }
+        PinnedEncoding::Utf16 => {
+            for document in &mut index.documents {
+                match document.position_encoding {
+                    0 => document.position_encoding = 2,
+                    2 => {}
+                    _ => {
+                        return Err(
+                            "scip-typescript position policy conflicts with explicit encoding"
+                                .into(),
+                        );
+                    }
+                }
             }
         }
     }
@@ -455,12 +544,13 @@ fn admit_inner(
         {
             return Err("SCIP document source hash mismatch".into());
         }
-        locate_document(document, source)?;
+        locate_document_pinned(document, source, pinned)?;
     }
     Ok(Admitted {
         index,
         manifest,
         producer: producer_id.into(),
+        pinned,
     })
 }
 
@@ -508,14 +598,85 @@ pub struct Located<'a> {
 /// Validate document observations against caller-owned immutable UTF-8 bytes.
 /// The caller must separately bind these bytes and the index to repository and
 /// producer identities. This function does not read `project_root` from disk.
+/// This strict entrypoint retains every enclosing-containment failure,
+/// including the pinned scip-typescript synthetic file-module marker.
 ///
 /// # Errors
 /// Rejects unsupported encoding, substituted embedded text, excessive occurrence
 /// counts, inconsistent ranges, invalid role bits and non-enclosing spans.
-#[allow(deprecated)] // Both legacy and typed SCIP representations are supported.
 pub fn locate_document<'a>(
     document: &'a wire::Document,
     bytes: &'a [u8],
+) -> Result<Vec<Located<'a>>, &'static str> {
+    locate_inner(document, bytes, PinnedEncoding::None)
+}
+
+fn locate_document_pinned<'a>(
+    document: &'a wire::Document,
+    bytes: &'a [u8],
+    pinned: PinnedEncoding,
+) -> Result<Vec<Located<'a>>, &'static str> {
+    locate_inner(document, bytes, pinned)
+}
+
+/// Whether an occurrence is exactly the pinned scip-typescript 0.4.0 synthetic
+/// file-module marker: a zero-length `[0,0,0]` definition anchor whose symbol
+/// is the nonlocal `scip-typescript npm <package> <version> `<path>`/`
+/// file descriptor for this document and whose symbol is declared in this
+/// document's `SymbolInformation`. Typed ranges are never exempt.
+#[allow(deprecated)]
+fn is_typescript_synthetic_file_marker(
+    document: &wire::Document,
+    occurrence: &wire::Occurrence,
+    interval: Span,
+) -> bool {
+    if interval.start != 0 || interval.end != 0 {
+        return false;
+    }
+    if occurrence.range.len() != 3
+        || occurrence.range[0] != 0
+        || occurrence.range[1] != 0
+        || occurrence.range[2] != 0
+    {
+        return false;
+    }
+    if occurrence.typed_range.is_some() {
+        return false;
+    }
+    if occurrence.symbol_roles != 1 {
+        return false;
+    }
+    if !is_typescript_file_module_symbol(&occurrence.symbol, &document.relative_path) {
+        return false;
+    }
+    document
+        .symbols
+        .iter()
+        .any(|info| info.symbol == occurrence.symbol)
+}
+
+/// Match only the nonlocal TypeScript file-module descriptor for a document
+/// path: `scip-typescript npm <package> <version> `<relative_path>`/`.
+fn is_typescript_file_module_symbol(symbol: &str, relative_path: &str) -> bool {
+    let Some(rest) = symbol.strip_prefix("scip-typescript npm ") else {
+        return false;
+    };
+    let suffix = format!(" `{relative_path}`/");
+    let Some(middle) = rest.strip_suffix(&suffix) else {
+        return false;
+    };
+    let mut parts = middle.split(' ');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(package), Some(version), None) => !package.is_empty() && !version.is_empty(),
+        _ => false,
+    }
+}
+
+#[allow(deprecated)] // Both legacy and typed SCIP representations are supported.
+fn locate_inner<'a>(
+    document: &'a wire::Document,
+    bytes: &'a [u8],
+    pinned: PinnedEncoding,
 ) -> Result<Vec<Located<'a>>, &'static str> {
     if document.occurrences.len() > 100_000 {
         return Err("SCIP document occurrence count exceeds bound");
@@ -555,6 +716,8 @@ pub fn locate_document<'a>(
                 ]),
             });
             let enclosing = if enclosing_typed.is_some() || !occurrence.enclosing_range.is_empty() {
+                // Well-formed bounds are validated before any exemption; a
+                // malformed synthetic enclosing still fails here.
                 let enclosing = span(
                     &source,
                     encoding,
@@ -562,9 +725,20 @@ pub fn locate_document<'a>(
                     enclosing_typed,
                 )?;
                 if enclosing.start > interval.start || enclosing.end < interval.end {
-                    return Err("SCIP enclosing range does not contain occurrence");
+                    // Pinned TypeScript compatibility drops only the advisory
+                    // enclosing of the exact synthetic file-module marker. The
+                    // zero anchor, raw index bytes and all other containment
+                    // checks are unchanged.
+                    if pinned == PinnedEncoding::Utf16
+                        && is_typescript_synthetic_file_marker(document, occurrence, interval)
+                    {
+                        None
+                    } else {
+                        return Err("SCIP enclosing range does not contain occurrence");
+                    }
+                } else {
+                    Some(enclosing)
                 }
-                Some(enclosing)
             } else {
                 None
             };

@@ -38,7 +38,7 @@ func (p ImportPlan) ID() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if p.Version != 1 || p.Request.Source != source || p.Request.Manifest.Source != source || p.Request.Manifest.Format != 1 || p.Request.Producer == "" || (p.Request.Policy != "strict" && p.Request.Policy != "scip_go027") {
+	if p.Version != 1 || p.Request.Source != source || p.Request.Manifest.Source != source || p.Request.Manifest.Format != 1 || p.Request.Producer == "" || (p.Request.Policy != "strict" && p.Request.Policy != "scip_go027" && p.Request.Policy != "scip_typescript040") {
 		return "", errors.New("invalid import plan binding")
 	}
 	for _, path := range []string{p.Executable, p.Request.IndexPath, p.OutputPath} {

@@ -66,3 +66,31 @@ Limits are 1–128. Query files must be regular strict JSON objects, at most
 32 KiB, with no duplicate or unknown fields. The graph-only `ri query` adapter
 continues to reject semantic references and implementations when their producer
 evidence is unavailable.
+
+## Index a TypeScript fixture with the explicit 0.4.0 profile (opt-in, scoped local PASS 2026-10-08)
+
+The explicit `scip_typescript040` import policy admits only
+`scip-typescript` version `0.4.0` with the pinned UTF-16 position policy
+`engorch.scip-typescript.0.4.0.positions.v2:utf16-code-units+omit-invalid-synthetic-file-enclosing`;
+generic strict
+imports still reject an omitted position encoding. The pinned profile drops
+only the advisory enclosing of the exact synthetic file-module marker (zero
+`[0,0,0]` definition with matching file descriptor and `SymbolInformation`
+provenance) when its well-formed enclosing does not contain the anchor; the
+raw index hash is retained and all other enclosing checks are unchanged. The opt-in
+`TestActualScipTypeScriptCLI` fixture commits a dependency-free `package.json`,
+`tsconfig.json` and `library.ts` (LF, UTF-8) and runs the producer as
+`node ENTRY index --output INDEX.scip --no-progress-bar` through the existing
+`ri prepare-producer`, `produce`, `bind-import`, `import`, `publish` and
+`runtime-binding` commands, with the project-root URI taken from Node's
+`url.pathToFileURL` formatting. Manifest inputs bind the indexed source, the
+committed configs, the entry script hash and the exact policy hash. Locate,
+definition and reference queries check exact source bytes and provenance with
+PARTIAL coverage and no absence claim. Scoped local PASS on uncommitted
+candidate BASE `40d1ba5` (future v1.1.50; no publish or final SHA claimed):
+pinned Rust 19 tests PASS, real-producer `TestActualScipTypeScriptCLI` PASS
+with Node 22.23.3 / scip-typescript 0.4.0, plus Go RI/doc/vet PASS; see
+[status](../evaluation/status.md). Initial local FAILs retained without
+pooling; full v2, live benefit and acceptance/release remain NOT QUALIFIED,
+review PENDING. See the [RI occurrences contract](../specifications/ri-occurrences.md)
+for the admitted behavior.
