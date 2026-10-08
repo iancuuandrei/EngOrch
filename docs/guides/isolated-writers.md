@@ -207,10 +207,9 @@ renders the explicit bounded reason `coupling_risk` with the smallest coupled
 partner; anything else that fits still fails closed.
 
 Couplings are planner-declared advisory only (`planner_declared_advisory`).
-Observed generator/topology labels are rejected as forged until a future
-source-bound admission validates the exact source/candidate/path binding
-against an existing admitted generator or topology record; that broader Phase
-E admission is pending. Graph, source, candidate, and journal hashing binds
+Planner-wire `Graph.Couplings` remains advisory and rejects forged observed
+labels; separately, controller-derived admitted source observations enter
+only selector 3 (`observed-coupling-v1`) described below. Graph, source, candidate, and journal hashing binds
 the declared risk inputs; it does not prove a cited fact. C4 requires one
 owner or an explicit implementation dependency and rejects an unsafe split
 before writer effects; serial waves forked from the same parent base do not
@@ -222,6 +221,69 @@ This is an opt-in scheduling and isolation policy. It does not infer host
 capacity from environment data, measure actual CPU or memory use, qualify a
 provider route, authorize unrestricted operating-system sandboxing, or claim
 measured quality, latency, or cost benefit.
+
+### Staged source-observed wave optimum (`observed-coupling-v1`)
+
+`--isolated-writer-staged --isolation-policy PATH --cohort-selector observed-coupling-v1 --max-parallel N`
+opts a staged run into the source-observed coupling optimum under
+`plan-graph-v9`. It freezes `isolation_cohort_selector_version: 3` in
+immutable run creation; absent preserves the greedy derivation byte-for-byte
+and selectors 0/1/2 keep their frozen behavior unchanged. The planner wire
+stays advisory-only: observed generator/topology labels on planner output
+remain rejected as forged. The controller instead derives a separate
+observed set purely from the replay-validated `PlannerGoContext` for the
+CURRENT ready implementations (at most eight): exact bounded `WritePaths`
+expansion over admitted graph files (exact path or directory prefix with
+slash boundary; `ScopePaths` never confer ownership), recomputed entirely
+from the snapshot on preparation and replay with no new journal event and
+no filesystem access in replay.
+
+Only two trustworthy tiers are derived, both `PARTIAL` evidence that never
+proves absence (`C0` is never emitted): `C4` same generation family from
+admitted `Graph.Generators` (generator-to-output and two outputs of one
+generator, eligible only when the generator and both endpoint facts are
+unchanged with exact `SourceSHA256` matches), and `C2` same observed package
+from exact package identity/import-path bindings (never a directory guess,
+never `C3` from the same package; import/call edges stay deferred because
+`UNRESOLVED` syntax facts are not direct API proof). Every source path
+changed by the recorded staged parent delta is excluded, including
+generator/config antecedents not owned by future tasks; new, omitted or
+changed paths yield no observed relation. Declared-module package identity
+additionally depends on the admitted module inventory
+(`ManifestPath`/`InventoryDigest`): a parent-delta change to an admitted
+manifest, or an added/changed nested `go.mod`/`go.work`, makes every
+declared-module package observation derived from that old inventory
+ineligible even when the endpoint Go bytes are unchanged, and the
+controller never synthesizes an overlay or reparses ownership to recover
+them. Source-local package membership stays eligible only when its own file
+bytes are proven unchanged, and a generator relation stays eligible only
+when its own generator and endpoint antecedents are unchanged. Missing or unavailable RI degrades
+to the existing planner advisory selection with no absence or independence
+claim; invalid or forged bindings fail closed rather than falling back
+silently. Pairs are canonical (`from<to`, at most 28, sorted, bounded
+reason/evidence) and merged with planner advisory pairs at MAX severity, so
+a weaker observed pair never erases a stronger planner `C4`; provenance is
+preserved separately and observed pairs are never relabeled as planner
+advisory.
+
+Wave selection uses the merged set with all existing hard gates unchanged
+(exact ready identity, pairwise dependency/write-overlap independence, every
+explicit resource ceiling, the 1..8 bound, plus the `C4` hard-coupling gate).
+A `C4` pair among currently ready tasks is rejected as an unsafe split
+before any child effect: assign one owner or add an explicit implementation
+dependency, then advance the hub stage so the dependent graph admits the
+family on its subsequent stage; serial waves forked from the same parent
+base never make an unsafe split safe. A remainder that fits capacity but was
+excluded to avoid a coupled pair renders the explicit bounded reason
+`coupling_risk`. The exact current-parent candidate check (`acquireRead` /
+`Capture`) is unchanged.
+
+No live efficiency is claimed: this mode changes only which finite wave is
+preferred (for example, preferring an unrelated pair over an observed `C2`
+same-package pair), not measured makespan, cost, or quality. The legal next
+action on a `C4` rejection is external: restructure the plan to a single
+owner or an explicit dependency and re-propose; the controller never
+serializes around the gate automatically.
 
 The Windows evaluation runner configures one external namespace per task under
 that task's evaluation output directory before invoking `fabric run`. The

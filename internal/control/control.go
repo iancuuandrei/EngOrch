@@ -128,8 +128,12 @@ type ExecutionPolicy struct {
 	// packing); 2 selects the coupling-aware optimum, which shares those hard
 	// gates plus the C4 hard-coupling gate and minimizes C3 risk before
 	// admitted count, then C2, then C1 co-scheduling before existing
-	// critical/resource packing. Only staged isolation admits a nonzero selector; 2 additionally
-	// requires plan-graph-v9. C0 (absent) never proves independence.
+	// critical/resource packing; 3 selects the source-observed coupling
+	// optimum, which merges planner advisory couplings with the
+	// controller-derived source-observed set (C4 generation family, C2 same
+	// package) at MAX severity over the same hard gates. Only staged
+	// isolation admits a nonzero selector; 2 and 3 additionally
+	// require plan-graph-v9. C0 (absent) never proves independence.
 	IsolationCohortSelectorVersion int `json:"isolation_cohort_selector_version,omitempty"`
 	// ScopeReplanVersion permits a confirmed writer proposal to request a
 	// bounded WritePaths refinement, only within its immutable ScopePaths.
@@ -291,7 +295,7 @@ func (p ExecutionPolicy) Validate() error {
 	if p.IsolatedImplementationVersion == 0 && (p.IsolationCapacity != nil || p.IsolationEstimate != nil) {
 		return errors.New("isolation capacity requires isolated implementation")
 	}
-	if p.IsolationCohortSelectorVersion != 0 && p.IsolationCohortSelectorVersion != 1 && p.IsolationCohortSelectorVersion != 2 {
+	if p.IsolationCohortSelectorVersion != 0 && p.IsolationCohortSelectorVersion != 1 && p.IsolationCohortSelectorVersion != 2 && p.IsolationCohortSelectorVersion != 3 {
 		return errors.New("invalid isolation cohort selector version")
 	}
 	if p.IsolationCohortSelectorVersion != 0 && p.IsolatedImplementationVersion != 3 {
@@ -1116,7 +1120,7 @@ func validateRepairPlanningBinding(c Creation) error {
 		if c.Execution != nil {
 			selector = c.Execution.IsolationCohortSelectorVersion
 		}
-		if selector == 2 {
+		if selector == 2 || selector == 3 {
 			if version != 1 || parallelVersion != 0 || !stagedCouplingContract {
 				return errors.New("coupling-aware staged policy requires plan-graph-v9")
 			}

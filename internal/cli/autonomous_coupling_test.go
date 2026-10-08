@@ -16,6 +16,15 @@ func TestCouplingAwareSelectorParsing(t *testing.T) {
 	if _, err := validateAutonomousCohortSelector("coupling-aware-v1", false); err == nil {
 		t.Fatal("non-staged coupling-aware selector admitted")
 	}
+	if version, err := validateAutonomousCohortSelector("observed-coupling-v1", true); err != nil || version != 3 {
+		t.Fatalf("staged observed-coupling selector rejected: %d %v", version, err)
+	}
+	if _, err := validateAutonomousCohortSelector("observed-coupling-v1", false); err == nil {
+		t.Fatal("non-staged observed-coupling selector admitted")
+	}
+	if got := cohortSelectorFlag(3); got != autonomousCohortSelectorObservedCouplingV1 {
+		t.Fatalf("selector version 3 did not render its flag spelling: %q", got)
+	}
 	if got := cohortSelectorFlag(2); got != autonomousCohortSelectorCouplingAwareV1 {
 		t.Fatalf("selector version 2 did not render its flag spelling: %q", got)
 	}
@@ -45,6 +54,22 @@ func TestCouplingAwareSelectorName(t *testing.T) {
 	}
 }
 
+func TestObservedCouplingSelectorName(t *testing.T) {
+	if got := cohortSelectorName(3); got != autonomousCohortSelectorObservedCouplingV1 {
+		t.Fatalf("inspect-plan selector 3 must show observed-coupling-v1, got %q", got)
+	}
+	// Existing rendering preserved.
+	if got := cohortSelectorName(2); got != autonomousCohortSelectorCouplingAwareV1 {
+		t.Fatalf("selector 2 display changed: %q", got)
+	}
+	if got := cohortSelectorName(1); got != autonomousCohortSelectorLexicographicV1 {
+		t.Fatalf("frozen selector 1 display changed: %q", got)
+	}
+	if got := cohortSelectorName(0); got != "" {
+		t.Fatalf("greedy display changed: %q", got)
+	}
+}
+
 func TestCouplingAwareSelectorRequiresStagedAndFallbackClosed(t *testing.T) {
 	root := autonomousCLIFixture(t)
 	policyPath := filepath.Join(root, "isolation-policy.json")
@@ -57,6 +82,10 @@ func TestCouplingAwareSelectorRequiresStagedAndFallbackClosed(t *testing.T) {
 		{"run", "--autonomous", "--isolated-writer-waves", "--isolation-policy", policyPath, "--cohort-selector", "coupling-aware-v1", "objective"},
 		{"run", "--autonomous", "--isolated-writer-staged", "--isolation-policy", policyPath, "--cohort-selector", "coupling-aware-v2", "objective"},
 		{"run", "--autonomous", "--parallel-writers", "--cohort-selector", "coupling-aware-v1", "objective"},
+		{"run", "--autonomous", "--cohort-selector", "observed-coupling-v1", "objective"},
+		{"run", "--autonomous", "--isolated-writers", "--isolation-policy", policyPath, "--cohort-selector", "observed-coupling-v1", "objective"},
+		{"run", "--autonomous", "--isolated-writer-waves", "--isolation-policy", policyPath, "--cohort-selector", "observed-coupling-v1", "objective"},
+		{"run", "--autonomous", "--parallel-writers", "--cohort-selector", "observed-coupling-v1", "objective"},
 	} {
 		var out bytes.Buffer
 		if err := Execute(context.Background(), args, root, &out); err == nil {
@@ -65,5 +94,25 @@ func TestCouplingAwareSelectorRequiresStagedAndFallbackClosed(t *testing.T) {
 	}
 	if entries, err := filepath.Glob(filepath.Join(root, ".harness", "runs", "*.jsonl")); err != nil || len(entries) != 0 {
 		t.Fatalf("invalid coupling-aware arguments created runs: %v, %v", entries, err)
+	}
+}
+
+func TestObservedCouplingSelectorRequiresStagedV9(t *testing.T) {
+	// Selector 3 binds plan-graph-v9 exactly like selector 2: staged isolation
+	// is required and the planner wire stays advisory-only. Absent RI remains
+	// a legitimate fallback (no planner-context mandate here); the
+	// controller degrades to advisory selection without an absence claim.
+	if version, err := validateAutonomousCohortSelector(autonomousCohortSelectorObservedCouplingV1, true); err != nil || version != 3 {
+		t.Fatalf("observed-coupling-v1 staged selector rejected: %d %v", version, err)
+	}
+	if got := cohortSelectorFlag(3); got != autonomousCohortSelectorObservedCouplingV1 {
+		t.Fatalf("selector 3 flag spelling wrong: %q", got)
+	}
+	// Frozen spellings unchanged.
+	if got := cohortSelectorFlag(2); got != autonomousCohortSelectorCouplingAwareV1 {
+		t.Fatalf("selector 2 spelling changed: %q", got)
+	}
+	if got := cohortSelectorFlag(0); got != "" {
+		t.Fatalf("greedy spelling changed: %q", got)
 	}
 }

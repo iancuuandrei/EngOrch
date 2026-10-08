@@ -102,7 +102,7 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 	isolatedWriterWaves := fs.Bool("isolated-writer-waves", false, "run resource-bounded initial writer waves on one pristine parent, aggregating once after all proposals")
 	isolatedWriterStaged := fs.Bool("isolated-writer-staged", false, "run dependent hub-to-leaf staged isolated cohorts, each forked from its exact parent candidate with one aggregate per stage")
 	isolationPolicyPath := fs.String("isolation-policy", "", "strict versioned JSON resource capacity and per-writer estimate file (required with --isolated-writers, --isolated-writer-waves or --isolated-writer-staged)")
-	cohortSelector := fs.String("cohort-selector", "", "staged wave selector: empty (frozen greedy derivation), lexicographic-v1 (exact finite optimum over the same hard gates) or coupling-aware-v1 (typed C1-C4 optimum with C4 hard gate; requires --isolated-writer-staged)")
+	cohortSelector := fs.String("cohort-selector", "", "staged wave selector: empty (frozen greedy derivation), lexicographic-v1 (exact finite optimum over the same hard gates), coupling-aware-v1 (typed C1-C4 optimum with C4 hard gate; requires --isolated-writer-staged) or observed-coupling-v1 (planner advisory merged with source-observed C4/C2 at MAX severity; requires --isolated-writer-staged with optional Go planner context, absent RI falls back to advisory)")
 	plannerContext := fs.String("planner-context", "", "planner evidence mode: source-bounded-v1 or pinned go-source-context-v1/go-source-context-v2/go-contract-context-v1/go-contract-context-v2/go-contract-context-v3")
 	agentContext := fs.Bool("agent-context", true, "bind committed scope-aware AGENTS.md and role-aware skill workflows to the new run")
 	workingContext := fs.Bool("working-context", false, "experimentally enable bounded editable context for dynamic explorer follow-ups")
@@ -158,11 +158,13 @@ func autonomousRunCommand(ctx context.Context, root string, args []string, out i
 		cohortSelectorVersion = 1
 	case autonomousCohortSelectorCouplingAwareV1:
 		cohortSelectorVersion = 2
+	case autonomousCohortSelectorObservedCouplingV1:
+		cohortSelectorVersion = 3
 	default:
-		return errors.New("cohort-selector must be empty, lexicographic-v1 or coupling-aware-v1")
+		return errors.New("cohort-selector must be empty, lexicographic-v1, coupling-aware-v1 or observed-coupling-v1")
 	}
 	if cohortSelectorVersion != 0 && !*isolatedWriterStaged {
-		return errors.New("cohort-selector lexicographic-v1 or coupling-aware-v1 requires --isolated-writer-staged with --isolation-policy PATH")
+		return errors.New("cohort-selector lexicographic-v1, coupling-aware-v1 or observed-coupling-v1 requires --isolated-writer-staged with --isolation-policy PATH")
 	}
 	var isolationPolicy *isolatedWriterPolicyFile
 	if *isolatedWriters || *isolatedWriterWaves || *isolatedWriterStaged {
@@ -358,9 +360,19 @@ const autonomousCohortSelectorLexicographicV1 = "lexicographic-v1"
 // Couplings are planner-declared advisory only; requires plan-graph-v9.
 const autonomousCohortSelectorCouplingAwareV1 = "coupling-aware-v1"
 
+// autonomousCohortSelectorObservedCouplingV1 opts staged runs into the
+// source-observed coupling optimum: planner advisory couplings merged with
+// the controller-derived source-observed set (C4 same generation family,
+// C2 same observed package) at MAX severity under plan-graph-v9. Missing or
+// unavailable RI degrades to the planner advisory selection with no absence
+// claim; invalid or forged bindings fail closed. Absent preserves the frozen
+// greedy derivation byte-for-byte.
+const autonomousCohortSelectorObservedCouplingV1 = "observed-coupling-v1"
+
 // validateAutonomousCohortSelector rejects unknown staged wave selectors
 // before any durable run is created. Empty preserves exact historical
-// behavior; only lexicographic-v1 and coupling-aware-v1 are admitted.
+// behavior; only lexicographic-v1, coupling-aware-v1 and observed-coupling-v1
+// are admitted.
 func validateAutonomousCohortSelector(mode string, staged bool) (int, error) {
 	switch mode {
 	case "":
@@ -375,8 +387,13 @@ func validateAutonomousCohortSelector(mode string, staged bool) (int, error) {
 			return 0, errors.New("cohort-selector coupling-aware-v1 requires --isolated-writer-staged with --isolation-policy PATH")
 		}
 		return 2, nil
+	case autonomousCohortSelectorObservedCouplingV1:
+		if !staged {
+			return 0, errors.New("cohort-selector observed-coupling-v1 requires --isolated-writer-staged with --isolation-policy PATH")
+		}
+		return 3, nil
 	default:
-		return 0, errors.New("cohort-selector must be empty, lexicographic-v1 or coupling-aware-v1")
+		return 0, errors.New("cohort-selector must be empty, lexicographic-v1, coupling-aware-v1 or observed-coupling-v1")
 	}
 }
 
@@ -412,6 +429,9 @@ func cohortSelectorFlag(version int) string {
 	}
 	if version == 2 {
 		return autonomousCohortSelectorCouplingAwareV1
+	}
+	if version == 3 {
+		return autonomousCohortSelectorObservedCouplingV1
 	}
 	if version != 0 {
 		return "invalid"
@@ -511,7 +531,7 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 	parallelWriters, isolationPolicy, isolationWaves, isolationStaged = capabilities.parallel, capabilities.isolation, capabilities.isolationWaves, capabilities.isolationStaged
 	cohortSelectorVersion = capabilities.cohortSelector
 	if cohortSelectorVersion != 0 && (!isolationStaged || isolationPolicy == nil) {
-		return errors.New("cohort-selector lexicographic-v1 or coupling-aware-v1 requires --isolated-writer-staged with --isolation-policy PATH; capability fallback cannot silently drop this selector")
+		return errors.New("cohort-selector lexicographic-v1, coupling-aware-v1 or observed-coupling-v1 requires --isolated-writer-staged with --isolation-policy PATH; capability fallback cannot silently drop this selector")
 	}
 	plannerContext, plannerContextRIExecutable, plannerContextRIExecutableSHA256 = capabilities.plannerContext, capabilities.parser, capabilities.parserHash
 	plannerParseCacheVersion, plannerPPRVersion, reviewImpactContextVersion, candidateFactsCacheVersion = capabilities.parseCache, capabilities.plannerPPR, capabilities.reviewImpact, capabilities.candidateCache
@@ -574,7 +594,7 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 		cfg.PlannerContract = "plan-graph-v7"
 		if isolationStaged {
 			cfg.PlannerContract = "plan-graph-v8"
-			if cohortSelectorVersion == 2 {
+			if cohortSelectorVersion == 2 || cohortSelectorVersion == 3 {
 				cfg.PlannerContract = "plan-graph-v9"
 			}
 		}
@@ -606,7 +626,7 @@ func createAndRunAutonomous(ctx context.Context, root, objective string, maxRepa
 			isolatedImplementationVersion = 3
 		}
 		if cohortSelectorVersion != 0 && isolatedImplementationVersion != 3 {
-			return errors.New("cohort-selector lexicographic-v1 or coupling-aware-v1 requires --isolated-writer-staged with --isolation-policy PATH")
+			return errors.New("cohort-selector lexicographic-v1, coupling-aware-v1 or observed-coupling-v1 requires --isolated-writer-staged with --isolation-policy PATH")
 		}
 	}
 	if cfg.Reviewer != nil {

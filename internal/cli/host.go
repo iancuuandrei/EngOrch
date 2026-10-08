@@ -215,13 +215,18 @@ func inspectAutonomousPlan(ctx context.Context, root string, options autonomousC
 // cohortSelectorName renders the staged wave selector for inspect-plan
 // display. Empty preserves the frozen greedy derivation; lexicographic-v1
 // is the exact finite optimum over the same hard gates; coupling-aware-v1
-// is the typed C1-C4 optimum with the C4 hard gate (plan-graph-v9).
+// is the typed C1-C4 optimum with the C4 hard gate (plan-graph-v9);
+// observed-coupling-v1 is the source-observed optimum merged at MAX severity
+// under plan-graph-v9.
 func cohortSelectorName(version int) string {
 	if version == 1 {
 		return autonomousCohortSelectorLexicographicV1
 	}
 	if version == 2 {
 		return autonomousCohortSelectorCouplingAwareV1
+	}
+	if version == 3 {
+		return autonomousCohortSelectorObservedCouplingV1
 	}
 	return ""
 }

@@ -59,6 +59,13 @@ type TaskCoupling struct {
 	Evidence   string `json:"evidence"`
 }
 
+// validCouplingText reports whether reason/evidence text is nonempty trimmed
+// UTF-8 without control characters within its byte bound. It is shared by the
+// planner, observed and merged validators so the bound cannot diverge.
+func validCouplingText(s string, max int) bool {
+	return strings.TrimSpace(s) != "" && len(s) <= max && utf8.ValidString(s) && strings.IndexFunc(s, unicode.IsControl) < 0
+}
+
 // validateTaskCoupling checks one relationship's shape. Task existence and
 // implementation-kind checks stay with the graph validator so this helper
 // remains reusable for subset contexts. Only planner-declared advisory
@@ -82,7 +89,7 @@ func validateTaskCoupling(c TaskCoupling) error {
 	default:
 		return fmt.Errorf("invalid coupling level %q", c.Level)
 	}
-	if strings.TrimSpace(c.Reason) == "" || len(c.Reason) > 128 || !utf8.ValidString(c.Reason) || strings.IndexFunc(c.Reason, unicode.IsControl) >= 0 {
+	if !validCouplingText(c.Reason, 128) {
 		return fmt.Errorf("invalid coupling reason for %q-%q", c.From, c.To)
 	}
 	switch c.Provenance {
@@ -93,7 +100,7 @@ func validateTaskCoupling(c TaskCoupling) error {
 		}
 		return fmt.Errorf("invalid coupling provenance for %q-%q", c.From, c.To)
 	}
-	if strings.TrimSpace(c.Evidence) == "" || len(c.Evidence) > 256 || !utf8.ValidString(c.Evidence) || strings.IndexFunc(c.Evidence, unicode.IsControl) >= 0 {
+	if !validCouplingText(c.Evidence, 256) {
 		return fmt.Errorf("invalid coupling evidence for %q-%q", c.From, c.To)
 	}
 	return nil
@@ -489,5 +496,290 @@ func SelectResourceWavesCouplingAware(g Graph, ready []Task, demands []TaskResou
 		},
 		func(g Graph, remainder []Task, remainderDemands []TaskResourceDemand, capacity ResourceCapacity, maxTasks int) (ResourceCohort, error) {
 			return SelectResourceCohortSubsetCouplingAware(g, remainder, remainderDemands, capacity, maxTasks, couplings)
+		})
+}
+
+// Observed coupling tiers admitted only through the dedicated observed-set
+// selection seam, never through Graph.Couplings or the planner wire.
+// C4 same_generation_family requires observed_generator_binding provenance;
+// C2 same_observed_package requires observed_source_topology provenance.
+// C1/C3 are never derived from same-package evidence, and import/call
+// relations are deferred because UNRESOLVED syntax facts are not direct API
+// proof. The frozen Graph/planner validator (ValidateTaskCouplings,
+// validateGraphCouplings, PlannerJSONSchema) is unchanged and still rejects
+// observed labels on that wire.
+func couplingSeverity(level string) int {
+	switch level {
+	case CouplingC1:
+		return 1
+	case CouplingC2:
+		return 2
+	case CouplingC3:
+		return 3
+	case CouplingC4:
+		return 4
+	default:
+		return 0
+	}
+}
+
+// validateObservedTaskCoupling checks one observed relationship's shape with
+// the same bounds as planner advisory couplings, but admits only the two
+// trustworthy tiers: C4 with generator provenance and C2 with topology
+// provenance. Advisory provenance and C1/C3 levels are rejected here so
+// observed inputs cannot be relabeled as planner truth and same-package
+// evidence can never become C3.
+func validateObservedTaskCoupling(c TaskCoupling) error {
+	if !idPattern.MatchString(c.From) || !idPattern.MatchString(c.To) {
+		return fmt.Errorf("invalid observed coupling task %q-%q", c.From, c.To)
+	}
+	if c.From == c.To {
+		return fmt.Errorf("observed coupling pair %q is self-coupled", c.From)
+	}
+	if c.From > c.To {
+		return fmt.Errorf("observed coupling pair %q-%q is not in canonical order", c.From, c.To)
+	}
+	switch c.Level {
+	case CouplingC4:
+		if c.Provenance != CouplingProvenanceGeneratorObserved {
+			return fmt.Errorf("observed C4 coupling for %q-%q requires observed_generator_binding provenance", c.From, c.To)
+		}
+	case CouplingC2:
+		if c.Provenance != CouplingProvenanceTopologyObserved {
+			return fmt.Errorf("observed C2 coupling for %q-%q requires observed_source_topology provenance", c.From, c.To)
+		}
+	default:
+		return fmt.Errorf("invalid observed coupling level %q", c.Level)
+	}
+	if !validCouplingText(c.Reason, 128) {
+		return fmt.Errorf("invalid observed coupling reason for %q-%q", c.From, c.To)
+	}
+	if !validCouplingText(c.Evidence, 256) {
+		return fmt.Errorf("invalid observed coupling evidence for %q-%q", c.From, c.To)
+	}
+	return nil
+}
+
+// ValidateObservedTaskCouplings checks a complete observed set's shape:
+// bound, per-item observed tier/provenance shape, canonical order, no self
+// pairs and no duplicate unordered pairs. It never grants readiness,
+// ownership or write authority and never proves absence (C0).
+func ValidateObservedTaskCouplings(couplings []TaskCoupling) error {
+	if len(couplings) > MaxTaskCouplings {
+		return errors.New("observed coupling set exceeds 28 relationships")
+	}
+	seen := make(map[string]bool, len(couplings))
+	for _, c := range couplings {
+		if err := validateObservedTaskCoupling(c); err != nil {
+			return err
+		}
+		key := c.From + "\x00" + c.To
+		if seen[key] {
+			return fmt.Errorf("duplicate observed coupling pair %q-%q", c.From, c.To)
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
+// insertMaxSeverity keeps the highest-severity coupling per unordered pair,
+// preserving the winner's level, reason, provenance and evidence without
+// relabeling observed provenance as planner advisory.
+func insertMaxSeverity(merged map[string]TaskCoupling, c TaskCoupling) {
+	key := couplingPairKey(c.From, c.To)
+	if existing, ok := merged[key]; !ok || couplingSeverity(c.Level) > couplingSeverity(existing.Level) {
+		from, to := c.From, c.To
+		if from > to {
+			from, to = to, from
+		}
+		merged[key] = TaskCoupling{From: from, To: to, Level: c.Level, Reason: c.Reason, Provenance: c.Provenance, Evidence: c.Evidence}
+	}
+}
+
+// MergePlannerObservedCouplings merges planner advisory and separately
+// validated observed pairs with MAX severity per unordered task pair. A
+// weaker observed pair never erases a stronger planner C4; the winner's
+// level, reason, provenance and evidence are preserved without relabeling
+// observed provenance as planner advisory. Output is sorted by From,To.
+// Input sets are validated and the union bound is enforced with an explicit
+// error: oversized unions are never truncated silently, so a late-sorted C4
+// hard gate cannot be discarded.
+func MergePlannerObservedCouplings(planner, observed []TaskCoupling) ([]TaskCoupling, error) {
+	if err := ValidateTaskCouplings(planner); err != nil {
+		return nil, err
+	}
+	if err := ValidateObservedTaskCouplings(observed); err != nil {
+		return nil, err
+	}
+	merged := make(map[string]TaskCoupling, len(planner)+len(observed))
+	for _, c := range planner {
+		insertMaxSeverity(merged, c)
+	}
+	for _, c := range observed {
+		insertMaxSeverity(merged, c)
+	}
+	out := make([]TaskCoupling, 0, len(merged))
+	for _, c := range merged {
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].From != out[j].From {
+			return out[i].From < out[j].From
+		}
+		return out[i].To < out[j].To
+	})
+	if len(out) > MaxTaskCouplings {
+		return nil, errors.New("merged coupling set exceeds 28 relationships")
+	}
+	if err := validateMergedCouplings(out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// validateMergedCouplings checks a merged planner+observed set's common
+// shape: bound, canonical order, no duplicates, bounded reason/evidence, and
+// tier-bound provenance (advisory C1-C4, observed C4 generator or C2
+// topology only). It is used only by the observed-set seam; the frozen
+// public Graph/planner validator remains advisory-only.
+func validateMergedCouplings(couplings []TaskCoupling) error {
+	if len(couplings) > MaxTaskCouplings {
+		return errors.New("merged coupling set exceeds 28 relationships")
+	}
+	seen := make(map[string]bool, len(couplings))
+	for _, c := range couplings {
+		if !idPattern.MatchString(c.From) || !idPattern.MatchString(c.To) || c.From == c.To || c.From > c.To {
+			return fmt.Errorf("invalid merged coupling pair %q-%q", c.From, c.To)
+		}
+		switch c.Provenance {
+		case CouplingProvenancePlannerAdvisory:
+			switch c.Level {
+			case CouplingC1, CouplingC2, CouplingC3, CouplingC4:
+			default:
+				return fmt.Errorf("invalid merged coupling level %q", c.Level)
+			}
+		case CouplingProvenanceGeneratorObserved:
+			if c.Level != CouplingC4 {
+				return fmt.Errorf("invalid merged observed coupling level %q", c.Level)
+			}
+		case CouplingProvenanceTopologyObserved:
+			if c.Level != CouplingC2 {
+				return fmt.Errorf("invalid merged observed coupling level %q", c.Level)
+			}
+		default:
+			return fmt.Errorf("invalid merged coupling provenance for %q-%q", c.From, c.To)
+		}
+		if !validCouplingText(c.Reason, 128) {
+			return fmt.Errorf("invalid merged coupling reason for %q-%q", c.From, c.To)
+		}
+		if !validCouplingText(c.Evidence, 256) {
+			return fmt.Errorf("invalid merged coupling evidence for %q-%q", c.From, c.To)
+		}
+		key := c.From + "\x00" + c.To
+		if seen[key] {
+			return fmt.Errorf("duplicate merged coupling pair %q-%q", c.From, c.To)
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
+// mergePlannerObservedForOptimum validates the planner advisory and observed
+// sets separately, merges at MAX severity and validates the merged tier-bound
+// shape. It is shared by the observed-set cohort, subset and wave selectors
+// so the admission sequence cannot diverge.
+func mergePlannerObservedForOptimum(plannerCouplings, observedCouplings []TaskCoupling) ([]TaskCoupling, error) {
+	if err := ValidateTaskCouplings(plannerCouplings); err != nil {
+		return nil, err
+	}
+	if err := ValidateObservedTaskCouplings(observedCouplings); err != nil {
+		return nil, err
+	}
+	merged, err := MergePlannerObservedCouplings(plannerCouplings, observedCouplings)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateMergedCouplings(merged); err != nil {
+		return nil, err
+	}
+	return merged, nil
+}
+
+// SelectResourceCohortWithObservedCouplings selects the exact finite optimum
+// over the ready implementation set using planner advisory couplings plus a
+// separately validated observed set merged at MAX severity. Observed labels
+// via Graph.Couplings are never accepted: callers pass g.Couplings (or the
+// accepted planner set) as planner and the controller-derived observed set
+// separately. Hard gates match the frozen selectors plus the C4 gate.
+func SelectResourceCohortWithObservedCouplings(g Graph, ready []Task, demands []TaskResourceDemand, capacity ResourceCapacity, maxTasks int, plannerCouplings, observedCouplings []TaskCoupling) (ResourceCohort, error) {
+	if err := checkCohortInputs(g, capacity, maxTasks); err != nil {
+		return ResourceCohort{}, err
+	}
+	if len(ready) == 0 || len(ready) > 8 {
+		return ResourceCohort{}, errors.New("observed coupling cohort requires one to eight ready implementations")
+	}
+	provided, demandByID, err := prepareExactCohort(g, ready, demands, capacity)
+	if err != nil {
+		return ResourceCohort{}, err
+	}
+	merged, err := mergePlannerObservedForOptimum(plannerCouplings, observedCouplings)
+	if err != nil {
+		return ResourceCohort{}, err
+	}
+	return couplingOptimum(g, provided, demandByID, capacity, maxTasks, merged)
+}
+
+// SelectResourceSubsetWithObservedCouplings selects the exact finite optimum
+// over an explicit candidate subset with merged planner+observed couplings.
+// It never fabricates Completed mutations; staged wave derivation uses this
+// for each remainder after the first exact-ready optimum.
+func SelectResourceSubsetWithObservedCouplings(g Graph, candidates []Task, demands []TaskResourceDemand, capacity ResourceCapacity, maxTasks int, plannerCouplings, observedCouplings []TaskCoupling) (ResourceCohort, error) {
+	if err := checkCohortInputs(g, capacity, maxTasks); err != nil {
+		return ResourceCohort{}, err
+	}
+	if len(candidates) == 0 {
+		return ResourceCohort{}, errors.New("resource cohort subset is empty")
+	}
+	provided, demandByID, err := prepareSubsetCohort(g, candidates, demands, capacity)
+	if err != nil {
+		return ResourceCohort{}, err
+	}
+	merged, err := mergePlannerObservedForOptimum(plannerCouplings, observedCouplings)
+	if err != nil {
+		return ResourceCohort{}, err
+	}
+	return couplingOptimum(g, provided, demandByID, capacity, maxTasks, merged)
+}
+
+// SelectResourceWavesWithObservedCouplings deterministically partitions the
+// exact ready implementation set into nonempty resource-bounded waves using
+// the merged planner+observed optimum for the first wave and each remainder.
+// A C4 pair among currently ready tasks is rejected as an unsafe split (one
+// owner or an explicit dependency is required); serial waves from the same
+// parent base do not make it safe. All resource, dependency and ownership
+// hard gates are unchanged.
+func SelectResourceWavesWithObservedCouplings(g Graph, ready []Task, demands []TaskResourceDemand, capacity ResourceCapacity, maxTasks int, plannerCouplings, observedCouplings []TaskCoupling) ([]ResourceCohort, error) {
+	merged, err := mergePlannerObservedForOptimum(plannerCouplings, observedCouplings)
+	if err != nil {
+		return nil, err
+	}
+	readyIDs := make(map[string]bool, len(ready))
+	for _, task := range ready {
+		readyIDs[task.ID] = true
+	}
+	for _, c := range merged {
+		if c.Level != CouplingC4 {
+			continue
+		}
+		if readyIDs[c.From] && readyIDs[c.To] {
+			return nil, fmt.Errorf("observed coupling-aware waves reject C4 generator split between %q and %q without one owner or an explicit dependency", c.From, c.To)
+		}
+	}
+	return partitionResourceWaves(g, ready, demands, capacity, maxTasks,
+		func(g Graph, ready []Task, demands []TaskResourceDemand, capacity ResourceCapacity, maxTasks int) (ResourceCohort, error) {
+			return SelectResourceCohortWithObservedCouplings(g, ready, demands, capacity, maxTasks, plannerCouplings, observedCouplings)
+		},
+		func(g Graph, remainder []Task, remainderDemands []TaskResourceDemand, capacity ResourceCapacity, maxTasks int) (ResourceCohort, error) {
+			return SelectResourceSubsetWithObservedCouplings(g, remainder, remainderDemands, capacity, maxTasks, plannerCouplings, observedCouplings)
 		})
 }

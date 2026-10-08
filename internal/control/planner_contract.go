@@ -141,7 +141,7 @@ func plannerInvocationWithContextsAndRecipe(c config.Config, objective string, p
 			if recipe == nil || recipe.IsolatedImplementationVersion != 3 || recipe.Validate() != nil {
 				return runtime.Invocation{}, errors.New("coupling-aware staged contract requires a valid staged isolated execution policy")
 			}
-			if recipe.IsolationCohortSelectorVersion != 2 {
+			if recipe.IsolationCohortSelectorVersion != 2 && recipe.IsolationCohortSelectorVersion != 3 {
 				return runtime.Invocation{}, errors.New("plan-graph-v9 requires the coupling-aware cohort selector")
 			}
 			readBudget := max(c.MaxExplorationRecords()-8, 0)

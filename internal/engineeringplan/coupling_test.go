@@ -456,3 +456,164 @@ func TestFrozenV39SelectorStaysCountFirst(t *testing.T) {
 		t.Fatal("coupling-aware selector did not differ from frozen count-first packing")
 	}
 }
+
+func observedCoupling(from, to, level, provenance string) TaskCoupling {
+	reason := "same_observed_package"
+	if level == CouplingC4 {
+		reason = "same_generation_family"
+	}
+	return TaskCoupling{From: from, To: to, Level: level, Reason: reason, Provenance: provenance, Evidence: "observed graph digest binds " + from + " and " + to}
+}
+
+func TestObservedValidationAdmitsOnlyC4GeneratorAndC2Topology(t *testing.T) {
+	valid := []TaskCoupling{
+		observedCoupling("impl-a", "impl-b", CouplingC4, CouplingProvenanceGeneratorObserved),
+		observedCoupling("impl-a", "impl-c", CouplingC2, CouplingProvenanceTopologyObserved),
+	}
+	if err := ValidateObservedTaskCouplings(valid); err != nil {
+		t.Fatalf("valid observed set rejected: %v", err)
+	}
+	invalid := [][]TaskCoupling{
+		{{From: "impl-a", To: "impl-b", Level: CouplingC4, Reason: "same_generation_family", Provenance: CouplingProvenancePlannerAdvisory, Evidence: "e"}},
+		{{From: "impl-a", To: "impl-b", Level: CouplingC2, Reason: "same_observed_package", Provenance: CouplingProvenancePlannerAdvisory, Evidence: "e"}},
+		{{From: "impl-a", To: "impl-b", Level: CouplingC3, Reason: "shared_api", Provenance: CouplingProvenanceTopologyObserved, Evidence: "e"}},
+		{{From: "impl-a", To: "impl-b", Level: CouplingC1, Reason: "r", Provenance: CouplingProvenanceGeneratorObserved, Evidence: "e"}},
+		{{From: "impl-a", To: "impl-b", Level: CouplingC4, Reason: "same_generation_family", Provenance: CouplingProvenanceTopologyObserved, Evidence: "e"}},
+		{{From: "impl-a", To: "impl-b", Level: CouplingC2, Reason: "same_observed_package", Provenance: CouplingProvenanceGeneratorObserved, Evidence: "e"}},
+		{{From: "impl-a", To: "impl-b", Level: CouplingC4, Reason: "same_generation_family", Provenance: "forged_source", Evidence: "e"}},
+	}
+	for i, set := range invalid {
+		if err := ValidateObservedTaskCouplings(set); err == nil {
+			t.Fatalf("invalid observed set %d admitted", i)
+		}
+	}
+	// Same-package evidence never becomes C3 through this seam.
+	forgedC3 := []TaskCoupling{{From: "impl-a", To: "impl-b", Level: CouplingC3, Reason: "same_observed_package", Provenance: CouplingProvenanceTopologyObserved, Evidence: "same package"}}
+	if err := ValidateObservedTaskCouplings(forgedC3); err == nil {
+		t.Fatal("same-package C3 admitted through observed seam")
+	}
+	// Planner advisory entry still rejects observed labels (frozen).
+	forgedPlanner := []TaskCoupling{{From: "impl-a", To: "impl-b", Level: CouplingC2, Reason: "r", Provenance: CouplingProvenanceTopologyObserved, Evidence: "e"}}
+	if err := ValidateTaskCouplings(forgedPlanner); err == nil {
+		t.Fatal("observed provenance admitted through planner validator")
+	}
+}
+
+func TestObservedMergeUsesMaxSeverityWithoutRelabel(t *testing.T) {
+	planner := []TaskCoupling{validCoupling("impl-a", "impl-b", CouplingC4)}
+	observed := []TaskCoupling{observedCoupling("impl-a", "impl-b", CouplingC2, CouplingProvenanceTopologyObserved)}
+	merged, err := MergePlannerObservedCouplings(planner, observed)
+	if err != nil {
+		t.Fatalf("valid merge rejected: %v", err)
+	}
+	if len(merged) != 1 || merged[0].Level != CouplingC4 || merged[0].Provenance != CouplingProvenancePlannerAdvisory {
+		t.Fatalf("weaker observed erased stronger planner C4: %+v", merged)
+	}
+	plannerWeak := []TaskCoupling{validCoupling("impl-a", "impl-b", CouplingC1)}
+	observedStrong := []TaskCoupling{observedCoupling("impl-a", "impl-b", CouplingC4, CouplingProvenanceGeneratorObserved)}
+	merged, err = MergePlannerObservedCouplings(plannerWeak, observedStrong)
+	if err != nil {
+		t.Fatalf("valid merge rejected: %v", err)
+	}
+	if len(merged) != 1 || merged[0].Level != CouplingC4 || merged[0].Provenance != CouplingProvenanceGeneratorObserved {
+		t.Fatalf("stronger observed did not win without relabel: %+v", merged)
+	}
+	// Deterministic under permuted element order within each typed set.
+	multiPlanner := []TaskCoupling{validCoupling("impl-a", "impl-b", CouplingC1), validCoupling("impl-a", "impl-c", CouplingC3)}
+	multiObserved := []TaskCoupling{
+		observedCoupling("impl-b", "impl-c", CouplingC2, CouplingProvenanceTopologyObserved),
+		observedCoupling("impl-a", "impl-d", CouplingC4, CouplingProvenanceGeneratorObserved),
+	}
+	first, err := MergePlannerObservedCouplings(multiPlanner, multiObserved)
+	if err != nil {
+		t.Fatalf("valid multi merge rejected: %v", err)
+	}
+	reversedPlanner := []TaskCoupling{multiPlanner[1], multiPlanner[0]}
+	reversedObserved := []TaskCoupling{multiObserved[1], multiObserved[0]}
+	second, err := MergePlannerObservedCouplings(reversedPlanner, reversedObserved)
+	if err != nil {
+		t.Fatalf("valid multi merge rejected: %v", err)
+	}
+	if len(first) != len(second) {
+		t.Fatalf("merge order changed result size: %+v vs %+v", first, second)
+	}
+	for i := range first {
+		if first[i] != second[i] {
+			t.Fatalf("merge order changed result: %+v vs %+v", first, second)
+		}
+	}
+}
+
+func TestObservedMergeOverflowReturnsErrorNotPartial(t *testing.T) {
+	// Two individually valid sets (20 pairs each) whose disjoint union is 40
+	// pairs: the merge must fail explicitly rather than silently truncate to
+	// 28. The late-sorted observed C4 hard gates must not be discarded.
+	planner := make([]TaskCoupling, 0, 20)
+	for i := 0; i < 20; i++ {
+		to := "impl-b" + string(rune('a'+i/10)) + string(rune('a'+i%10))
+		planner = append(planner, validCoupling("impl-a", to, CouplingC1))
+	}
+	observed := make([]TaskCoupling, 0, 20)
+	for i := 0; i < 20; i++ {
+		to := "impl-z" + string(rune('a'+i/10)) + string(rune('a'+i%10))
+		observed = append(observed, observedCoupling("impl-y", to, CouplingC4, CouplingProvenanceGeneratorObserved))
+	}
+	if err := ValidateTaskCouplings(planner); err != nil {
+		t.Fatalf("planner overflow half invalid: %v", err)
+	}
+	if err := ValidateObservedTaskCouplings(observed); err != nil {
+		t.Fatalf("observed overflow half invalid: %v", err)
+	}
+	merged, err := MergePlannerObservedCouplings(planner, observed)
+	if err == nil {
+		t.Fatalf("oversized union admitted with partial result of %d pairs", len(merged))
+	}
+	if merged != nil {
+		t.Fatalf("oversized union returned a partial result instead of an error: %d pairs", len(merged))
+	}
+}
+
+func TestObservedC2InfluencesThreeTaskWaveChoice(t *testing.T) {
+	graph, ready, demands, _ := couplingWaveFixture()
+	capacity := resourceFixtureCapacity(10, 10, 3, 2)
+	observed := []TaskCoupling{observedCoupling("impl-alpha", "impl-beta", CouplingC2, CouplingProvenanceTopologyObserved)}
+	observedWaves, err := SelectResourceWavesWithObservedCouplings(graph, ready, demands, capacity, 2, nil, observed)
+	if err != nil {
+		t.Fatalf("observed waves rejected: %v", err)
+	}
+	if len(observedWaves) == 0 {
+		t.Fatal("observed waves selected nothing")
+	}
+	first := map[string]bool{}
+	for _, task := range observedWaves[0].Tasks {
+		first[task.ID] = true
+	}
+	// Observed C2 between alpha+beta must prefer an unrelated pair.
+	if first["impl-alpha"] && first["impl-beta"] {
+		t.Fatalf("observed C2 pair co-scheduled: %v", first)
+	}
+	if !(first["impl-gamma"] && (first["impl-alpha"] || first["impl-beta"])) {
+		t.Fatalf("observed first wave lacks unrelated pair: %v", first)
+	}
+	// Legacy coupling-aware mode with empty planner couplings chooses the
+	// deterministic critical pair instead.
+	legacy, err := SelectResourceWavesCouplingAware(graph, ready, demands, capacity, 2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyFirst := map[string]bool{}
+	for _, task := range legacy[0].Tasks {
+		legacyFirst[task.ID] = true
+	}
+	if !(legacyFirst["impl-alpha"] && legacyFirst["impl-beta"]) {
+		t.Fatalf("legacy baseline did not choose critical pair: %v", legacyFirst)
+	}
+}
+
+func TestObservedWavesRejectC4Split(t *testing.T) {
+	graph, ready, demands, capacity := couplingWaveFixture()
+	observed := []TaskCoupling{observedCoupling("impl-alpha", "impl-beta", CouplingC4, CouplingProvenanceGeneratorObserved)}
+	if _, err := SelectResourceWavesWithObservedCouplings(graph, ready, demands, capacity, 2, nil, observed); err == nil {
+		t.Fatal("observed C4 split admitted without dependency")
+	}
+}
