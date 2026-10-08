@@ -60,9 +60,9 @@ func stagedThreeTaskCreation(t *testing.T) Creation {
 	return applyTwoSlotIsolationCapacity(t, c)
 }
 
-func stagedPreparedCohort(t *testing.T, c Creation) (string, Snapshot) {
+func stagedPrepareWithGraph(t *testing.T, c Creation, graph engineeringplan.Graph) (string, Snapshot) {
 	t.Helper()
-	path, s := isolatedGraphAwaitingApprovalWithGraph(t, c, stagedHubLeavesGraphFixture())
+	path, s := isolatedGraphAwaitingApprovalWithGraph(t, c, graph)
 	machineAuthorizePlan(t, path, s)
 	if _, err := ensureGraphRecorded(path, s); err != nil {
 		t.Fatal(err)
@@ -80,9 +80,11 @@ func stagedPreparedCohort(t *testing.T, c Creation) (string, Snapshot) {
 	return path, current
 }
 
-func TestStagedHubToTwoLeavesReachReadyWithTwoAggregates(t *testing.T) {
-	c := stagedThreeTaskCreation(t)
-	path, s := isolatedGraphAwaitingApprovalWithGraph(t, c, stagedHubLeavesGraphFixture())
+// stagedSetupToInitial drives the shared staged driver prefix through the
+// initial candidate binding: approval, workspace start, and initial inspect.
+func stagedSetupToInitial(t *testing.T, c Creation, graph engineeringplan.Graph) (string, Snapshot, string) {
+	t.Helper()
+	path, s := isolatedGraphAwaitingApprovalWithGraph(t, c, graph)
 	machineAuthorizePlan(t, path, s)
 	if _, err := ensureGraphRecorded(path, s); err != nil {
 		t.Fatal(err)
@@ -101,6 +103,37 @@ func TestStagedHubToTwoLeavesReachReadyWithTwoAggregates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return path, initial, initialID
+}
+
+// assertStagedFinalGatesBound checks the shared READY tail: final native
+// verification and review bind the exact last candidate.
+func assertStagedFinalGatesBound(t *testing.T, ready Snapshot) {
+	t.Helper()
+	finalID, err := ready.Candidate.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready.Verification == nil || ready.Verification.Plan.CandidateID != finalID {
+		t.Fatal("final verification is not bound to the last candidate")
+	}
+	if ready.Review == nil {
+		t.Fatal("final review missing")
+	}
+	var verdict ReviewVerdict
+	if err := canonical.Decode([]byte(ready.Review.Result.Output), &verdict); err != nil || verdict.CandidateID != finalID {
+		t.Fatalf("final review is not bound to the last candidate: %+v %v", verdict, err)
+	}
+}
+
+func stagedPreparedCohort(t *testing.T, c Creation) (string, Snapshot) {
+	t.Helper()
+	return stagedPrepareWithGraph(t, c, stagedHubLeavesGraphFixture())
+}
+
+func TestStagedHubToTwoLeavesReachReadyWithTwoAggregates(t *testing.T) {
+	c := stagedThreeTaskCreation(t)
+	path, _, initialID := stagedSetupToInitial(t, c, stagedHubLeavesGraphFixture())
 	ready, err := RunAutonomous(context.Background(), path)
 	if err != nil {
 		for cause := errors.Unwrap(err); cause != nil; cause = errors.Unwrap(cause) {
@@ -227,20 +260,7 @@ func TestStagedHubToTwoLeavesReachReadyWithTwoAggregates(t *testing.T) {
 		t.Fatalf("hub progress was rewritten: %+v archive=%s", hubEvidence, hubArchive.CandidateID)
 	}
 	// Final native gates bind the exact last candidate, not a stale receipt.
-	finalID, err := ready.Candidate.ID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ready.Verification == nil || ready.Verification.Plan.CandidateID != finalID {
-		t.Fatal("final verification is not bound to the last candidate")
-	}
-	if ready.Review == nil {
-		t.Fatal("final review missing")
-	}
-	var verdict ReviewVerdict
-	if err := canonical.Decode([]byte(ready.Review.Result.Output), &verdict); err != nil || verdict.CandidateID != finalID {
-		t.Fatalf("final review is not bound to the last candidate: %+v %v", verdict, err)
-	}
+	assertStagedFinalGatesBound(t, ready)
 	// Parent received both hub and leaf outputs.
 	for _, file := range []string{"alpha.txt", "beta.txt", "gamma.txt"} {
 		content, err := os.ReadFile(filepath.Join(ready.Workspace.Request.Path, filepath.FromSlash(file)))
@@ -739,7 +759,7 @@ func TestStagedLexicographicSelectorOptInPreparation(t *testing.T) {
 	invalid := current
 	invalid.Creation.Execution = &ExecutionPolicy{}
 	*invalid.Creation.Execution = *current.Creation.Execution
-	invalid.Creation.Execution.IsolationCohortSelectorVersion = 2
+	invalid.Creation.Execution.IsolationCohortSelectorVersion = 9
 	invalid.GraphIsolationPreparation = nil
 	if _, err := expectedStagedPreparation(invalid); err == nil || !strings.Contains(err.Error(), "invalid isolation cohort selector") {
 		t.Fatalf("out-of-range selector admitted: %v", err)

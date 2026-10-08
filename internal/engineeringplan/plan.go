@@ -98,11 +98,15 @@ type Task struct {
 
 // Graph is a planner response. Direct plans retain the same representation but
 // contain exactly one executable task, avoiding planner overhead for tiny work.
+// Couplings is an optional planner-declared typed advisory (C1-C4) between
+// implementation tasks. Absent preserves legacy serialization and digest
+// bytes; present never grants readiness, ownership or write authority.
 type Graph struct {
-	Version int    `json:"version"`
-	Mode    Mode   `json:"mode"`
-	Summary string `json:"summary"`
-	Tasks   []Task `json:"tasks"`
+	Version   int            `json:"version"`
+	Mode      Mode           `json:"mode"`
+	Summary   string         `json:"summary"`
+	Tasks     []Task         `json:"tasks"`
+	Couplings []TaskCoupling `json:"couplings,omitempty"`
 }
 
 // Task returns the task with the given ID, reporting whether it is present.
@@ -196,6 +200,9 @@ func (g Graph) Validate() error {
 				return fmt.Errorf("write ownership conflict between %q and %q", a.ID, b.ID)
 			}
 		}
+	}
+	if err := validateGraphCouplings(g); err != nil {
+		return err
 	}
 	return nil
 }
@@ -422,6 +429,26 @@ func PlannerJSONSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","additionalProperties":false,"required":["version","mode","summary","tasks"],"properties":{"version":{"type":"integer","enum":[1]},"mode":{"type":"string","enum":["direct","graph"]},"summary":{"type":"string","minLength":1},"tasks":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["id","parent_id","kind","title","dependencies","scope_paths","write_paths","expected_evidence","estimated_seconds"],"properties":{"id":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"},"parent_id":{"type":"string","pattern":"^([a-z][a-z0-9_-]{0,63})?$"},"kind":{"type":"string","enum":["research","design","implementation","verification","review"]},"title":{"type":"string","minLength":1},"dependencies":{"type":"array","maxItems":64,"items":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"}},"scope_paths":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"string","minLength":1}},"write_paths":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1}},"expected_evidence":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"object","additionalProperties":false,"required":["kind","description"],"properties":{"kind":{"type":"string","minLength":1},"description":{"type":"string","minLength":1}}}},"estimated_seconds":{"type":"integer","minimum":1,"maximum":86400}}}}}}`)
 }
 
+// PlannerJSONSchemaWithCouplings is the strict wire schema for the staged
+// coupling-aware planner contract (plan-graph-v9). It derives the frozen
+// task schema from PlannerJSONSchema rather than copying it, then adds an
+// optional bounded couplings array carrying typed C1-C4 planner-declared
+// advisory relationships with explicit provenance and evidence. Only
+// planner_declared_advisory provenance is admitted; observed labels without
+// an admitted source-bound record are rejected as forged. At most
+// 28 relationships are admitted for at most eight implementations. Couplings
+// never grant readiness, ownership or write authority, and absent coupling
+// (C0) never proves independence.
+func PlannerJSONSchemaWithCouplings() json.RawMessage {
+	base := string(PlannerJSONSchema())
+	trimmed := strings.TrimSuffix(base, `}}`)
+	if trimmed == base {
+		return PlannerJSONSchema()
+	}
+	couplings := `"couplings":{"type":"array","maxItems":28,"items":{"type":"object","additionalProperties":false,"required":["from","to","level","reason","provenance","evidence"],"properties":{"from":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"},"to":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"},"level":{"type":"string","enum":["C1","C2","C3","C4"]},"reason":{"type":"string","minLength":1,"maxLength":128},"provenance":{"type":"string","enum":["planner_declared_advisory"]},"evidence":{"type":"string","minLength":1,"maxLength":256}}}}`
+	return json.RawMessage(trimmed + `,` + couplings + `}}`)
+}
+
 // Digest binds the exact graph bytes for durable progress and revision keys.
 func Digest(g Graph) (string, error) {
 	raw, err := json.Marshal(g)
@@ -599,6 +626,20 @@ func ValidateAutonomousGraphWithStagedImplementations(g Graph, maxInitial int) e
 					}
 				}
 			}
+		}
+	}
+	// C4 hard-coupling gate: same-generated-family/shared-mutation work
+	// requires one owner or an explicit implementation dependency. Two
+	// same-ready tasks cannot become safe by serial waves forked from the
+	// same parent base; dependency-staged completion with parent advancement
+	// is required. C1-C3 remain advisory ordering only and never grant
+	// ownership or readiness.
+	for _, c := range g.Couplings {
+		if c.Level != CouplingC4 {
+			continue
+		}
+		if !dependsOn(c.From, c.To, byID) && !dependsOn(c.To, c.From, byID) {
+			return fmt.Errorf("unsafe C4 generator split between %q and %q requires one owner or an explicit dependency", c.From, c.To)
 		}
 	}
 	return requireAutonomousTransitiveGates(g, impls, byID)

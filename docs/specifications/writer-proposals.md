@@ -70,6 +70,21 @@ reject substitution or an out-of-range value. A nonzero selector on any
 non-staged policy MUST be rejected, and frozen policy MUST NOT change on
 resume.
 
+Staged runs MAY freeze `isolation_cohort_selector_version: 2` with
+`plan-graph-v9` for the coupling-aware optimum. Hard gates match selector 1
+plus the C4 hard-coupling gate (no C4 pair in one wave); objectives minimize
+C3 concurrency risk before admitted count, then admitted count, then C2, then
+C1 co-scheduling before the same critical/resource packing, over declared
+estimates only. Risk-based exclusions MUST render the explicit bounded reason
+`coupling_risk` with the smallest coupled partner; any other fitting
+remainder MUST fail closed. Couplings MUST be planner-declared advisory only
+(`planner_declared_advisory`); observed labels without an admitted
+source-bound record MUST be rejected as forged. C4 MUST require one owner or
+an explicit implementation dependency before writer effects; serial waves from
+the same parent base MUST NOT satisfy the gate. C1-C3 MUST NOT grant
+readiness, ownership, or write authority, and absent coupling (C0) MUST NOT
+prove independence.
+
 ## Runtime and provenance
 
 `RunWriter` creates a private host per invocation and records host intent, readiness and observation. A workspace lease spans dispatch and before/after candidate fingerprints. The adapter executes or resumes its durable runtime; source, candidate, thread configuration, requested/observed model and result must match before admission. Host closure precedes lease release.

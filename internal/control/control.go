@@ -121,10 +121,15 @@ type ExecutionPolicy struct {
 	IsolatedImplementationVersion int                               `json:"isolated_implementation_version,omitempty"`
 	IsolationCapacity             *engineeringplan.ResourceCapacity `json:"isolation_capacity,omitempty"`
 	IsolationEstimate             *IsolationEstimateTemplate        `json:"isolation_estimate,omitempty"`
-	// IsolationCohortSelectorVersion opts staged runs into the exact finite
-	// lexicographic cohort optimum. Zero preserves the frozen greedy
-	// derivation byte-for-byte; 1 selects the exhaustive optimum over the
-	// same hard gates. Only staged isolation admits a nonzero selector.
+	// IsolationCohortSelectorVersion opts staged runs into an exact finite
+	// wave optimum. Zero preserves the frozen greedy derivation byte-for-byte;
+	// 1 selects the exhaustive lexicographic optimum over the same hard gates
+	// (frozen v1.1.39 behavior: admitted count, then critical/resource
+	// packing); 2 selects the coupling-aware optimum, which shares those hard
+	// gates plus the C4 hard-coupling gate and minimizes C3 risk before
+	// admitted count, then C2, then C1 co-scheduling before existing
+	// critical/resource packing. Only staged isolation admits a nonzero selector; 2 additionally
+	// requires plan-graph-v9. C0 (absent) never proves independence.
 	IsolationCohortSelectorVersion int `json:"isolation_cohort_selector_version,omitempty"`
 	// ScopeReplanVersion permits a confirmed writer proposal to request a
 	// bounded WritePaths refinement, only within its immutable ScopePaths.
@@ -286,7 +291,7 @@ func (p ExecutionPolicy) Validate() error {
 	if p.IsolatedImplementationVersion == 0 && (p.IsolationCapacity != nil || p.IsolationEstimate != nil) {
 		return errors.New("isolation capacity requires isolated implementation")
 	}
-	if p.IsolationCohortSelectorVersion != 0 && p.IsolationCohortSelectorVersion != 1 {
+	if p.IsolationCohortSelectorVersion != 0 && p.IsolationCohortSelectorVersion != 1 && p.IsolationCohortSelectorVersion != 2 {
 		return errors.New("invalid isolation cohort selector version")
 	}
 	if p.IsolationCohortSelectorVersion != 0 && p.IsolatedImplementationVersion != 3 {
@@ -711,7 +716,7 @@ func Replay(events []journal.Event) (Snapshot, error) {
 			if c.Config.Repository != c.Repository.Name {
 				return s, errors.New("configuration binding mismatch")
 			}
-			if c.Config.PlannerContract == "plan-graph-v7" || c.Config.PlannerContract == plannerContractGraphV8 {
+			if c.Config.PlannerContract == "plan-graph-v7" || c.Config.PlannerContract == plannerContractGraphV8 || c.Config.PlannerContract == plannerContractGraphV9 {
 				if _, err := plannerInvocationWithContextsAndRecipe(c.Config, c.Objective, nil, nil, c.Execution); err != nil {
 					return s, err
 				}
@@ -1099,6 +1104,7 @@ func validateRepairPlanningBinding(c Creation) error {
 	parallelContract := c.Config.PlannerContract == plannerContractGraphV4 || c.Config.PlannerContract == plannerContractGraphV6
 	isolationContract := c.Config.PlannerContract == "plan-graph-v7"
 	stagedContract := c.Config.PlannerContract == plannerContractGraphV8
+	stagedCouplingContract := c.Config.PlannerContract == plannerContractGraphV9
 	if isolationVersion == 1 || isolationVersion == 2 {
 		if version != 1 || parallelVersion != 0 || !isolationContract {
 			return errors.New("isolated implementation policy requires plan-graph-v7")
@@ -1106,6 +1112,16 @@ func validateRepairPlanningBinding(c Creation) error {
 		return nil
 	}
 	if isolationVersion == 3 {
+		selector := 0
+		if c.Execution != nil {
+			selector = c.Execution.IsolationCohortSelectorVersion
+		}
+		if selector == 2 {
+			if version != 1 || parallelVersion != 0 || !stagedCouplingContract {
+				return errors.New("coupling-aware staged policy requires plan-graph-v9")
+			}
+			return nil
+		}
 		if version != 1 || parallelVersion != 0 || !stagedContract {
 			return errors.New("staged isolated policy requires plan-graph-v8")
 		}
@@ -1116,6 +1132,9 @@ func validateRepairPlanningBinding(c Creation) error {
 	}
 	if stagedContract {
 		return errors.New("plan-graph-v8 requires staged isolated policy")
+	}
+	if stagedCouplingContract {
+		return errors.New("plan-graph-v9 requires coupling-aware staged policy")
 	}
 	if version == 1 && !(serialContract && parallelVersion == 0 || parallelContract && parallelVersion == 1) ||
 		version == 0 && (serialContract || parallelContract || parallelVersion != 0) {

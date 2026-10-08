@@ -148,6 +148,95 @@ func checkResourceGraphCapacity(g Graph, capacity ResourceCapacity) error {
 	return validateResourceCapacity(capacity)
 }
 
+// checkCohortInputs enforces the shared cohort bound and graph/capacity
+// ceilings in greedy check order for every selector entry point.
+func checkCohortInputs(g Graph, capacity ResourceCapacity, maxTasks int) error {
+	if err := checkResourceCohortBound(maxTasks); err != nil {
+		return err
+	}
+	return checkResourceGraphCapacity(g, capacity)
+}
+
+// prepareExactCohort validates the supplied tasks against the exact ready
+// implementation set and binds per-task demands in greedy check order.
+func prepareExactCohort(g Graph, ready []Task, demands []TaskResourceDemand, capacity ResourceCapacity) (map[string]Task, map[string]TaskResourceDemand, error) {
+	_, provided, err := exactReadyCohortMaps(g, ready)
+	if err != nil {
+		return nil, nil, err
+	}
+	demandByID, err := bindExactCohortDemands(provided, demands, capacity)
+	if err != nil {
+		return nil, nil, err
+	}
+	return provided, demandByID, nil
+}
+
+// prepareSubsetCohort validates an explicit candidate subset against the
+// exact ready implementations and binds per-task demands in greedy order.
+func prepareSubsetCohort(g Graph, candidates []Task, demands []TaskResourceDemand, capacity ResourceCapacity) (map[string]Task, map[string]TaskResourceDemand, error) {
+	provided, _, err := subsetCohortMaps(g, candidates)
+	if err != nil {
+		return nil, nil, err
+	}
+	demandByID, err := bindSubsetCohortDemands(provided, demands, capacity)
+	if err != nil {
+		return nil, nil, err
+	}
+	return provided, demandByID, nil
+}
+
+// newSizedCohort builds an empty cohort with deterministic empty totals.
+func newSizedCohort(maxTasks int) ResourceCohort {
+	return ResourceCohort{Tasks: make([]Task, 0, maxTasks), Blocked: []ResourceBlockReason{}, Estimated: ResourceTotals{ProviderSlots: []ProviderSlotTotal{}, ModelSlots: []ModelSlotTotal{}, RuntimeSlots: []RuntimeSlotTotal{}}}
+}
+
+// accumulateSelectedTasks appends the selected set in greedy-compatible
+// display order and derives totals from the same helper.
+func accumulateSelectedTasks(out *ResourceCohort, ordered []Task, selected map[string]bool, demandByID map[string]TaskResourceDemand) {
+	for _, task := range ordered {
+		if selected[task.ID] {
+			out.Tasks = append(out.Tasks, task)
+			addResourceTotals(&out.Estimated, demandByID[task.ID])
+		}
+	}
+}
+
+// smallestBlockingConflict returns the smallest selected task ID that blocks
+// the candidate via dependency, write overlap, or the optional extra gate.
+// Empty means no conflict.
+func smallestBlockingConflict(task Task, ordered []Task, selected map[string]bool, byID map[string]Task, extra func(self, other string) bool) string {
+	conflict := ""
+	for _, chosen := range ordered {
+		if !selected[chosen.ID] {
+			continue
+		}
+		blocked := dependsOn(task.ID, chosen.ID, byID) || dependsOn(chosen.ID, task.ID, byID) || pathsOverlapFoldAny(task.WritePaths, chosen.WritePaths)
+		if !blocked && extra != nil {
+			blocked = extra(task.ID, chosen.ID)
+		}
+		if blocked {
+			if conflict == "" || chosen.ID < conflict {
+				conflict = chosen.ID
+			}
+		}
+	}
+	return conflict
+}
+
+// limitOrCapacityBlock renders the cohort-limit or capacity remainder for a
+// non-conflicting candidate against the optimal set. Nil means it fits.
+func limitOrCapacityBlock(taskID string, selected map[string]bool, maxTasks int, estimated ResourceTotals, demandByID map[string]TaskResourceDemand, capacity ResourceCapacity) *ResourceBlockReason {
+	if len(selected) >= maxTasks {
+		return &ResourceBlockReason{TaskID: taskID, Reason: "cohort_limit"}
+	}
+	demand := demandByID[taskID]
+	if resource := resourceOverCapacity(estimated, demand, capacity); resource != "" {
+		reason := capacityBlockedReason(taskID, resource, demand)
+		return &reason
+	}
+	return nil
+}
+
 // graphTaskIndex indexes every graph task by ID for dependency checks.
 func graphTaskIndex(g Graph) map[string]Task {
 	byID := make(map[string]Task, len(g.Tasks))
@@ -315,17 +404,10 @@ func bindSubsetCohortDemands(provided map[string]Task, demands []TaskResourceDem
 // ready implementation set so callers cannot hide dependencies or shared
 // ownership by passing a partial graph.
 func SelectResourceCohort(g Graph, ready []Task, demands []TaskResourceDemand, capacity ResourceCapacity, maxTasks int) (ResourceCohort, error) {
-	if err := checkResourceCohortBound(maxTasks); err != nil {
+	if err := checkCohortInputs(g, capacity, maxTasks); err != nil {
 		return ResourceCohort{}, err
 	}
-	if err := checkResourceGraphCapacity(g, capacity); err != nil {
-		return ResourceCohort{}, err
-	}
-	_, provided, err := exactReadyCohortMaps(g, ready)
-	if err != nil {
-		return ResourceCohort{}, err
-	}
-	demandByID, err := bindExactCohortDemands(provided, demands, capacity)
+	provided, demandByID, err := prepareExactCohort(g, ready, demands, capacity)
 	if err != nil {
 		return ResourceCohort{}, err
 	}
@@ -341,25 +423,18 @@ func SelectResourceCohort(g Graph, ready []Task, demands []TaskResourceDemand, c
 // deterministic waves use this for each remainder after the first exact-ready
 // SelectResourceCohort.
 func SelectResourceCohortSubset(g Graph, candidates []Task, demands []TaskResourceDemand, capacity ResourceCapacity, maxTasks int) (ResourceCohort, error) {
-	if err := checkResourceCohortBound(maxTasks); err != nil {
-		return ResourceCohort{}, err
-	}
-	if err := checkResourceGraphCapacity(g, capacity); err != nil {
+	if err := checkCohortInputs(g, capacity, maxTasks); err != nil {
 		return ResourceCohort{}, err
 	}
 	if len(candidates) == 0 {
 		return ResourceCohort{}, errors.New("resource cohort subset is empty")
 	}
-	provided, byID, err := subsetCohortMaps(g, candidates)
-	if err != nil {
-		return ResourceCohort{}, err
-	}
-	demandByID, err := bindSubsetCohortDemands(provided, demands, capacity)
+	provided, demandByID, err := prepareSubsetCohort(g, candidates, demands, capacity)
 	if err != nil {
 		return ResourceCohort{}, err
 	}
 	ordered := orderResourceCandidates(provided, downstreamLengths(g))
-	return selectResourceCohortGreedy(ordered, demandByID, capacity, maxTasks, byID), nil
+	return selectResourceCohortGreedy(ordered, demandByID, capacity, maxTasks, graphTaskIndex(g)), nil
 }
 
 // SelectResourceWaves deterministically partitions the exact ready
@@ -805,20 +880,13 @@ func runtimeKeyLess(a, b RuntimeResourceKey) bool {
 // The frozen greedy selector is unchanged; this opt-in exact variant
 // never reinterprets an existing greedy batch.
 func SelectResourceCohortLexicographic(g Graph, ready []Task, demands []TaskResourceDemand, capacity ResourceCapacity, maxTasks int) (ResourceCohort, error) {
-	if err := checkResourceCohortBound(maxTasks); err != nil {
-		return ResourceCohort{}, err
-	}
-	if err := checkResourceGraphCapacity(g, capacity); err != nil {
+	if err := checkCohortInputs(g, capacity, maxTasks); err != nil {
 		return ResourceCohort{}, err
 	}
 	if len(ready) == 0 || len(ready) > 8 {
 		return ResourceCohort{}, errors.New("lexicographic cohort requires one to eight ready implementations")
 	}
-	_, provided, err := exactReadyCohortMaps(g, ready)
-	if err != nil {
-		return ResourceCohort{}, err
-	}
-	demandByID, err := bindExactCohortDemands(provided, demands, capacity)
+	provided, demandByID, err := prepareExactCohort(g, ready, demands, capacity)
 	if err != nil {
 		return ResourceCohort{}, err
 	}
@@ -831,20 +899,13 @@ func SelectResourceCohortLexicographic(g Graph, ready []Task, demands []TaskReso
 // fabricates Completed mutations to trick Ready. Staged wave derivation uses
 // this for each remainder after the first exact-ready optimum.
 func SelectResourceCohortSubsetLexicographic(g Graph, candidates []Task, demands []TaskResourceDemand, capacity ResourceCapacity, maxTasks int) (ResourceCohort, error) {
-	if err := checkResourceCohortBound(maxTasks); err != nil {
-		return ResourceCohort{}, err
-	}
-	if err := checkResourceGraphCapacity(g, capacity); err != nil {
+	if err := checkCohortInputs(g, capacity, maxTasks); err != nil {
 		return ResourceCohort{}, err
 	}
 	if len(candidates) == 0 {
 		return ResourceCohort{}, errors.New("resource cohort subset is empty")
 	}
-	provided, _, err := subsetCohortMaps(g, candidates)
-	if err != nil {
-		return ResourceCohort{}, err
-	}
-	demandByID, err := bindSubsetCohortDemands(provided, demands, capacity)
+	provided, demandByID, err := prepareSubsetCohort(g, candidates, demands, capacity)
 	if err != nil {
 		return ResourceCohort{}, err
 	}
@@ -987,39 +1048,18 @@ func lexicographicSubsetBetter(ids []string, mask, best int, demandByID map[stri
 // anything else fails closed rather than emitting a silent reason.
 func lexicographicCohortResult(provided map[string]Task, selected map[string]bool, demandByID map[string]TaskResourceDemand, capacity ResourceCapacity, maxTasks int, critical map[string]int, byID map[string]Task) (ResourceCohort, error) {
 	ordered := orderResourceCandidates(provided, critical)
-	out := ResourceCohort{Tasks: make([]Task, 0, maxTasks), Blocked: []ResourceBlockReason{}, Estimated: ResourceTotals{ProviderSlots: []ProviderSlotTotal{}, ModelSlots: []ModelSlotTotal{}, RuntimeSlots: []RuntimeSlotTotal{}}}
-	for _, task := range ordered {
-		if selected[task.ID] {
-			out.Tasks = append(out.Tasks, task)
-			addResourceTotals(&out.Estimated, demandByID[task.ID])
-		}
-	}
+	out := newSizedCohort(maxTasks)
+	accumulateSelectedTasks(&out, ordered, selected, demandByID)
 	for _, task := range ordered {
 		if selected[task.ID] {
 			continue
 		}
-		conflict := ""
-		for _, chosen := range ordered {
-			if !selected[chosen.ID] {
-				continue
-			}
-			if dependsOn(task.ID, chosen.ID, byID) || dependsOn(chosen.ID, task.ID, byID) || pathsOverlapFoldAny(task.WritePaths, chosen.WritePaths) {
-				if conflict == "" || chosen.ID < conflict {
-					conflict = chosen.ID
-				}
-			}
-		}
-		if conflict != "" {
+		if conflict := smallestBlockingConflict(task, ordered, selected, byID, nil); conflict != "" {
 			out.Blocked = append(out.Blocked, ResourceBlockReason{TaskID: task.ID, Reason: "dependency_or_write_conflict", BlockingTaskID: conflict})
 			continue
 		}
-		if len(selected) >= maxTasks {
-			out.Blocked = append(out.Blocked, ResourceBlockReason{TaskID: task.ID, Reason: "cohort_limit"})
-			continue
-		}
-		demand := demandByID[task.ID]
-		if resource := resourceOverCapacity(out.Estimated, demand, capacity); resource != "" {
-			out.Blocked = append(out.Blocked, capacityBlockedReason(task.ID, resource, demand))
+		if blocked := limitOrCapacityBlock(task.ID, selected, maxTasks, out.Estimated, demandByID, capacity); blocked != nil {
+			out.Blocked = append(out.Blocked, *blocked)
 			continue
 		}
 		return ResourceCohort{}, fmt.Errorf("lexicographic remainder %q fits the optimal cohort", task.ID)
