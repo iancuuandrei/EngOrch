@@ -1,5 +1,46 @@
 # Implementation and evidence status
 
+## Current published coupling — v1.1.48 (2026-10-08)
+
+Published development source `57e366ecc411092885a322b047cca4f3f8c6fdb3`
+(`dev`), synchronized to `main`
+`472cded08f0566121be3afb14bb4ef1d0333eb44`, same tree
+`ecc45b65d2166c8df5d630942ab4c0cb00c36f39`. Automation workflow
+`37743951457` SUCCESS; Sonar `90981a2a-8bc0-4b60-949c-351818f08ff0`
+PASS with 0 issues; native coupling-focused checks (13 coupling plus 2
+actual RI, no SKIP, adjacent READY, race) PASS; independent Muse review
+APPROVE. Adds opt-in staged `--cohort-selector observed-coupling-v1`
+(selector 3, plan-graph-v9, `isolation_cohort_selector_version: 3`):
+controller-derived source-observed C4 same-generation-family and C2
+same-observed-package pairs, separate from the advisory planner wire
+(forged observed labels rejected), with replay binding, stale parent-delta
+exclusion, module-manifest exclusion and a C4 pre-effect gate. It proves
+no absence (no C0 emitted) and claims no live benefit. See the
+authoritative [isolated writers](../guides/isolated-writers.md). This
+does not change defaults and does not qualify quality, latency, cost or
+cohort acceptance.
+
+## Current allocation — Phase F Calibration Version 2 opt-in source capability (scoped development evidence)
+
+Opt-in calibration `version` 2 for a strictly cheaper fixer: Beta(1,1) 95% LCB per arm per
+cohort, baseline epsilon plus absolute floor, measured cheaper
+whole-task cost in both train and holdout, conservative baseline
+fallback, immutable config with rederived routing. See the authoritative
+[empirical calibration](../guides/empirical-model-calibration.md).
+There is no default promotion; measured live quality/cost/latency and
+whole Phase F / v2 release remain NOT QUALIFIED.
+
+Prepublication verification checkpoint (historical scoped record; final
+source publication and Sonar gates handled separately, v1.1.49 not
+claimed public): focused native policy/access/config/CLI/control plus
+vet (5 packages) and doc checks PASS; independent initial review
+APPROVE recorded before a small diagnostics repair; after that repair, a
+new exhaustive exact-integer CDF check passed 2145 actual admitted cases
+across all model policy in 0.812s. Diagnostic exclusion uses filtered
+posterior counts while canonical counts retain every raw row. Final
+independent review, publication SHA, Sonar and live economics remain
+upcoming. This documentation update ran no checks.
+
 ## Current staged record — 2026-10-08
 
 On 2026-10-08 one distinct internal `memlog` development task reached

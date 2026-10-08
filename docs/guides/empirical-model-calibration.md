@@ -29,8 +29,72 @@ fitting must not be described as globally unseen.
 
 Typed input, cached input, output and reasoning are separate optional fields.
 Cached input is a subset of input; reasoning is a subset of output. Missing
-cost stays unknown. Selection is based on quality; it makes no cheaper-model,
-speedup or billing claim from absent costs or profile estimates.
+cost stays unknown. Version 1 selection is based on quality; it makes no
+cheaper-model, speedup or billing claim from absent costs or profile estimates.
+
+## Version 2 reliability-constrained cheaper fixer (opt-in)
+
+Calibration `version` 2 is an explicitly opted-in immutable variant for
+recommending a strictly cheaper fixer. It reuses the exact version 1 row
+domain: bounded disjoint matched whole-task training/holdout rows with shared
+source/task/objective/shared-policy bindings, the same profile and objective
+validation, and the same conservative UNKNOWN, NOT_EXERCISED, drift,
+unmatched-arm and minimum-per-arm fallbacks. Version 1 semantics, reasons and
+digests are unchanged; existing evidence stays legacy compatible.
+
+Version 2 adds two frozen integer parts-per-million parameters, both required
+including an explicit zero epsilon:
+
+- `epsilon_ppm` in `[0, 1000000]`: explicitly allowed quality degradation.
+- `quality_floor_ppm` in `[0, 1000000]`: absolute candidate quality floor.
+
+Posterior and bound: uniform Beta(1,1) prior. Each ACCEPTED whole-task outcome
+that exercised the fixer adds one to alpha; each exercised semantic FAILED
+adds one to beta. UNKNOWN, NOT_EXERCISED and drifted rows never update the
+posterior; they force fallback and are never treated as FAIL or dropped. The
+main selection drift exclusion (any observed fixer profile differing from the
+exact assignment) and the fallback diagnostic drift exclusion are identical:
+early-fallback diagnostics use the same filtered posterior counts, while the
+canonical counts retain every row. The
+per-arm per-cohort lower bound is the deterministic 5% lower quantile (fixed
+95% confidence) of that posterior, quantified in integer ppm with conservative
+floor rounding and deterministic replay. This is a conditional Bayesian bound
+under the stated prior and within-cohort exchangeability, not a frequentist
+proof, and it makes no generalization claim beyond the measured cohorts. The
+implementation uses a bounded binary search over the integer-parameter
+binomial form of the regularized incomplete beta function with no new
+dependencies.
+
+Requirement: for each cohort separately, `required = max(0,
+baseline_lower_ppm - epsilon_ppm)`. The candidate lower bound must meet both
+`required` and `quality_floor_ppm` in training AND holdout, in addition to the
+operator minimum-per-arm threshold. The candidate does not need strict
+observed improvement when it is admissibly cheaper; version 1 strict
+improvement is unchanged.
+
+Cost: every row in both arms and cohorts must carry a complete measured
+whole-task `cost_micro_usd`. Missing cost falls back as unknown; profile cost
+estimates are never used. Cached-input and reasoning subset accounting is
+preserved by row validation. Costs are canonical 53-bit integers: noncanonical
+values reject before any sum. All cost sums use overflow-checked int64
+arithmetic; overflow falls back conservatively. Admitted calibrations hold at
+most 64 rows, so 64 maximum-canonical costs cannot overflow int64; the checked
+sum is defense-in-depth for helper robustness. The candidate mean cost must
+be strictly lower than the baseline mean in BOTH cohorts; exact ties keep the
+baseline. Output-only cost means with `costs_complete: false` are unknown,
+not a measured zero; a true measured zero remains `0` with `costs_complete:
+true`.
+
+Routing and replay reuse the existing immutable configuration, digest and
+evidence seam: `calibrate-models` reports the version 2 recommendation,
+`init` embeds the frozen artifact, calibrated routing substitutes the
+default-configured fixer only when the objective is in scope and static
+risk, prior-failure and context escalation did not trigger, and replay
+rederives the exact decision from frozen configuration and objective. Static
+escalation still wins. Version 2 output may include output-only
+posterior/quality/cost diagnostics; they never grant authority beyond the
+frozen policy decision. There is no default promotion and no
+measurement, quality or efficiency claim beyond the fixtures.
 
 Embed the complete policy once during initialization:
 
