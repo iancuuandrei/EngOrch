@@ -59,7 +59,7 @@ func writerTaskContextQuestion(s Snapshot, taskID string) (string, error) {
 		return "", errors.New("writer graph task unavailable")
 	}
 	question := fmt.Sprintf("[%s] %s | scope: %s | write paths: %s | objective: %s", task.ID, task.Title, strings.Join(task.ScopePaths, ","), strings.Join(task.WritePaths, ","), s.Creation.Objective)
-	if len(question) > 4096 {
+	if len(question) > taskContextFullQueryMax {
 		return "", errors.New("writer task context exceeds bound")
 	}
 	return question, nil

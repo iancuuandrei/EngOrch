@@ -50,6 +50,8 @@ resolver before writing a run journal or dispatching the planner. This
 namespace owns durable child-worktree state; it is not inferred from the task
 checkout.
 
+Task-bound writer questions reuse the pre-existing 256 KiB full-query admission bound; selection text is capped at 16 KiB of UTF-8 with the full digest and length retained, the total invocation bound stays 256 KiB, and the full mandatory objective is retained separately with scopes and budgets immutable. Historical short (≤4096-byte) question bytes and identifiers are unchanged. The staged long-objective check is a focused offline shared-stage v8 regression only; the original fresh v9 run at 18cd118 stopped pre-writer with one completed planner call and makes no live accepted-writer claim.
+
 The policy file is strict JSON, version 1, and limited to 32 KiB. It must
 contain every field shown below; duplicate, unknown, missing, or null fields
 are rejected. Capacity CPU and memory are in millicores and MiB. Slot values
