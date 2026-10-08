@@ -248,7 +248,11 @@ claims once active grants reach `Decision.EffectiveWorkers`, and that
 decision can fall to one worker under pressure while scheduler slots remain,
 so guaranteed parallelism cannot be assumed and legal work must not be
 cancelled for exceeding a parallelism-discounted wait. Claim and resource
-contention park the same way. A 2-task leaves wave with a 600-second host
+contention park the same way. A duplicate READY observation for an already
+granted task with spare effective capacity is skipped as stale so workers
+can re-evaluate on the next Tick; real memory ceilings still park new
+claims and UNKNOWN grants are preserved. This is scheduling correctness
+only and claims no live performance acceptance. A 2-task leaves wave with a 600-second host
 therefore waits 60 minutes, not five. Indefinite parking under sustained
 pressure may still hit this bounded deadline; the bound covers only the
 finite admitted serial work and promises nothing under infinite pressure.

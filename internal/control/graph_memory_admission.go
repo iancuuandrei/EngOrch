@@ -139,14 +139,14 @@ func (g *graphMemoryAdmissionGate) BeforeClaim(ctx context.Context, task tasksch
 			_, alreadyGranted = snapshot.GraphMemoryAdmission.ActiveTaskIDs[task.ID]
 		}
 		if alreadyGranted {
-			changed := g.changed
+			// Duplicate READY observation for an already granted task is
+			// stale when spare effective capacity remains (the full
+			// ceiling above already waited). Report it stale so the
+			// scheduler re-evaluates another READY sibling on the next
+			// Tick; never release, mutate, re-observe, or resend here.
+			// The original grant, including UNKNOWN, is preserved.
 			g.mu.Unlock()
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-changed:
-			}
-			continue
+			return nil, nil
 		}
 		if _, alreadyProposed := snapshot.GraphWriterResults[task.ID]; alreadyProposed {
 			g.mu.Unlock()
