@@ -275,3 +275,17 @@ graph admission. Both parent workspaces were confirmed; neither journal
 contains a child isolation intent or file intent. The runs were not resumed or
 retried, and provider-call counts remain unknown. These outcomes are setup and
 invalid-proposal evidence, not a performance result for isolated writers.
+
+## Run listing and scheduler sidecars
+
+Default `status`, `inspect` without `RUN`, and latest-run selection ignore
+only the exact controller-produced scheduler journals in the runs directory:
+`graph-schedule-<16-lower-hex>.jsonl`,
+`graph-writers-<16-lower-hex>.jsonl`,
+`isolated-graph-writers-<16-lower-hex>.jsonl`,
+`isolated-graph-writers-wave-<16-lower-hex>.jsonl`, and
+`staged-graph-writers-wave-<16-lower-hex>.jsonl` after `<run>.jsonl.`.
+Any other spelling, including uppercase, wrong cohort length, an extra
+suffix, or an unknown prefix, stays fail-closed and surfaces as a corrupt
+or unknown journal instead of being skipped. Provider, model-access, and
+runtime sidecar handling is unchanged.

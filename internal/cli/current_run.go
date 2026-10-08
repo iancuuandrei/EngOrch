@@ -102,16 +102,37 @@ func runJournalSidecar(path string) bool {
 	if sidecar == "model-access.jsonl" {
 		return true
 	}
-	scheduler, graph := strings.CutPrefix(sidecar, "graph-")
-	kind, cohort, separated := strings.Cut(scheduler, "-")
-	if graph && separated && (kind == "schedule" || kind == "writers") {
-		if !strings.HasSuffix(cohort, ".jsonl") {
-			return false
-		}
-		cohortID := strings.TrimSuffix(cohort, ".jsonl")
-		return len(cohortID) == 16 && strings.Trim(cohortID, "0123456789abcdef") == ""
+	if isCanonicalGraphSchedulerSidecar(sidecar) {
+		return true
 	}
 	return isCanonicalProviderSidecar(sidecar)
+}
+
+// isCanonicalGraphSchedulerSidecar reports whether sidecar is a scheduler
+// journal produced by the current controller dispatch paths. Only the exact
+// controller-produced prefixes with an exact 16 lowercase hex cohort suffix
+// and ".jsonl" are ignored; malformed or unknown names return false so
+// listing stays fail-closed. Longer prefixes sort first so the
+// "isolated-graph-writers-" prefix never shadows its "-wave-" extension.
+func isCanonicalGraphSchedulerSidecar(sidecar string) bool {
+	for _, prefix := range []string{
+		"staged-graph-writers-wave-",
+		"isolated-graph-writers-wave-",
+		"isolated-graph-writers-",
+		"graph-schedule-",
+		"graph-writers-",
+	} {
+		rest, ok := strings.CutPrefix(sidecar, prefix)
+		if !ok {
+			continue
+		}
+		if len(rest) != len("0123456789abcdef.jsonl") || !strings.HasSuffix(rest, ".jsonl") {
+			return false
+		}
+		cohortID := strings.TrimSuffix(rest, ".jsonl")
+		return len(cohortID) == 16 && strings.Trim(cohortID, "0123456789abcdef") == ""
+	}
+	return false
 }
 
 // isCanonicalProviderSidecar reports whether sidecar (the filename portion

@@ -16,8 +16,11 @@ func TestRunJournalSidecarNames(t *testing.T) {
 	invocationID := strings.Repeat("c", 64)
 	valid := runID + ".jsonl.graph-schedule-0123456789abcdef.jsonl"
 	writers := runID + ".jsonl.graph-writers-0123456789abcdef.jsonl"
+	isolated := runID + ".jsonl.isolated-graph-writers-0123456789abcdef.jsonl"
+	isolatedWave := runID + ".jsonl.isolated-graph-writers-wave-0123456789abcdef.jsonl"
+	stagedWave := runID + ".jsonl.staged-graph-writers-wave-93491ea5875217bb.jsonl"
 	modelAccess := runID + ".jsonl.model-access.jsonl"
-	ignored := []string{valid, writers, modelAccess}
+	ignored := []string{valid, writers, isolated, isolatedWave, stagedWave, modelAccess}
 	for _, role := range []string{"planner", "explorer", "writer", "fixer", "reviewer"} {
 		for _, suffix := range []string{".opencode-runtime.jsonl", ".provider-gateway.jsonl", ".provider-runtime.jsonl"} {
 			ignored = append(ignored, runID+".jsonl."+role+suffix)
@@ -77,14 +80,38 @@ func TestRunJournalSidecarNames(t *testing.T) {
 		runID + ".jsonl..opencode-runtime.jsonl",
 		".jsonl.planner.opencode-runtime.jsonl",
 		strings.Repeat("A", 64) + ".jsonl.graph-schedule-0123456789abcdef.jsonl",
+		runID + ".jsonl.graph-schedule-0123456789ABCDEF.jsonl",
+		runID + ".jsonl.graph-schedule-0123456789abcdef0.jsonl",
 		runID + ".jsonl.graph-schedule-0123456789abcde.jsonl",
 		runID + ".jsonl.graph-schedule-0123456789abcdeg.jsonl",
 		runID + ".jsonl.graph-schedule-0123456789abcdef.jsonl.extra",
 		runID + ".jsonl.graph-writers-0123456789abcdeg.jsonl",
+		runID + ".jsonl.graph-writers-0123456789ABCDEF.jsonl",
+		runID + ".jsonl.graph-writers-0123456789abcdef0.jsonl",
 		runID + ".jsonl.graph-writers-0123456789abcde.jsonl",
 		strings.Repeat("A", 64) + ".jsonl.graph-writers-0123456789abcdef.jsonl",
 		runID + ".jsonl.graph-writers-0123456789abcdef.jsonl.extra",
 		runID + ".jsonl.graph-unknown-0123456789abcdef.jsonl",
+		runID + ".jsonl.graph-writers-wave-0123456789abcdef.jsonl",
+		runID + ".jsonl.isolated-graph-writers-0123456789abcde.jsonl",
+		runID + ".jsonl.isolated-graph-writers-0123456789abcdef0.jsonl",
+		runID + ".jsonl.isolated-graph-writers-0123456789ABCDEF.jsonl",
+		runID + ".jsonl.isolated-graph-writers-0123456789abcdeg.jsonl",
+		runID + ".jsonl.isolated-graph-writers-0123456789abcdef.jsonl.extra",
+		runID + ".jsonl.isolated-graph-writers-.jsonl",
+		runID + ".jsonl.isolated-graph-writers-wave-0123456789abcde.jsonl",
+		runID + ".jsonl.isolated-graph-writers-wave-0123456789abcdef0.jsonl",
+		runID + ".jsonl.isolated-graph-writers-wave-0123456789ABCDEF.jsonl",
+		runID + ".jsonl.isolated-graph-writers-wave-0123456789abcdeg.jsonl",
+		runID + ".jsonl.isolated-graph-writers-wave-0123456789abcdef.jsonl.extra",
+		runID + ".jsonl.staged-graph-writers-wave-93491ea5875217b.jsonl",
+		runID + ".jsonl.staged-graph-writers-wave-93491ea5875217bb0.jsonl",
+		runID + ".jsonl.staged-graph-writers-wave-93491EA5875217BB.jsonl",
+		runID + ".jsonl.staged-graph-writers-wave-93491ea5875217bg.jsonl",
+		runID + ".jsonl.staged-graph-writers-wave-93491ea5875217bb.jsonl.extra",
+		runID + ".jsonl.staged-graph-writers-93491ea5875217bb.jsonl",
+		runID + ".jsonl.unknown-graph-writers-wave-0123456789abcdef.jsonl",
+		strings.Repeat("A", 64) + ".jsonl.staged-graph-writers-wave-93491ea5875217bb.jsonl",
 	} {
 		if runJournalSidecar(name) {
 			t.Fatalf("noncanonical entry ignored: %s", name)
@@ -95,9 +122,14 @@ func TestRunJournalSidecarNames(t *testing.T) {
 func TestRunListingIgnoresCanonicalGraphSchedulerSidecars(t *testing.T) {
 	root, runID, _ := diffWorkspaceFixture(t)
 	runs := filepath.Join(root, ".harness", "runs")
-	for _, kind := range []string{"schedule", "writers"} {
-		sidecar := filepath.Join(runs, runID+".jsonl.graph-"+kind+"-0123456789abcdef.jsonl")
-		if err := os.WriteFile(sidecar, []byte("separate scheduler event contract"), 0600); err != nil {
+	for _, sidecar := range []string{
+		runID + ".jsonl.graph-schedule-0123456789abcdef.jsonl",
+		runID + ".jsonl.graph-writers-0123456789abcdef.jsonl",
+		runID + ".jsonl.isolated-graph-writers-0123456789abcdef.jsonl",
+		runID + ".jsonl.isolated-graph-writers-wave-0123456789abcdef.jsonl",
+		runID + ".jsonl.staged-graph-writers-wave-93491ea5875217bb.jsonl",
+	} {
+		if err := os.WriteFile(filepath.Join(runs, sidecar), []byte("separate scheduler event contract"), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -139,6 +171,33 @@ func TestRunListingIgnoresCanonicalGraphSchedulerSidecars(t *testing.T) {
 	}
 	mustExecuteCLI(t, root, "inspect")
 	mustExecuteCLI(t, root, "diff")
+	// A malformed staged/isolated wave scheduler name is not a canonical
+	// producer grammar, so it must stay fail-closed rather than being
+	// ignored as a sidecar.
+	for _, malformed := range []string{
+		runID + ".jsonl.staged-graph-writers-wave-93491EA5875217BC.jsonl",
+		runID + ".jsonl.isolated-graph-writers-wave-0123456789abcdef.extra.jsonl",
+		runID + ".jsonl.staged-graph-writers-93491ea5875217bb.jsonl",
+	} {
+		malformedPath := filepath.Join(runs, malformed)
+		if err := os.WriteFile(malformedPath, []byte("corrupt"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := latestRunID(root); err == nil {
+			t.Fatalf("latest selection hid a malformed scheduler sidecar: %s", malformed)
+		}
+		out := bytes.Buffer{}
+		if err := Execute(context.Background(), []string{"status"}, root, &out); err == nil {
+			t.Fatalf("status hid a malformed scheduler sidecar: %s", malformed)
+		}
+		out.Reset()
+		if err := Execute(context.Background(), []string{"inspect"}, root, &out); err == nil {
+			t.Fatalf("default inspect hid a malformed scheduler sidecar: %s", malformed)
+		}
+		if err := os.Remove(malformedPath); err != nil {
+			t.Fatal(err)
+		}
+	}
 	// A direct-provider invocation suffix is not a canonical producer
 	// grammar, so it must stay fail-closed rather than being ignored.
 	invalidDirect := filepath.Join(runs, runID+".jsonl.writer.invocation-"+invocationID+".provider-runtime.jsonl")
