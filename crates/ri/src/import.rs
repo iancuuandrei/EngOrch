@@ -44,6 +44,8 @@ pub enum Policy {
     Strict,
     /// Require the pinned scip-go 0.2.7 provenance policy.
     ScipGo027,
+    /// Require the pinned scip-typescript 0.4.0 provenance policy.
+    ScipTypescript040,
 }
 
 /// Exact input selection supplied by the controller, independent of index paths.
@@ -134,6 +136,7 @@ pub fn build(request: Request) -> Result<Artifact, String> {
     let admit = match request.policy {
         Policy::Strict => scip::admit,
         Policy::ScipGo027 => scip::admit_scip_go_027,
+        Policy::ScipTypescript040 => scip::admit_scip_typescript_040,
     };
     admit(
         &index,

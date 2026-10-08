@@ -671,6 +671,41 @@ admission, shared capacity and agent-tree integration are still being completed.
 | Git push | Controller/CLI locally qualified; interruption recovery partial | Local bare SHA-1/SHA-256 execution, controlled receipt omission, read-only reconciliation and stale-approval rejection; [scope](../specifications/git-push.md) |
 | Performance qualification | Partial local measurements | [Search concurrency](search-concurrency.md), [task-pool components](taskpool-performance.md) and [actual OpenCode fixture concurrency](agent-concurrency.md) retain bounded evidence. Benchmark artifact binding is under review; external model economics and production capacity remain unqualified |
 
+### SCIP TypeScript 0.4.0 interop (scoped local PASS, 2026-10-08)
+
+The checkout adds a bounded explicit `scip_typescript040` profile alongside the
+unchanged `scip_go027` behavior: `crates/ri/src/scip.rs`,
+`crates/ri/src/import.rs`, `crates/ri/tests/scip_typescript.rs`,
+`internal/ri/import.go`, `internal/ri/import_plan.go` and opt-in
+`internal/cli/ri_typescript_live_test.go` (gated by
+`ENGORCH_SCIP_TYPESCRIPT_NODE`, `ENGORCH_SCIP_TYPESCRIPT_ENTRY` and
+`ENGORCH_RI_BINARY`). The v2 position policy
+`engorch.scip-typescript.0.4.0.positions.v2:utf16-code-units+omit-invalid-synthetic-file-enclosing`
+additionally drops only the advisory enclosing of the exact synthetic
+file-module marker in the derived projection; the raw index hash is retained
+and ordinary enclosing containment is unchanged, with no call, dependency or
+absence claim. The live fixture normalizes executable paths with
+`filepath.Clean` and sets `noLib` without removing the leading-comment
+fixture. The contract and orientation notes are in
+[RI occurrences](../specifications/ri-occurrences.md) and
+[engineering orientation](../guides/engineering-orientation.md). Scoped local
+PASS for the v1.1.50 increment based on `40d1ba5`: pinned Rust
+`--locked --offline` `scip_typescript` 8 PASS,
+`scip_admission` 6 PASS, `scip` 4 PASS, `import` 1 PASS (19 total), debug
+binary build PASS 20.20s; real-producer `TestActualScipTypeScriptCLI` PASS
+13.89s (package 16.884s) with Node 22.23.3 / scip-typescript 0.4.0 over
+committed LF source with leading comment + emoji, covering controller
+produce/bind/import/publish/runtime-binding/locate/definition/reference/
+semantic PARTIAL with no absence claim. Go RI import 7.368s / CLI 3.339s /
+control 3.925s PASS, doc check 1.216s PASS, vet (three packages) PASS.
+Initial local FAILs (normalized path, synthetic enclosing, descriptor
+separator, raw symbol vs ID, Result test compile) are retained; repairs were
+not pooled with the frozen cohort. Full v2, live agent benefit,
+Python/Rust producer, candidate acceptance/release remain NOT QUALIFIED;
+independent Muse High review APPROVE with no blocking findings. Import-focused
+Go race checks PASS in RI (9.194s), CLI (4.084s) and control (5.070s);
+the actual-producer CLI race run also PASS (14.19s; package 18.602s).
+
 ## Kernel milestone validation, 2026-09-06
 
 Executed on Windows amd64 with Go 1.27.1 and the installed GCC race-detector
